@@ -1,0 +1,161 @@
+# Configuración de ejemplo para architect
+# Copia este archivo a config.yaml y ajústalo según tus necesidades
+
+# ============================================================================
+# Configuración del LLM (Language Model)
+# ============================================================================
+llm:
+  # Proveedor: "litellm" (único soportado por ahora)
+  provider: litellm
+
+  # Modo de operación:
+  #   - "direct": llamadas directas a proveedores (OpenAI, Anthropic, etc.)
+  #   - "proxy": a través de LiteLLM Proxy Server
+  mode: direct
+
+  # Modelo a utilizar (ejemplos):
+  #   - OpenAI: "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"
+  #   - Anthropic: "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"
+  #   - Otros: "ollama/llama3", "together_ai/meta-llama/Llama-3-70b-chat-hf"
+  model: gpt-4o
+
+  # URL base de la API (opcional, por defecto usa la del proveedor)
+  # Útil para proxies o endpoints custom
+  # api_base: http://localhost:8000
+
+  # Variable de entorno con la API key
+  # El sistema buscará la clave en esta variable de entorno
+  api_key_env: LITELLM_API_KEY
+
+  # Timeout en segundos para llamadas al LLM
+  timeout: 60
+
+  # Número de reintentos en caso de error
+  retries: 2
+
+  # Habilitar streaming de respuestas (recomendado)
+  stream: true
+
+# ============================================================================
+# Configuración de Agentes
+# ============================================================================
+agents:
+  # Los agentes por defecto (plan, build, resume, review) están incluidos
+  # Aquí puedes sobrescribir sus configuraciones o agregar agentes custom
+
+  # Ejemplo: sobrescribir agente "build" para ser más estricto
+  build:
+    confirm_mode: confirm-all  # Confirmar todas las acciones
+    max_steps: 15  # Reducir pasos máximos
+
+  # Ejemplo: agente custom para deployment
+  deploy:
+    system_prompt: |
+      Eres un agente de deployment especializado.
+      Tu trabajo es preparar y validar el código para producción.
+
+      Reglas:
+      - Verifica que existan tests antes de proceder
+      - Valida que el código compile/funcione
+      - Asegúrate de que la configuración de producción esté correcta
+      - Genera logs detallados de cada paso
+
+    allowed_tools:
+      - read_file
+      - list_files
+      - write_file
+
+    confirm_mode: confirm-sensitive
+    max_steps: 10
+
+  # Ejemplo: agente custom para documentación
+  documenter:
+    system_prompt: |
+      Eres un agente de documentación técnica.
+      Lee código y genera documentación clara y útil.
+
+      Reglas:
+      - Documenta funciones, clases y módulos
+      - Usa formato consistente (docstrings, markdown)
+      - Incluye ejemplos cuando sea relevante
+      - No modifiques código, solo añade documentación
+
+    allowed_tools:
+      - read_file
+      - write_file
+      - list_files
+
+    confirm_mode: confirm-sensitive
+    max_steps: 20
+
+# ============================================================================
+# Configuración de Logging
+# ============================================================================
+logging:
+  # Nivel de logging: debug, info, warn, error
+  level: info
+
+  # Archivo donde guardar logs estructurados en JSON (opcional)
+  # Si no se especifica, solo se muestran logs en consola
+  # file: logs/architect.jsonl
+
+  # Nivel de verbose (0-3)
+  # 0: solo mensajes importantes
+  # 1: pasos del agente y tool calls
+  # 2: argumentos y respuestas del LLM
+  # 3: todo (HTTP, payloads completos, timing)
+  verbose: 1
+
+# ============================================================================
+# Configuración del Workspace
+# ============================================================================
+workspace:
+  # Directorio raíz de trabajo
+  # Todas las operaciones de archivos se limitan a este directorio
+  root: .
+
+  # Permitir operaciones de borrado (delete_file)
+  # Por seguridad, está deshabilitado por defecto
+  allow_delete: false
+
+# ============================================================================
+# Configuración de MCP (Model Context Protocol)
+# ============================================================================
+mcp:
+  servers: []
+    # Ejemplo: servidor MCP para operaciones Git
+    # - name: git
+    #   url: http://localhost:3000
+    #   token_env: MCP_GIT_TOKEN
+
+    # Ejemplo: servidor MCP para bases de datos
+    # - name: database
+    #   url: https://mcp.example.com/db
+    #   token_env: MCP_DB_TOKEN
+
+    # Ejemplo: servidor MCP con token hardcodeado (no recomendado)
+    # - name: internal
+    #   url: http://internal.mcp:8080
+    #   token: "hardcoded-token-here"
+
+# ============================================================================
+# Notas sobre precedencia de configuración
+# ============================================================================
+#
+# La configuración se carga en este orden (de menor a mayor prioridad):
+#
+# 1. Defaults (definidos en el código)
+# 2. Este archivo YAML
+# 3. Variables de entorno:
+#    - ARCHITECT_MODEL → llm.model
+#    - ARCHITECT_API_BASE → llm.api_base
+#    - ARCHITECT_LOG_LEVEL → logging.level
+#    - ARCHITECT_WORKSPACE → workspace.root
+# 4. Argumentos CLI (--model, --workspace, etc.)
+#
+# Esto significa que puedes:
+# - Tener configuración base en este archivo
+# - Sobrescribir valores con env vars en CI/CD
+# - Ajustar puntualmente con flags CLI para experimentos
+#
+# ============================================================================
