@@ -1,0 +1,211 @@
+# ==============================================================================
+# architect - Archivo de configuración de ejemplo
+# Versión: 0.8.0
+#
+# Copia este archivo a config.yaml y ajusta según tus necesidades.
+#
+# Precedencia de configuración (de menor a mayor prioridad):
+#   1. Defaults del código
+#   2. Este archivo YAML
+#   3. Variables de entorno (ARCHITECT_*)
+#   4. Flags de línea de comandos (--model, --workspace, etc.)
+# ==============================================================================
+
+
+# ==============================================================================
+# LLM - Configuración del modelo de lenguaje
+# ==============================================================================
+llm:
+  # Proveedor: "litellm" (único soportado — abstrae 100+ proveedores)
+  provider: litellm
+
+  # Modo de conexión:
+  #   direct → llamadas directas al proveedor (OpenAI, Anthropic, etc.)
+  #   proxy  → a través de LiteLLM Proxy Server (para equipos o caching)
+  mode: direct
+
+  # Modelo a utilizar. Ejemplos:
+  #   OpenAI:    gpt-4o, gpt-4o-mini, gpt-4-turbo, o1-mini
+  #   Anthropic: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5-20251001
+  #   Gemini:    gemini/gemini-2.0-flash, gemini/gemini-1.5-pro
+  #   Ollama:    ollama/llama3, ollama/mistral (local, sin API key)
+  #   Together:  together_ai/meta-llama/Llama-3-70b-chat-hf
+  model: gpt-4o-mini
+
+  # URL base de la API (opcional).
+  # Útil para LiteLLM Proxy, endpoints custom o modelos locales.
+  # api_base: http://localhost:8000
+
+  # Variable de entorno que contiene la API key.
+  # El sistema la leerá de esta variable al inicio.
+  # Override con: architect run "..." --api-key sk-...
+  api_key_env: LITELLM_API_KEY
+
+  # Timeout en segundos para cada llamada al LLM.
+  # Con --timeout N desde CLI este valor se usa también como step_timeout.
+  timeout: 60
+
+  # Número de reintentos automáticos ante errores transitorios.
+  # Solo se reintenta en: RateLimitError, ServiceUnavailableError,
+  # APIConnectionError, Timeout. Los errores de auth no se reintentan.
+  # Espera exponencial entre intentos: 2s → 4s → 8s → ... → 60s máx.
+  retries: 2
+
+  # Habilitar streaming de respuestas del LLM.
+  # Cuando está activo, el texto aparece en tiempo real en el terminal (stderr).
+  # Se desactiva automáticamente con --json y --quiet.
+  # Desactivar con: architect run "..." --no-stream
+  stream: true
+
+
+# ==============================================================================
+# Agentes - Configuración de agentes (por defecto y custom)
+# ==============================================================================
+# Los agentes por defecto (plan, build, resume, review) están siempre disponibles.
+# Aquí puedes:
+#   1. Sobrescribir su configuración (solo los campos que quieras cambiar)
+#   2. Definir agentes completamente nuevos
+#
+# Lista todos los agentes disponibles con: architect agents -c config.yaml
+agents:
+
+  # ── Ejemplo: sobrescribir el agente "build" para ser más estricto ──────────
+  # build:
+  #   confirm_mode: confirm-all   # Confirmar absolutamente todo
+  #   max_steps: 10               # Reducir pasos máximos
+
+  # ── Agente custom: deployment ───────────────────────────────────────────────
+  # deploy:
+  #   system_prompt: |
+  #     Eres un agente de deployment especializado.
+  #     Tu trabajo es preparar y validar el código para producción.
+  #
+  #     Reglas:
+  #     - Verifica que existan tests antes de proceder
+  #     - Valida configuraciones de producción
+  #     - Lee los archivos de CI/CD para entender el contexto
+  #     - Genera un reporte de lo que harías antes de actuar
+  #
+  #   allowed_tools:
+  #     - read_file
+  #     - list_files
+  #     - write_file
+  #
+  #   confirm_mode: confirm-all   # Deployment siempre con confirmación
+  #   max_steps: 10
+
+  # ── Agente custom: documentación ────────────────────────────────────────────
+  # documenter:
+  #   system_prompt: |
+  #     Eres un agente de documentación técnica.
+  #     Lee código y genera documentación clara y bien estructurada.
+  #
+  #     Reglas:
+  #     - Documenta funciones, clases y módulos con docstrings
+  #     - Usa formato Markdown para archivos .md
+  #     - Incluye ejemplos cuando sea útil
+  #     - No modifiques lógica del código, solo añade documentación
+  #
+  #   allowed_tools:
+  #     - read_file
+  #     - write_file
+  #     - list_files
+  #
+  #   confirm_mode: confirm-sensitive
+  #   max_steps: 20
+
+  # ── Agente custom: análisis de seguridad ─────────────────────────────────────
+  # security:
+  #   system_prompt: |
+  #     Eres un experto en seguridad de software.
+  #     Analiza el código en busca de vulnerabilidades y problemas de seguridad.
+  #
+  #     Aspectos a revisar:
+  #     - Inyección SQL, XSS, CSRF
+  #     - Gestión de secretos y API keys en código
+  #     - Validación de entrada de usuario
+  #     - Dependencias con CVEs conocidos
+  #     - Principio de mínimo privilegio
+  #
+  #   allowed_tools:
+  #     - read_file
+  #     - list_files
+  #
+  #   confirm_mode: yolo    # Solo lectura, sin riesgo
+  #   max_steps: 20
+
+
+# ==============================================================================
+# Logging - Configuración del sistema de logs
+# ==============================================================================
+logging:
+  # Nivel base de logging: debug | info | warn | error
+  level: info
+
+  # Nivel de verbose para la consola (stderr).
+  # 0 → Solo errores y resultado final (útil para scripts)
+  # 1 → Steps del agente y tool calls (recomendado para uso interactivo)
+  # 2 → Argumentos de tools y respuestas del LLM
+  # 3 → Todo: HTTP, payloads completos, timing interno
+  #
+  # Override con: architect run "..." -v/-vv/-vvv
+  verbose: 0
+
+  # Archivo donde guardar logs estructurados en formato JSON Lines.
+  # Cada línea es un JSON completo (fácil de parsear con jq).
+  # El archivo captura DEBUG completo independientemente del verbose.
+  # Ejemplo: logs/session.jsonl
+  #
+  # file: logs/architect.jsonl
+
+
+# ==============================================================================
+# Workspace - Directorio de trabajo
+# ==============================================================================
+workspace:
+  # Directorio raíz donde el agente puede operar.
+  # TODAS las operaciones de archivos quedan confinadas aquí.
+  # El sistema previene path traversal (../../etc/passwd).
+  # Override con: architect run "..." -w /ruta/al/proyecto
+  root: .
+
+  # Permitir la tool delete_file.
+  # Por seguridad, está deshabilitado por defecto.
+  # Actívalo solo si necesitas que el agente pueda borrar archivos.
+  allow_delete: false
+
+
+# ==============================================================================
+# MCP - Model Context Protocol (herramientas remotas)
+# ==============================================================================
+# Conecta architect a servidores MCP para usar herramientas remotas.
+# Las tools MCP son indistinguibles de las locales para el agente.
+# Si un servidor no está disponible, el agente funciona sin esas tools.
+#
+# Deshabilitar MCP completamente con: architect run "..." --disable-mcp
+mcp:
+  servers: []
+
+  # ── Ejemplo: servidor MCP para operaciones Git ────────────────────────────
+  # servers:
+  #   - name: git
+  #     url: http://localhost:3000
+  #     token_env: MCP_GIT_TOKEN   # Variable de entorno con el token Bearer
+
+  # ── Ejemplo: servidor MCP para base de datos ──────────────────────────────
+  #   - name: database
+  #     url: https://mcp.example.com/db
+  #     token_env: MCP_DB_TOKEN
+
+  # ── Ejemplo: múltiples servidores ─────────────────────────────────────────
+  #   - name: github
+  #     url: http://localhost:3001
+  #     token_env: GITHUB_TOKEN
+  #
+  #   - name: jira
+  #     url: http://localhost:3002
+  #     token_env: JIRA_TOKEN
+  #
+  #   - name: internal-tools
+  #     url: http://internal.mcp:8080
+  #     token: "token-directo"   # No recomendado en producción — usar token_env
