@@ -10,7 +10,80 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 ## [No Publicado]
 
 ### En Progreso
-(MVP completado — sin cambios pendientes)
+(F9 completada — sin cambios pendientes)
+
+---
+
+## [0.9.0] - 2026-02-19
+
+### Fase 9 - Diff Inteligente y apply_patch ✅
+
+#### Agregado
+
+**`EditFileTool`** (`src/architect/tools/filesystem.py`):
+- Tool `edit_file` para modificaciones parciales via str_replace exacto
+- Valida que `old_str` aparezca exactamente una vez en el archivo
+- Si `old_str` no existe → error `"no encontrado"` con sugerencia
+- Si `old_str` aparece >1 veces → error con el conteo y sugerencia de añadir contexto
+- Si `old_str` está vacío → error descriptivo con alternativas
+- Genera diff en el output (vía `difflib.unified_diff`) para confirmación visual
+- `sensitive = True`; requiere confirmación en modo `confirm-sensitive` o superior
+
+**`ApplyPatchTool`** (`src/architect/tools/patch.py`):
+- Tool `apply_patch` para parches unified diff con uno o más hunks
+- **Parser puro-Python** (sin dependencias externas):
+  - Regex `^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@` para cabeceras
+  - Soporte de hunks de inserción pura (`orig_count=0`)
+  - Offset acumulado entre hunks para ajustar posiciones
+  - Validación de contexto con normalización de line endings (`rstrip("\n\r")`)
+- **Fallback al comando `patch` del sistema** si el parser puro falla:
+  - `patch --dry-run -f -i patch_file file_path` → validación sin modificar
+  - `patch -f -i patch_file file_path` → aplicación real
+- Las cabeceras `--- / +++` en el parche son opcionales
+- `sensitive = True`
+
+**`PatchError`** (`src/architect/tools/patch.py`):
+- Excepción interna para errores de parseo/aplicación de parches
+
+**Schemas nuevos** (`src/architect/tools/schemas.py`):
+- `EditFileArgs` — `path`, `old_str`, `new_str` (todos requeridos excepto `new_str` que puede ser `""`)
+- `ApplyPatchArgs` — `path`, `patch`
+
+**Testing** (`scripts/test_phase9.py`) — 12 pruebas:
+1. Importaciones de nuevas tools y `PatchError`
+2. Versión 0.9.0 consistente en `__init__.py` y `pyproject.toml`
+3. `EditFileTool` caso feliz — reemplazo y diff en output
+4. `EditFileTool` old_str no encontrado — error descriptivo
+5. `EditFileTool` old_str ambiguo — error con conteo
+6. `EditFileTool` old_str vacío — error con alternativas
+7. `ApplyPatchTool` single-hunk
+8. `ApplyPatchTool` multi-hunk (2 hunks, posiciones no contiguas)
+9. `ApplyPatchTool` inserción pura (`orig_count=0`)
+10. `ApplyPatchTool` contexto incorrecto — falla con error claro
+11. Jerarquía en descriptions de tools (`PREFERIR`, menciones cruzadas)
+12. `EditFileTool` y `ApplyPatchTool` presentes en el registry
+
+#### Modificado
+
+**`WriteFileTool.description`** (`src/architect/tools/filesystem.py`):
+- Ahora incluye orientación explícita: úsalo solo para archivos nuevos o reescritura total
+- Referencia a `edit_file` y `apply_patch` como alternativas
+
+**`BUILD_PROMPT`** (`src/architect/agents/prompts.py`):
+- Nueva sección "Herramientas de Edición — Jerarquía de Uso" con tabla comparativa
+- Guía detallada para `edit_file`, `apply_patch` y `write_file`
+- El agente `build` ahora sabe cuándo preferir cada herramienta
+
+**`src/architect/tools/setup.py`**:
+- Registra `EditFileTool` y `ApplyPatchTool` en el registry por defecto
+
+**`src/architect/tools/__init__.py`**:
+- Exporta `EditFileTool`, `ApplyPatchTool`, `PatchError`, `EditFileArgs`, `ApplyPatchArgs`
+
+#### Versión
+- `src/architect/__init__.py`: `0.8.0` → `0.9.0`
+- `pyproject.toml`: `0.8.0` → `0.9.0`
+- `src/architect/cli.py`: `0.8.0` → `0.9.0` (3 sitios: `version_option` + 2 headers)
 
 ---
 

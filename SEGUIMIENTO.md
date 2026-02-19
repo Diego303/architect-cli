@@ -7,8 +7,8 @@ Este documento registra el progreso de implementación del proyecto architect si
 ## Estado General
 
 - **Inicio**: 2026-02-18
-- **Fase Actual**: F8 Completada — MVP listo
-- **Estado**: ✅ MVP completado (v0.8.0)
+- **Fase Actual**: F9 Completada — Diff Inteligente y apply_patch
+- **Estado**: ✅ v0.9.0 — Edición incremental de archivos
 
 ---
 
@@ -658,12 +658,62 @@ Este documento registra el progreso de implementación del proyecto architect si
 
 ---
 
+### ✅ F9 - Diff Inteligente y apply_patch (Completada: 2026-02-19)
+
+**Objetivo**: Añadir herramientas de edición incremental para que el LLM pueda modificar archivos sin reescribirlos completos, reduciendo errores y tokens consumidos.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 9.1 - `EditFileArgs` y `ApplyPatchArgs` en `tools/schemas.py`
+- [x] 9.2 - `EditFileTool` (str_replace) en `tools/filesystem.py`
+- [x] 9.3 - Actualizar `WriteFileTool.description` con jerarquía de uso
+- [x] 9.4 - Crear `tools/patch.py` con `ApplyPatchTool`, `PatchError`, `_Hunk`, parser puro-Python y fallback system `patch`
+- [x] 9.5 - Actualizar `tools/setup.py`: registrar `EditFileTool` y `ApplyPatchTool`
+- [x] 9.6 - Actualizar `tools/__init__.py`: exportar nuevas tools y `PatchError`
+- [x] 9.7 - Añadir guía de jerarquía de edición en `BUILD_PROMPT` (`agents/prompts.py`)
+- [x] 9.8 - Versión bump 0.8.0 → 0.9.0 en los 4 sitios
+- [x] 9.9 - `scripts/test_phase9.py` (12 tests)
+
+#### Archivos Creados
+- `src/architect/tools/patch.py` — `ApplyPatchTool`, `PatchError`, `_Hunk`, `_parse_hunks()`, `_apply_hunks_to_lines()`, `_apply_patch_pure()`, `_apply_patch_system()`
+- `scripts/test_phase9.py` — 12 tests unitarios de las nuevas tools
+
+#### Archivos Modificados
+- `src/architect/tools/schemas.py` — añadidos `EditFileArgs`, `ApplyPatchArgs`
+- `src/architect/tools/filesystem.py` — añadido `EditFileTool`; `WriteFileTool.description` actualizado; `import difflib` añadido
+- `src/architect/tools/setup.py` — registro de `EditFileTool`, `ApplyPatchTool`
+- `src/architect/tools/__init__.py` — exportaciones actualizadas
+- `src/architect/agents/prompts.py` — `BUILD_PROMPT` con tabla de jerarquía de edición y guías para `edit_file`, `apply_patch`, `write_file`
+- `src/architect/__init__.py` — versión 0.9.0
+- `pyproject.toml` — versión 0.9.0
+- `src/architect/cli.py` — versión 0.9.0 en 3 sitios
+
+#### Decisiones de Diseño
+
+**Jerarquía de edición (menor a mayor impacto)**:
+1. `edit_file` — str_replace exacto, un único bloque contiguo. Valida que `old_str` sea único; si aparece 0 o >1 veces, devuelve error descriptivo. Genera diff en el output.
+2. `apply_patch` — unified diff con uno o más hunks. Parser puro-Python primero (sin dependencias externas); si falla, intenta con el comando `patch` del sistema.
+3. `write_file` — reescritura total. Solo para archivos nuevos o reorganizaciones completas.
+
+**Parser puro-Python de unified diff**:
+- Regex `^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@` para cabeceras de hunk
+- Offset acumulado entre hunks para manejar cambios de tamaño previos
+- Caso especial: `orig_count=0` → inserción pura después de línea `orig_start`
+- Validación de contexto con `rstrip("\n\r")` para robustez ante variaciones de line endings
+- Fallback al comando `patch` del sistema con `--dry-run` previo
+
+#### Entregable
+✅ v0.9.0. El LLM (agente `build`) tiene acceso a `edit_file` y `apply_patch` como alternativas eficientes a `write_file`. El `BUILD_PROMPT` incluye una tabla de cuándo usar cada tool.
+
+---
+
 ## Próximas Fases
 
-MVP completado. Posibles extensiones futuras:
-- Persistencia de estado (reanudar ejecuciones parciales)
-- Multi-agente (agentes que delegan en otros)
-- Plugin system (tools desde paquetes Python externos)
+F9 completada. Posibles extensiones futuras:
+- F10: Contexto persistente (memoria entre sesiones)
+- F11: Multi-agente (agentes que delegan en otros)
+- F12: Plugin system (tools desde paquetes Python externos)
 - Prompt caching para desarrollo
 - Métricas: tokens usados, coste estimado, duración por step
 

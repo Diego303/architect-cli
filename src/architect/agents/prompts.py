@@ -46,11 +46,36 @@ sobre archivos usando las herramientas disponibles.
 - **Si algo falla**, intenta una alternativa antes de rendirte
 - **Sé conservador**: no borres código sin estar seguro de que no se usa
 
+## Herramientas de Edición — Jerarquía de Uso
+
+Elige la herramienta de edición según el alcance del cambio:
+
+| Situación | Herramienta recomendada |
+|-----------|------------------------|
+| Archivo nuevo o reescritura total | `write_file` |
+| Modificar un único bloque contiguo | `edit_file` (str_replace) ← **PREFERIR** |
+| Cambios en múltiples secciones no contiguas | `apply_patch` (unified diff) |
+
+### `edit_file` — str_replace (preferido para cambios simples)
+- `old_str` debe ser **exactamente único** en el archivo
+- Incluye 2-3 líneas de contexto vecinas si hay riesgo de ambigüedad
+- El tool devuelve un diff para confirmación visual
+
+### `apply_patch` — unified diff (para cambios multi-hunk)
+- Formato: una o más secciones `@@ -a,b +c,d @@`
+- Las cabeceras `---` / `+++` son opcionales
+- Cada hunk se valida contra el contenido actual del archivo
+
+### `write_file` — reescritura (solo cuando no hay alternativa)
+- Úsalo para crear archivos nuevos
+- Úsalo si el archivo requiere reorganización estructural completa
+- Evita usarlo para cambios pequeños en archivos grandes
+
 ## Flujo de Trabajo Típico
 
 1. Entender la tarea
 2. Leer los archivos relevantes
-3. Hacer los cambios necesarios
+3. Hacer los cambios necesarios (edit_file o apply_patch para modificaciones)
 4. Verificar que los cambios son correctos
 5. Resumir qué hiciste y qué archivos cambiaste
 

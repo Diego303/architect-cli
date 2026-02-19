@@ -1,10 +1,11 @@
 """
 Tools para operaciones sobre el filesystem local.
 
-Incluye tools para leer, escribir, eliminar y listar archivos,
+Incluye tools para leer, escribir, editar, eliminar y listar archivos,
 todas con validación de paths y confinamiento al workspace.
 """
 
+import difflib
 import fnmatch
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from ..execution.validators import (
     validate_path,
 )
 from .base import BaseTool, ToolResult
-from .schemas import DeleteFileArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs
+from .schemas import DeleteFileArgs, EditFileArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs
 
 
 class ReadFileTool(BaseTool):
@@ -94,7 +95,9 @@ class WriteFileTool(BaseTool):
     def __init__(self, workspace_root: Path):
         self.name = "write_file"
         self.description = (
-            "Escribe o modifica un archivo. "
+            "Escribe o reemplaza completamente un archivo. "
+            "Úsalo solo para archivos NUEVOS o cuando necesitas reescribir el archivo entero. "
+            "Para modificaciones parciales usa edit_file (un bloque) o apply_patch (multi-hunk). "
             "Puede sobrescribir (mode='overwrite') o añadir al final (mode='append'). "
             "Crea directorios padres si no existen."
         )
@@ -154,6 +157,113 @@ class WriteFileTool(BaseTool):
                 success=False,
                 output="",
                 error=f"Error inesperado al escribir {args.path}: {e}",
+            )
+
+
+class EditFileTool(BaseTool):
+    """Edita un archivo reemplazando un bloque de texto exacto (str_replace)."""
+
+    def __init__(self, workspace_root: Path):
+        self.name = "edit_file"
+        self.description = (
+            "Reemplaza un bloque exacto de texto en un archivo (str_replace). "
+            "PREFERIR sobre write_file para modificaciones parciales en archivos existentes. "
+            "old_str debe ser único en el archivo; incluye líneas de contexto vecinas si hay ambigüedad. "
+            "Para cambios en múltiples secciones no contiguas, usa apply_patch. "
+            "Para archivos nuevos o reescritura total, usa write_file."
+        )
+        self.sensitive = True
+        self.args_model = EditFileArgs
+        self.workspace_root = workspace_root
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        """Reemplaza un bloque exacto de texto en un archivo.
+
+        Args:
+            path: Path relativo al workspace
+            old_str: Texto exacto a reemplazar (debe ser único en el archivo)
+            new_str: Texto de reemplazo (puede ser vacío para eliminar el bloque)
+
+        Returns:
+            ToolResult con el diff generado o error descriptivo
+        """
+        try:
+            args = self.validate_args(kwargs)
+
+            if not args.old_str:
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=(
+                        "old_str no puede estar vacío. "
+                        "Para insertar al final usa write_file con mode='append', "
+                        "o usa apply_patch con un hunk de inserción."
+                    ),
+                )
+
+            file_path = validate_path(args.path, self.workspace_root)
+            validate_file_exists(file_path)
+
+            original = file_path.read_text(encoding="utf-8")
+
+            # Contar ocurrencias exactas
+            count = original.count(args.old_str)
+            if count == 0:
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=(
+                        f"old_str no encontrado en {args.path}. "
+                        "Verifica espacios, indentación y saltos de línea."
+                    ),
+                )
+            if count > 1:
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=(
+                        f"old_str aparece {count} veces en {args.path}. "
+                        "Añade más líneas de contexto para hacerlo único."
+                    ),
+                )
+
+            # Reemplazar la única ocurrencia
+            modified = original.replace(args.old_str, args.new_str, 1)
+            file_path.write_text(modified, encoding="utf-8")
+
+            # Generar diff para el output
+            diff_lines = list(
+                difflib.unified_diff(
+                    original.splitlines(keepends=True),
+                    modified.splitlines(keepends=True),
+                    fromfile=f"a/{args.path}",
+                    tofile=f"b/{args.path}",
+                    lineterm="",
+                )
+            )
+            diff_str = "\n".join(diff_lines) if diff_lines else "(sin cambios visibles)"
+
+            return ToolResult(
+                success=True,
+                output=f"Archivo {args.path} editado correctamente.\n\nDiff:\n{diff_str}",
+            )
+
+        except PathTraversalError as e:
+            return ToolResult(success=False, output="", error=f"Error de seguridad: {e}")
+        except ValidationError as e:
+            return ToolResult(success=False, output="", error=str(e))
+        except UnicodeDecodeError:
+            path_str = kwargs.get("path", "?")
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"El archivo {path_str} no es un archivo de texto válido (UTF-8)",
+            )
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Error inesperado al editar {kwargs.get('path', '?')}: {e}",
             )
 
 

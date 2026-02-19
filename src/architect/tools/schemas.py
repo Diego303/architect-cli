@@ -49,6 +49,47 @@ class DeleteFileArgs(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class EditFileArgs(BaseModel):
+    """Argumentos para edit_file tool (str_replace)."""
+
+    path: str = Field(
+        description="Path relativo al workspace del archivo a editar",
+        examples=["src/main.py", "README.md"],
+    )
+    old_str: str = Field(
+        description=(
+            "Texto exacto a reemplazar. Debe aparecer exactamente una vez en el archivo. "
+            "Incluye líneas de contexto vecinas para hacerlo inequívoco si es necesario."
+        ),
+    )
+    new_str: str = Field(
+        description=(
+            "Texto de reemplazo. Puede ser cadena vacía para eliminar el bloque. "
+            "Mantén la indentación correcta."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class ApplyPatchArgs(BaseModel):
+    """Argumentos para apply_patch tool (unified diff)."""
+
+    path: str = Field(
+        description="Path relativo al workspace del archivo a parchear",
+        examples=["src/main.py", "config.yaml"],
+    )
+    patch: str = Field(
+        description=(
+            "Parche en formato unified diff. Puede incluir una o varias secciones @@ -a,b +c,d @@. "
+            "Las cabeceras --- / +++ son opcionales. "
+            "Ejemplo: '@@ -3,4 +3,5 @@\\n contexto\\n-línea vieja\\n+línea nueva\\n contexto'"
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class ListFilesArgs(BaseModel):
     """Argumentos para list_files tool."""
 

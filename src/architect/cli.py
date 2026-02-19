@@ -32,7 +32,7 @@ EXIT_INTERRUPTED = 130
 
 
 @click.group()
-@click.version_option(version="0.8.0", prog_name="architect")
+@click.version_option(version="0.9.0", prog_name="architect")
 def main() -> None:
     """architect - Herramienta CLI headless y agentica para orquestar agentes de IA.
 
@@ -276,7 +276,7 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
 
             # Mostrar info inicial si no es quiet
             if not kwargs.get("quiet"):
-                click.echo(f"🏗️  architect v0.8.0", err=True)
+                click.echo(f"🏗️  architect v0.9.0", err=True)
                 click.echo(f"📝 Prompt: {prompt}", err=True)
                 click.echo(f"🤖 Modelo: {config.llm.model}", err=True)
                 click.echo(f"📁 Workspace: {config.workspace.root}", err=True)
@@ -319,7 +319,7 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
 
             # Mostrar info inicial si no es quiet
             if not kwargs.get("quiet"):
-                click.echo(f"🏗️  architect v0.8.0", err=True)
+                click.echo(f"🏗️  architect v0.9.0", err=True)
                 click.echo(f"📝 Prompt: {prompt}", err=True)
                 click.echo(f"🤖 Modelo: {config.llm.model}", err=True)
                 click.echo(f"📁 Workspace: {config.workspace.root}", err=True)

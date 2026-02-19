@@ -7,7 +7,8 @@ Funciones de conveniencia para registrar las tools estándar del sistema.
 from pathlib import Path
 
 from ..config.schema import WorkspaceConfig
-from .filesystem import DeleteFileTool, ListFilesTool, ReadFileTool, WriteFileTool
+from .filesystem import DeleteFileTool, EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
+from .patch import ApplyPatchTool
 from .registry import ToolRegistry
 
 
@@ -25,6 +26,8 @@ def register_filesystem_tools(
         Esta función registra:
         - read_file
         - write_file
+        - edit_file
+        - apply_patch
         - delete_file (solo si allow_delete=True)
         - list_files
     """
@@ -33,6 +36,8 @@ def register_filesystem_tools(
     # Registrar tools básicas
     registry.register(ReadFileTool(workspace_root))
     registry.register(WriteFileTool(workspace_root))
+    registry.register(EditFileTool(workspace_root))
+    registry.register(ApplyPatchTool(workspace_root))
     registry.register(ListFilesTool(workspace_root))
 
     # delete_file solo si está permitido
