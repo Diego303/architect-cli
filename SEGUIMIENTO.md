@@ -7,8 +7,8 @@ Este documento registra el progreso de implementación del proyecto architect si
 ## Estado General
 
 - **Inicio**: 2026-02-18
-- **Fase Actual**: Completado (MVP)
-- **Estado**: ✅ Listo para uso
+- **Fase Actual**: F8 Completada — MVP listo
+- **Estado**: ✅ MVP completado (v0.8.0)
 
 ---
 
@@ -430,18 +430,242 @@ Este documento registra el progreso de implementación del proyecto architect si
 
 ---
 
-## 🎉 MVP COMPLETADO
+---
+
+### ✅ F6 - Streaming + Output Final (Completada: 2026-02-19)
+
+**Objetivo**: Streaming del LLM visible en terminal, salida JSON estructurada, códigos de salida correctos.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 6.1 - Conectar streaming en CLI (activo por defecto, desactivable con --no-stream)
+- [x] 6.2 - Callback de streaming a stderr (no rompe pipes)
+- [x] 6.3 - Streaming desactivado en modo --json y --quiet
+- [x] 6.4 - Salida JSON estructurada completa (to_output_dict ya implementado)
+- [x] 6.5 - Separación stdout/stderr completa (logs+streaming → stderr, resultado+JSON → stdout)
+- [x] 6.6 - Códigos de salida completos (0-5 + 130)
+- [x] 6.7 - Manejo de SIGINT con graceful shutdown (código 130)
+- [x] 6.8 - Detección de errores de autenticación (exit 4) y timeouts (exit 5)
+- [x] 6.9 - Versión actualizada a v0.6.0
+- [x] 6.10 - Script de prueba scripts/test_phase6.py
+
+#### Archivos Modificados
+- `src/architect/cli.py` - Actualizado con streaming, exit codes, SIGINT handler
+- `scripts/test_phase6.py` - Script de prueba de la Fase 6 (nuevo)
+
+#### Componentes Implementados
+
+**Streaming en CLI**:
+- `use_stream` calculado: activo por defecto si `config.llm.stream=True`
+- Desactivado con `--no-stream`, `--json` o si `quiet=True`
+- Callback `on_stream_chunk` escribe chunks a `sys.stderr` en tiempo real
+- Newline final añadido a stderr tras el streaming
+- Streaming activo en ambos modos (single agent y mixed mode)
+- En mixed mode, solo la fase build usa streaming (plan es silencioso)
+
+**Separación stdout/stderr**:
+- Logs estructurados → stderr
+- Info de progreso (modelo, workspace, etc.) → stderr
+- Streaming del LLM → stderr
+- Resultado final del agente → **stdout**
+- `--json` output → **stdout** (parseable con `jq`)
+- Compatibilidad con pipes: `architect run "..." --quiet --json | jq .`
+
+**Códigos de Salida Completos**:
+- `0` (EXIT_SUCCESS) - Éxito
+- `1` (EXIT_FAILED) - Fallo del agente
+- `2` (EXIT_PARTIAL) - Parcial (hizo algo pero no completó)
+- `3` (EXIT_CONFIG_ERROR) - Error de configuración / archivo no encontrado
+- `4` (EXIT_AUTH_ERROR) - Error de autenticación LLM (detección por keywords)
+- `5` (EXIT_TIMEOUT) - Timeout en llamadas LLM
+- `130` (EXIT_INTERRUPTED) - Interrumpido por SIGINT (Ctrl+C)
+
+**Manejo de SIGINT**:
+- Primer Ctrl+C: avisa, marca `interrupted=True`, deja terminar el step actual
+- Segundo Ctrl+C: salida inmediata con código 130
+- `KeyboardInterrupt` como fallback de seguridad
+- Estado marcado como `partial` si fue interrumpido
+
+**Formato JSON** (`--json`):
+```json
+{
+  "status": "success",
+  "output": "He creado el archivo...",
+  "steps": 3,
+  "tools_used": [
+    {"name": "read_file", "path": "main.py", "success": true},
+    {"name": "write_file", "path": "output.py", "success": true}
+  ],
+  "duration_seconds": 12.5,
+  "model": "gpt-4.1"
+}
+```
+
+#### Entregable
+✅ Streaming visible en terminal (stderr), `--json` produce salida parseable en stdout, `echo $?` retorna códigos correctos. Pipes funcionan: `architect run "..." --quiet --json | jq .`
+
+---
+
+---
+
+### ✅ F7 - Robustez y Tolerancia a Fallos (Completada: 2026-02-19)
+
+**Objetivo**: El sistema no se cae ante errores. Se recupera, informa, y termina limpiamente.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 7.1 - Retries LLM mejorados (solo errores transitorios + before_sleep logging + config.retries)
+- [x] 7.2 - StepTimeout context manager con SIGALRM (POSIX) y no-op en Windows
+- [x] 7.3 - GracefulShutdown class (SIGINT + SIGTERM, graceful first / immediate second)
+- [x] 7.4 - AgentLoop integrado con shutdown y step_timeout
+- [x] 7.5 - MixedModeRunner integrado con shutdown y step_timeout
+- [x] 7.6 - CLI actualizado: usa GracefulShutdown, pasa timeout a loops
+- [x] 7.7 - Exports actualizados en core/__init__.py
+- [x] 7.8 - Script de prueba scripts/test_phase7.py
+
+#### Archivos Creados/Modificados
+- `src/architect/core/timeout.py` - StepTimeout context manager (nuevo)
+- `src/architect/core/shutdown.py` - GracefulShutdown class (nuevo)
+- `src/architect/core/__init__.py` - Exports actualizados
+- `src/architect/llm/adapter.py` - Retries mejorados con _call_with_retry()
+- `src/architect/core/loop.py` - Shutdown check + StepTimeout en cada iteración
+- `src/architect/core/mixed_mode.py` - Pasa shutdown y step_timeout a loops
+- `src/architect/cli.py` - Usa GracefulShutdown, eliminado handler inline
+- `scripts/test_phase7.py` - Suite de pruebas (nuevo)
+
+#### Componentes Implementados
+
+**StepTimeout** (`core/timeout.py`):
+- Context manager que envuelve cada step del agent loop
+- Usa `signal.SIGALRM` en POSIX (Linux/macOS/CI)
+- No-op gracioso en Windows (sin SIGALRM) — el código no se rompe
+- Restaura el handler previo al salir (compatible con handlers anidados)
+- Lanza `StepTimeoutError` (subclase de `TimeoutError`) al expirar
+
+**GracefulShutdown** (`core/shutdown.py`):
+- Instala handlers para SIGINT y SIGTERM al instanciar
+- Primer disparo: avisa al usuario en stderr, marca `should_stop=True`
+- Segundo disparo (SIGINT): `sys.exit(130)` inmediato
+- `should_stop` property consultada por AgentLoop antes de cada step
+- Métodos `reset()` y `restore_defaults()` para testing y cleanup
+- Se comparte entre AgentLoop y MixedModeRunner
+
+**Retries LLM mejorados** (`llm/adapter.py`):
+- `_RETRYABLE_ERRORS` — solo errores transitorios: RateLimitError, ServiceUnavailableError, APIConnectionError, Timeout
+- `_call_with_retry(fn)` — ejecuta fn con tenacity.Retrying configurable
+  - `stop_after_attempt(config.retries + 1)` — usa `config.retries` real
+  - `wait_exponential(min=2, max=60)` — backoff progresivo
+  - `before_sleep=self._on_retry_sleep` — logging antes de cada reintento
+- `_on_retry_sleep(retry_state)` — logea intento, espera y tipo de error
+- AuthenticationError y otros errores fatales **no se reintentan**
+
+**AgentLoop actualizado** (`core/loop.py`):
+- Nuevos parámetros: `shutdown: GracefulShutdown | None` y `step_timeout: int = 0`
+- Comprobación de `shutdown.should_stop` **antes de cada step** → termina limpiamente
+- `StepTimeout(self.step_timeout)` envuelve toda la llamada al LLM (streaming o no)
+- `StepTimeoutError` capturada → `status=partial` con mensaje descriptivo
+
+**MixedModeRunner actualizado** (`core/mixed_mode.py`):
+- Acepta `shutdown` y `step_timeout`
+- Los pasa a los loops internos (`plan_loop` y `build_loop`)
+- Comprueba `shutdown.should_stop` entre fase plan y fase build
+
+**CLI actualizado** (`cli.py`):
+- Instancia `GracefulShutdown()` al inicio (antes de cargar config)
+- Pasa `shutdown=shutdown` y `step_timeout=kwargs.get("timeout") or 0` a runners
+- Elimina el handler SIGINT inline de F6
+- Al finalizar: `if shutdown.should_stop → sys.exit(130)`
+- Eliminado import `signal` (ya no necesario en CLI)
+
+#### Entregable
+✅ El sistema se recupera de errores de LLM (retries selectivos), errores de tools (feedback al agente), timeouts por step (termina limpiamente), y SIGINT/SIGTERM (graceful shutdown).
+
+---
+
+### ✅ F8 - Integración Final y Pulido (Completada: 2026-02-19)
+
+**Objetivo**: MVP completo, cohesionado y bien documentado. Versión 0.8.0 lista para uso real.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 8.1 - Subcomando `architect agents` para listar agentes disponibles
+- [x] 8.2 - Versión 0.8.0 consistente en todos los puntos (pyproject.toml, __init__.py, CLI headers, version_option)
+- [x] 8.3 - `config.example.yaml` reescrito completamente con documentación exhaustiva
+- [x] 8.4 - `README.md` reescrito como documentación de usuario final completa
+- [x] 8.5 - Script de pruebas de integración `scripts/test_phase8.py` (7 pruebas)
+
+#### Archivos Modificados
+- `src/architect/cli.py` - Añadido subcomando `agents`, versión 0.8.0 en todos los puntos
+- `src/architect/__init__.py` - `__version__` actualizado a "0.8.0"
+- `pyproject.toml` - `version` actualizado a "0.8.0"
+- `config.example.yaml` - Reescrito completamente
+- `README.md` - Reescrito completamente
+- `scripts/test_phase8.py` - Nuevo: suite de pruebas de integración
+
+#### Componentes Implementados
+
+**Subcomando `architect agents`** (`cli.py`):
+- Lista los 4 agentes por defecto (plan, build, resume, review) con descripción y confirm_mode
+- Si se proporciona `-c config.yaml`, incluye también los agentes custom definidos en YAML
+- Marca con `*` los defaults que han sido sobreescritos por el YAML
+- Output limpio y tabular para uso interactivo
+
+**Versión 0.8.0 consistente**:
+- `src/architect/__init__.py` → `__version__ = "0.8.0"`
+- `pyproject.toml` → `version = "0.8.0"`
+- `cli.py` → `@click.version_option(version="0.8.0")`
+- `cli.py` → headers de ejecución muestran `architect v0.8.0`
+- `config.example.yaml` → comentario de versión en cabecera
+
+**`config.example.yaml` reescrito**:
+- Secciones: `llm`, `agents`, `logging`, `workspace`, `mcp`
+- Documentación inline exhaustiva para cada campo
+- Ejemplos comentados de agentes custom (deploy, documenter, security)
+- Múltiples ejemplos de servidores MCP
+- Explicación del orden de precedencia de configuración
+- Ejemplos de todos los proveedores LLM soportados
+
+**`README.md` reescrito** — documentación completa de usuario final:
+- Instalación y quickstart con comandos reales
+- Referencia completa de `architect run` (tabla de opciones)
+- Referencia de `architect agents` y `architect validate-config`
+- Tabla de agentes con tools y confirm_mode
+- Modos de confirmación (tabla)
+- Configuración: estructura YAML mínima + variables de entorno (tabla)
+- Salida y códigos de salida (tabla completa)
+- Formato JSON (`--json`) con ejemplo real
+- Logging: todos los niveles con ejemplos bash
+- Integración MCP: YAML + uso
+- Uso en CI/CD: GitHub Actions completo
+- Arquitectura: diagrama ASCII del flujo
+- Seguridad: path traversal, allow_delete, MCP, API keys
+- Proveedores LLM: OpenAI, Anthropic, Gemini, Ollama, LiteLLM Proxy
+
+**`scripts/test_phase8.py`** — 7 pruebas de integración:
+1. Importaciones de todos los módulos (23 módulos)
+2. Versión consistente (\_\_init\_\_.py, pyproject.toml, CLI --version, cli.py headers)
+3. CLI --help: `architect --help`, `architect run --help`, `architect agents --help`, `architect validate-config --help`
+4. Subcomando `architect agents`: muestra los 4 agentes por defecto
+5. `validate-config` con `config.example.yaml`: parsea y valida correctamente
+6. Inicialización completa sin LLM: AppConfig, logging, ToolRegistry, GracefulShutdown, StepTimeout, ExecutionEngine, ContextBuilder
+7. `dry-run` sin API key: falla con error de LLM (no de configuración)
+
+#### Entregable
+✅ MVP completo en v0.8.0. `architect agents` lista agentes, `architect validate-config -c config.example.yaml` valida el ejemplo, `architect run --help` muestra referencia completa. Documentación de usuario final lista en README.md.
 
 ---
 
 ## Próximas Fases
-- F2 - LLM Adapter + Agent Loop (Día 3-5)
-- F3 - Sistema de Agentes (Día 5-6)
-- F4 - MCP Connector (Día 6-8)
-- F5 - Logging Completo (Día 8-9)
-- F6 - Streaming + Output Final (Día 9-10)
-- F7 - Robustez y Tolerancia a Fallos (Día 10-11)
-- F8 - Integración Final y Pulido (Día 11-12)
+
+MVP completado. Posibles extensiones futuras:
+- Persistencia de estado (reanudar ejecuciones parciales)
+- Multi-agente (agentes que delegan en otros)
+- Plugin system (tools desde paquetes Python externos)
+- Prompt caching para desarrollo
+- Métricas: tokens usados, coste estimado, duración por step
 
 ---
 

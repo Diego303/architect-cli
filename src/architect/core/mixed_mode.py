@@ -6,7 +6,7 @@ un agente. Ejecuta primero el agente 'plan' para analizar la tarea,
 y luego el agente 'build' con el plan como contexto.
 """
 
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import structlog
 
@@ -15,7 +15,11 @@ from ..execution.engine import ExecutionEngine
 from ..llm.adapter import LLMAdapter
 from .context import ContextBuilder
 from .loop import AgentLoop
+from .shutdown import GracefulShutdown
 from .state import AgentState
+
+if TYPE_CHECKING:
+    pass
 
 logger = structlog.get_logger()
 
@@ -25,7 +29,7 @@ class MixedModeRunner:
 
     Flujo:
     1. Ejecutar agente 'plan' con el prompt del usuario
-    2. Si plan falla, retornar el estado
+    2. Si plan falla o se recibe shutdown, retornar el estado
     3. Si plan tiene éxito, ejecutar agente 'build' con:
        - Prompt original del usuario
        - Plan generado como contexto adicional
@@ -39,6 +43,8 @@ class MixedModeRunner:
         plan_config: AgentConfig,
         build_config: AgentConfig,
         context_builder: ContextBuilder,
+        shutdown: GracefulShutdown | None = None,
+        step_timeout: int = 0,
     ):
         """Inicializa el mixed mode runner.
 
@@ -48,12 +54,16 @@ class MixedModeRunner:
             plan_config: Configuración del agente plan
             build_config: Configuración del agente build
             context_builder: ContextBuilder para mensajes
+            shutdown: GracefulShutdown para detectar interrupciones (opcional)
+            step_timeout: Segundos máximos por step. 0 = sin timeout.
         """
         self.llm = llm
         self.engine = engine
         self.plan_config = plan_config
         self.build_config = build_config
         self.ctx = context_builder
+        self.shutdown = shutdown
+        self.step_timeout = step_timeout
         self.log = logger.bind(component="mixed_mode_runner")
 
     def run(
@@ -66,7 +76,7 @@ class MixedModeRunner:
 
         Args:
             prompt: Prompt original del usuario
-            stream: Si True, usa streaming del LLM
+            stream: Si True, usa streaming del LLM en la fase build
             on_stream_chunk: Callback opcional para chunks de streaming
 
         Returns:
@@ -77,16 +87,23 @@ class MixedModeRunner:
             prompt=prompt[:100] + "..." if len(prompt) > 100 else prompt,
         )
 
-        # Fase 1: Ejecutar plan (sin streaming, plan es rápido)
+        # Fase 1: Ejecutar plan (sin streaming — plan es rápido y silencioso)
         self.log.info("mixed_mode.phase.plan")
         plan_loop = AgentLoop(
             self.llm,
             self.engine,
             self.plan_config,
             self.ctx,
+            shutdown=self.shutdown,
+            step_timeout=self.step_timeout,
         )
 
         plan_state = plan_loop.run(prompt, stream=False)
+
+        # Si se recibió shutdown durante la fase plan, retornar inmediatamente
+        if self.shutdown and self.shutdown.should_stop:
+            self.log.warning("mixed_mode.shutdown_after_plan")
+            return plan_state
 
         # Verificar resultado del plan
         if plan_state.status == "failed":
@@ -122,6 +139,8 @@ class MixedModeRunner:
             self.engine,
             self.build_config,
             self.ctx,
+            shutdown=self.shutdown,
+            step_timeout=self.step_timeout,
         )
 
         # Ejecutar build (con streaming si está habilitado)

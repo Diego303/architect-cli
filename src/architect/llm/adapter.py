@@ -6,6 +6,12 @@ por LiteLLM, con retries automáticos, normalización de respuestas y
 manejo robusto de errores.
 
 Incluye soporte para streaming de respuestas en tiempo real.
+
+Retries configurables desde LLMConfig:
+- Solo para errores transitorios: RateLimitError, ServiceUnavailableError,
+  APIConnectionError y Timeout.
+- No se reintenta en errores de autenticación ni de configuración.
+- Logging estructurado en cada reintento con número de intento y espera.
 """
 
 import os
@@ -15,7 +21,8 @@ import litellm
 import structlog
 from pydantic import BaseModel, Field
 from tenacity import (
-    retry,
+    RetryCallState,
+    Retrying,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -24,6 +31,14 @@ from tenacity import (
 from ..config.schema import LLMConfig
 
 logger = structlog.get_logger()
+
+# Errores transitorios que justifican reintentos
+_RETRYABLE_ERRORS = (
+    litellm.RateLimitError,
+    litellm.ServiceUnavailableError,
+    litellm.APIConnectionError,
+    litellm.Timeout,
+)
 
 
 class StreamChunk(BaseModel):
@@ -106,7 +121,38 @@ class LLMAdapter:
             provider=config.provider,
             mode=config.mode,
             model=config.model,
+            retries=config.retries,
         )
+
+    def _on_retry_sleep(self, retry_state: RetryCallState) -> None:
+        """Callback llamado antes de cada reintento. Logea el intento y la espera."""
+        next_wait = retry_state.next_action.sleep if retry_state.next_action else 0
+        exc = retry_state.outcome.exception() if retry_state.outcome else None
+        self.log.warning(
+            "llm.retry",
+            attempt=retry_state.attempt_number,
+            wait_seconds=round(next_wait, 1),
+            error=str(exc) if exc else None,
+            error_type=type(exc).__name__ if exc else None,
+        )
+
+    def _call_with_retry(self, fn, *args, **kwargs) -> Any:
+        """Ejecuta fn con retries automáticos solo para errores transitorios.
+
+        Usa config.retries para determinar el número máximo de intentos.
+        Retries se aplican solo a errores transitorios (_RETRYABLE_ERRORS).
+        Errores de autenticación y configuración se propagan inmediatamente.
+        """
+        max_attempts = self.config.retries + 1  # 1 intento original + N retries
+        for attempt in Retrying(
+            retry=retry_if_exception_type(_RETRYABLE_ERRORS),
+            stop=stop_after_attempt(max_attempts),
+            wait=wait_exponential(multiplier=1, min=2, max=60),
+            before_sleep=self._on_retry_sleep,
+            reraise=True,
+        ):
+            with attempt:
+                return fn(*args, **kwargs)
 
     def _configure_litellm(self) -> None:
         """Configura LiteLLM según la configuración."""
@@ -134,33 +180,32 @@ class LLMAdapter:
         litellm.suppress_debug_info = True
         litellm.set_verbose = False
 
-    @retry(
-        retry=retry_if_exception_type((Exception,)),  # Retry on any exception
-        stop=stop_after_attempt(3),  # Max 3 intentos (1 original + 2 retries)
-        wait=wait_exponential(multiplier=1, min=2, max=30),
-        reraise=True,
-    )
     def completion(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
     ) -> LLMResponse:
-        """Ejecuta una llamada al LLM con retries automáticos.
+        """Ejecuta una llamada al LLM con retries automáticos para errores transitorios.
+
+        Solo reintenta en errores transitorios (rate limits, servicio no disponible,
+        problemas de conexión, timeouts). Los errores de autenticación y de
+        configuración se propagan inmediatamente sin reintentar.
 
         Args:
             messages: Lista de mensajes en formato OpenAI
             tools: Lista de tool schemas (opcional)
-            stream: Si True, retorna None y debe usar completion_stream()
+            stream: Si True, lanza ValueError — usar completion_stream() en su lugar
 
         Returns:
-            LLMResponse normalizada (si stream=False)
-            None (si stream=True, usar completion_stream())
+            LLMResponse normalizada
 
         Raises:
-            Exception: Si falla después de todos los retries
+            ValueError: Si stream=True (usar completion_stream)
+            litellm.RateLimitError: Si se agotan los retries por rate limit
+            litellm.AuthenticationError: Inmediatamente (sin retry)
+            Exception: Cualquier otro error después de agotar retries
         """
-        # Si stream=True, caller debe usar completion_stream() directamente
         if stream:
             raise ValueError(
                 "Para streaming, use completion_stream() en lugar de completion(stream=True)"
@@ -173,24 +218,19 @@ class LLMAdapter:
             tools_count=len(tools) if tools else 0,
         )
 
-        try:
-            # Preparar kwargs para LiteLLM
+        def _call() -> Any:
             kwargs: dict[str, Any] = {
                 "model": self.config.model,
                 "messages": messages,
                 "timeout": self.config.timeout,
                 "stream": False,
             }
-
-            # Añadir tools si están disponibles
             if tools:
                 kwargs["tools"] = tools
-                # tool_choice="auto" es el default, LiteLLM lo maneja
+            return litellm.completion(**kwargs)
 
-            # Llamar a LiteLLM (sin streaming)
-            response = litellm.completion(**kwargs)
-
-            # Normalizar respuesta
+        try:
+            response = self._call_with_retry(_call)
             normalized = self._normalize_response(response)
 
             self.log.info(
@@ -200,7 +240,6 @@ class LLMAdapter:
                 tool_calls_count=len(normalized.tool_calls),
                 usage=normalized.usage,
             )
-
             return normalized
 
         except Exception as e:

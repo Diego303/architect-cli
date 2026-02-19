@@ -3,10 +3,14 @@ Agent Loop - Ciclo principal de ejecución del agente.
 
 Este es el corazón del sistema. Orquesta la interacción entre
 el LLM y las tools, gestionando el flujo completo de ejecución.
+
+Incluye:
+- Timeout por step (StepTimeout) para evitar bloqueos indefinidos
+- Comprobación de shutdown antes de cada iteración (GracefulShutdown)
+- Manejo robusto de errores que no rompe el loop
 """
 
-import sys
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import structlog
 
@@ -14,7 +18,12 @@ from ..config.schema import AgentConfig
 from ..execution.engine import ExecutionEngine
 from ..llm.adapter import LLMAdapter, StreamChunk
 from .context import ContextBuilder
+from .shutdown import GracefulShutdown
 from .state import AgentState, StepResult, ToolCallResult
+from .timeout import StepTimeout, StepTimeoutError
+
+if TYPE_CHECKING:
+    pass
 
 logger = structlog.get_logger()
 
@@ -23,11 +32,12 @@ class AgentLoop:
     """Loop principal del agente.
 
     Orquesta el ciclo completo:
-    1. Enviar mensajes al LLM
-    2. Recibir respuesta (texto o tool calls)
-    3. Ejecutar tool calls si las hay
-    4. Enviar resultados de vuelta al LLM
-    5. Repetir hasta que el agente termine o se alcance max_steps
+    1. Comprobar si hay señal de shutdown — salir limpiamente si la hay
+    2. Enviar mensajes al LLM (con timeout por step)
+    3. Recibir respuesta (texto o tool calls)
+    4. Ejecutar tool calls si las hay (con timeout)
+    5. Enviar resultados de vuelta al LLM
+    6. Repetir hasta que el agente termine o se alcance max_steps
     """
 
     def __init__(
@@ -36,6 +46,8 @@ class AgentLoop:
         engine: ExecutionEngine,
         agent_config: AgentConfig,
         context_builder: ContextBuilder,
+        shutdown: GracefulShutdown | None = None,
+        step_timeout: int = 0,
     ):
         """Inicializa el agent loop.
 
@@ -44,11 +56,15 @@ class AgentLoop:
             engine: ExecutionEngine configurado
             agent_config: Configuración del agente
             context_builder: ContextBuilder para mensajes
+            shutdown: GracefulShutdown para detectar interrupciones (opcional)
+            step_timeout: Segundos máximos por step. 0 = sin timeout.
         """
         self.llm = llm
         self.engine = engine
         self.agent_config = agent_config
         self.ctx = context_builder
+        self.shutdown = shutdown
+        self.step_timeout = step_timeout
         self.log = logger.bind(component="agent_loop")
 
     def run(
@@ -86,35 +102,59 @@ class AgentLoop:
 
         # Loop principal
         for step in range(self.agent_config.max_steps):
+
+            # 0. Comprobar señal de shutdown antes de cada step
+            if self.shutdown and self.shutdown.should_stop:
+                self.log.warning(
+                    "agent.shutdown_requested",
+                    step=step,
+                )
+                state.status = "partial"
+                state.final_output = (
+                    state.final_output
+                    or "Ejecución interrumpida por señal de shutdown."
+                )
+                break
+
             self.log.info("agent.step.start", step=step)
 
-            # 1. Llamar al LLM (con o sin streaming)
+            # 1. Llamar al LLM envuelto en StepTimeout
             try:
-                if stream:
-                    # Modo streaming
-                    response = None
-                    for chunk_or_response in self.llm.completion_stream(
-                        messages=state.messages,
-                        tools=tools_schema if tools_schema else None,
-                    ):
-                        # El último yield es la respuesta completa
-                        if isinstance(chunk_or_response, StreamChunk):
-                            # Es un chunk de streaming
-                            if on_stream_chunk and chunk_or_response.type == "content":
-                                on_stream_chunk(chunk_or_response.data)
-                        else:
-                            # Es la respuesta completa (último yield)
-                            response = chunk_or_response
+                with StepTimeout(self.step_timeout):
+                    if stream:
+                        # Modo streaming
+                        response = None
+                        for chunk_or_response in self.llm.completion_stream(
+                            messages=state.messages,
+                            tools=tools_schema if tools_schema else None,
+                        ):
+                            if isinstance(chunk_or_response, StreamChunk):
+                                if on_stream_chunk and chunk_or_response.type == "content":
+                                    on_stream_chunk(chunk_or_response.data)
+                            else:
+                                response = chunk_or_response
 
-                    # Verificar que obtuvimos respuesta
-                    if response is None:
-                        raise RuntimeError("Streaming completó sin retornar respuesta final")
-                else:
-                    # Modo sin streaming (normal)
-                    response = self.llm.completion(
-                        messages=state.messages,
-                        tools=tools_schema if tools_schema else None,
-                    )
+                        if response is None:
+                            raise RuntimeError("Streaming completó sin retornar respuesta final")
+                    else:
+                        response = self.llm.completion(
+                            messages=state.messages,
+                            tools=tools_schema if tools_schema else None,
+                        )
+
+            except StepTimeoutError as e:
+                self.log.error(
+                    "agent.step_timeout",
+                    step=step,
+                    seconds=self.step_timeout,
+                )
+                state.status = "partial"
+                state.final_output = (
+                    f"Step {step} excedió el tiempo máximo de {self.step_timeout}s. "
+                    f"El agente completó {state.total_tool_calls} tool calls antes del timeout."
+                )
+                break
+
             except Exception as e:
                 self.log.error("agent.llm_error", error=str(e), step=step)
                 state.status = "failed"
@@ -123,7 +163,6 @@ class AgentLoop:
 
             # 2. Verificar si el LLM terminó con una respuesta final
             if response.finish_reason == "stop" and not response.tool_calls:
-                # El agente ha terminado con éxito
                 state.final_output = response.content
                 state.status = "success"
                 self.log.info(
@@ -153,15 +192,14 @@ class AgentLoop:
                         args=self._sanitize_args_for_log(tc.arguments),
                     )
 
-                    # Ejecutar tool
+                    # Ejecutar tool (nunca lanza excepción — devuelve ToolResult)
                     result = self.engine.execute_tool_call(tc.name, tc.arguments)
 
-                    # Registrar resultado
                     tool_result = ToolCallResult(
                         tool_name=tc.name,
                         args=tc.arguments,
                         result=result,
-                        was_confirmed=True,  # TODO: track real confirmation status
+                        was_confirmed=True,
                         was_dry_run=self.engine.dry_run,
                     )
                     tool_results.append(tool_result)
@@ -180,16 +218,14 @@ class AgentLoop:
                 )
 
                 # 5. Registrar step
-                step_result = StepResult(
+                state.steps.append(StepResult(
                     step_number=step,
                     llm_response=response,
                     tool_calls_made=tool_results,
-                )
-                state.steps.append(step_result)
+                ))
 
             else:
-                # El LLM respondió pero sin tool calls y sin finalizar correctamente
-                # Esto puede pasar si el finish_reason es "length" u otro
+                # El LLM respondió sin tool calls y sin finish_reason="stop"
                 self.log.warning(
                     "agent.unexpected_response",
                     step=step,
@@ -197,27 +233,25 @@ class AgentLoop:
                     has_content=response.content is not None,
                 )
 
-                # Registrar step sin tool calls
-                step_result = StepResult(
+                state.steps.append(StepResult(
                     step_number=step,
                     llm_response=response,
                     tool_calls_made=[],
-                )
-                state.steps.append(step_result)
+                ))
 
-                # Decidir si continuar o terminar
                 if response.finish_reason == "length":
-                    # Token limit alcanzado, intentar continuar
+                    # Token limit alcanzado → intentar continuar
                     self.log.info("agent.token_limit", step=step)
                     continue
                 else:
-                    # Otro finish_reason inesperado, terminar
                     state.status = "partial"
-                    state.final_output = response.content or "El agente no produjo una respuesta clara."
+                    state.final_output = (
+                        response.content or "El agente no produjo una respuesta clara."
+                    )
                     break
 
         else:
-            # Se agotaron los pasos sin terminar
+            # Se agotaron todos los pasos
             self.log.warning(
                 "agent.max_steps_reached",
                 max_steps=self.agent_config.max_steps,
