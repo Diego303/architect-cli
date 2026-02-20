@@ -53,6 +53,8 @@ click.echo(f"Procesando {filename}...")                 # contamina stdout
 print(f"Step {n} completado")                           # rompe pipes
 ```
 
+Esto incluye el output del `SelfEvaluator` — todos los avisos de evaluación van a `stderr`.
+
 ### 4. Los errores de tools vuelven al LLM, no terminan el loop
 
 ```python
@@ -75,7 +77,20 @@ Cuando hagas un bump de versión, actualiza los 4:
 1. `src/architect/__init__.py` → `__version__ = "X.Y.Z"`
 2. `pyproject.toml` → `version = "X.Y.Z"`
 3. `src/architect/cli.py` → `@click.version_option(version="X.Y.Z")`
-4. `src/architect/cli.py` → headers de ejecución con `vX.Y.Z`
+4. `src/architect/cli.py` → headers de ejecución con `vX.Y.Z` (aparece 2 veces, una por modo)
+
+### 6. El ContextManager nunca lanza excepciones
+
+`maybe_compress()` falla silenciosamente si el LLM no está disponible. `enforce_window()` y `truncate_tool_result()` son operaciones puramente de strings. Ninguna de las tres debe propagar excepciones al loop.
+
+```python
+# ✓ CORRECTO — en maybe_compress
+try:
+    summary = self._summarize_steps(old_msgs, llm)
+except Exception:
+    self.log.warning("context.compress.failed")
+    return messages  # retorna original sin cambios
+```
 
 ---
 
@@ -92,7 +107,7 @@ class MyToolArgs(BaseModel):
     option:  str | None = None
 ```
 
-2. Implementa la tool en `tools/filesystem.py` (o un nuevo archivo):
+2. Implementa la tool en `tools/filesystem.py` o un nuevo archivo:
 
 ```python
 class MyTool(BaseTool):
@@ -120,14 +135,39 @@ class MyTool(BaseTool):
 ```python
 def register_filesystem_tools(registry, workspace_config):
     root = workspace_config.root.resolve()
-    registry.register(ReadFileTool(root))
-    registry.register(WriteFileTool(root))
-    registry.register(DeleteFileTool(root, workspace_config.allow_delete))
-    registry.register(ListFilesTool(root))
+    # ...tools existentes...
     registry.register(MyTool(root))   # ← añade aquí
 ```
 
 4. Si la tool debe estar disponible para todos los agentes, no hay que hacer nada más. Si solo para algunos, añade `"my_tool"` al `allowed_tools` del agente correspondiente.
+
+---
+
+### Añadir una tool de búsqueda (sin `workspace_root`)
+
+Para tools que no necesitan confinamiento de paths (ej: búsqueda en el workspace completo):
+
+```python
+# En tools/search.py
+class MySearchTool(BaseTool):
+    name        = "my_search"
+    description = "Busca X en el código del workspace."
+    args_model  = MySearchArgs
+    sensitive   = False
+
+    def __init__(self, workspace_root: Path):
+        self.workspace_root = workspace_root
+
+    def execute(self, pattern: str, path: str = ".") -> ToolResult:
+        try:
+            base = validate_path(path, self.workspace_root)
+            # búsqueda dentro de base...
+            return ToolResult(success=True, output=results_str)
+        except Exception as e:
+            return ToolResult(success=False, output=str(e), error=str(e))
+```
+
+Añadir en `register_search_tools()` en `tools/setup.py`.
 
 ---
 
@@ -143,7 +183,7 @@ DEFAULT_AGENTS: dict[str, AgentConfig] = {
     "review": AgentConfig(...),
     "test":   AgentConfig(           # ← nuevo agente
         system_prompt=TEST_PROMPT,   # añade en prompts.py
-        allowed_tools=["read_file", "list_files", "write_file"],
+        allowed_tools=["read_file", "list_files", "search_code", "write_file"],
         confirm_mode="confirm-sensitive",
         max_steps=15,
     ),
@@ -155,7 +195,7 @@ En `agents/prompts.py`:
 ```python
 TEST_PROMPT = """
 Eres un agente de testing especializado.
-Tu trabajo es analizar código y generar tests unitarios.
+Tu trabajo es analizar código y generar tests unitarios con pytest.
 ...
 """
 ```
@@ -190,6 +230,7 @@ def mi_comando(config_path, opcion):
 2. Si necesita ser configurable desde env vars, añade en `load_env_overrides()` en `config/loader.py`.
 3. Si necesita flag de CLI, añade `@click.option` en `cli.py` y actualiza `apply_cli_overrides()` en `loader.py`.
 4. Actualiza `config.example.yaml` con documentación del nuevo campo.
+5. Actualiza `docs/config-reference.md`.
 
 ---
 
@@ -231,10 +272,15 @@ except Exception as e:
 
 | ¿Qué necesito cambiar? | Archivo(s) |
 |------------------------|------------|
-| Nueva tool local | `tools/schemas.py`, `tools/filesystem.py` (o nuevo), `tools/setup.py` |
+| Nueva tool local (filesystem) | `tools/schemas.py`, `tools/filesystem.py`, `tools/setup.py` |
+| Nueva tool de búsqueda | `tools/schemas.py`, `tools/search.py`, `tools/setup.py` |
 | Nueva tool MCP | Solo configurar servidor en `config.yaml`; el adapter es genérico |
 | Nuevo agente por defecto | `agents/prompts.py`, `agents/registry.py` |
 | Comportamiento del loop | `core/loop.py` |
+| Gestión del context window | `core/context.py` → `ContextManager` |
+| Lógica de evaluación | `core/evaluator.py` → `SelfEvaluator` |
+| Indexación del repositorio | `indexer/tree.py` → `RepoIndexer` |
+| Caché del índice | `indexer/cache.py` → `IndexCache` |
 | Modo mixto plan→build | `core/mixed_mode.py` |
 | Nuevo campo de configuración | `config/schema.py`, `config/loader.py`, `cli.py`, `config.example.yaml` |
 | Nuevo subcomando CLI | `cli.py` |
@@ -243,7 +289,8 @@ except Exception as e:
 | Exit codes | `cli.py` (constantes + detección en except) |
 | Señales del OS | `core/shutdown.py` (SIGINT/SIGTERM), `core/timeout.py` (SIGALRM) |
 | Logging | `logging/setup.py` |
-| Formato mensajes al LLM | `core/context.py` |
+| Formato mensajes al LLM | `core/context.py` → `ContextBuilder` |
+| Pruning de contexto | `core/context.py` → `ContextManager` |
 | Serialización JSON output | `core/state.py` → `AgentState.to_output_dict()` |
 | Seguridad de paths | `execution/validators.py` |
 | Políticas de confirmación | `execution/policies.py` |
@@ -280,7 +327,7 @@ El `or None` es el truco. Una lista vacía `[]` es falsy en Python, por lo que s
 
 ### MixedModeRunner crea dos engines distintos
 
-No reutilices el mismo `ExecutionEngine` para plan y build en modo mixto. El plan necesita `confirm_mode="confirm-all"` y tools limitadas; el build necesita `confirm_mode="confirm-sensitive"` y todas las tools. La CLI crea dos engines separados.
+No reutilices el mismo `ExecutionEngine` para plan y build en modo mixto. El plan necesita `confirm_mode="confirm-all"` y tools limitadas; el build necesita `confirm_mode="confirm-sensitive"` y todas las tools. La CLI crea dos engines separados. El `ContextManager` sí se **comparte** entre ambas fases.
 
 ### `validate_path()` con paths absolutos
 
@@ -297,3 +344,32 @@ El `_call_with_retry` tiene `reraise=True`. Esto significa que después de agota
 ### `model_copy(update=..., exclude_unset=True)` en el registry
 
 El merge de agentes usa `exclude_unset=True` para saber qué campos el YAML realmente especificó (vs los que tienen valor por tener un default). Esto permite que un override parcial no pisee con valores default campos que el usuario no quiso cambiar.
+
+### `edit_file` requiere `old_str` único
+
+Si el `old_str` aparece más de una vez en el archivo, `EditFileTool` devuelve un error. El agente debe incluir suficiente contexto en `old_str` para que sea único. Si hay múltiples ocurrencias, usar `apply_patch` con hunks específicos de línea.
+
+### Parallel tool calls y `confirm-sensitive`
+
+Con `confirm-sensitive`, si **cualquier** tool call del lote es `sensitive=True`, **todo el lote se ejecuta secuencialmente**. Esto es conservador por diseño: la interacción con el usuario no es thread-safe y mezclar confirmaciones en paralelo crearía confusión.
+
+### `SelfEvaluator` solo evalúa `status == "success"`
+
+Si el agente ya terminó con `"partial"` o `"failed"`, el `SelfEvaluator` no se ejecuta. La evaluación solo tiene sentido cuando el agente cree que terminó correctamente.
+
+### ContextManager Nivel 2 puede llamar al LLM
+
+`maybe_compress()` hace una llamada extra al LLM para resumir pasos antiguos. Esto significa:
+1. Consume tokens extra (generalmente pequeño).
+2. Puede fallar si hay errores de red/auth → falla silenciosamente.
+3. El resumen se marca con `[Resumen de pasos anteriores]` para que el LLM sepa que es una síntesis.
+
+En tests, pasar `context_manager=None` para evitar la llamada al LLM en la compresión.
+
+### `RepoIndexer` excluye archivos >1MB
+
+Archivos muy grandes (datasets, binarios, etc.) se omiten del índice pero siguen siendo accesibles con `read_file`. El agente los verá en el árbol como omitidos, pero puede leerlos explícitamente. Para repos con archivos grandes válidos, ajustar `indexer.max_file_size`.
+
+### Orden de mensajes en `enforce_window`
+
+El Nivel 3 elimina pares `messages[2:4]` (el assistant + tool más antiguos después del user inicial). Nunca elimina `messages[0]` (system) ni `messages[1]` (user original). Si hay menos de 4 mensajes, no se elimina nada. Los pares se eliminan de 2 en 2 para mantener la coherencia del formato OpenAI.

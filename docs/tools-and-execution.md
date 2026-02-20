@@ -32,25 +32,205 @@ El `get_schema()` produce el formato que LiteLLM/OpenAI espera para tool calling
 
 ---
 
+## Resumen de todas las tools disponibles
+
+| Tool | Clase | `sensitive` | Módulo | Propósito |
+|------|-------|-------------|--------|-----------|
+| `read_file` | `ReadFileTool` | No | `filesystem.py` | Lee un archivo como texto UTF-8 |
+| `write_file` | `WriteFileTool` | **Sí** | `filesystem.py` | Escribe o añade contenido a un archivo |
+| `delete_file` | `DeleteFileTool` | **Sí** | `filesystem.py` | Elimina un archivo (requiere `allow_delete=true`) |
+| `list_files` | `ListFilesTool` | No | `filesystem.py` | Lista archivos con glob y recursión opcionales |
+| `edit_file` | `EditFileTool` | **Sí** | `filesystem.py` | Sustituye un bloque exacto de texto en un archivo |
+| `apply_patch` | `ApplyPatchTool` | **Sí** | `patch.py` | Aplica un unified diff a un archivo |
+| `search_code` | `SearchCodeTool` | No | `search.py` | Busca patrones con regex en el código fuente |
+| `grep` | `GrepTool` | No | `search.py` | Busca texto literal (usa rg/grep del sistema si está disponible) |
+| `find_files` | `FindFilesTool` | No | `search.py` | Encuentra archivos por nombre o patrón glob |
+
+---
+
 ## Tools del filesystem
 
 Todas viven en `tools/filesystem.py`. Reciben `workspace_root: Path` en `__init__` y lo pasan a `validate_path()` en cada operación.
 
-| Clase | name | sensitive | Operación |
-|-------|------|-----------|-----------|
-| `ReadFileTool` | `read_file` | `False` | Lee el archivo como texto UTF-8 |
-| `WriteFileTool` | `write_file` | `True` | Escribe o añade (overwrite/append); crea directorios padres |
-| `DeleteFileTool` | `delete_file` | `True` | Elimina el archivo; falla si `allow_delete=False` |
-| `ListFilesTool` | `list_files` | `False` | Lista archivos; soporta glob y recursión |
+### `read_file`
 
-`DeleteFileTool` tiene una verificación adicional de `allow_delete`:
+```
+ReadFileArgs:
+  path: str    # relativo al workspace root
+```
+
+Lee el archivo como texto UTF-8. Si el archivo no existe o es un directorio, devuelve `ToolResult(success=False)`.
+
+### `write_file`
+
+```
+WriteFileArgs:
+  path:    str
+  content: str
+  mode:    str = "overwrite"   # "overwrite" | "append"
+```
+
+Crea directorios padres automáticamente si no existen. `sensitive=True`.
+
+**Cuándo usar**: archivos nuevos o reescrituras completas. Para cambios parciales, usar `edit_file` o `apply_patch`.
+
+### `delete_file`
+
+```
+DeleteFileArgs:
+  path: str
+```
+
+Tiene una doble verificación:
+1. `allow_delete` en `WorkspaceConfig` (apagado por defecto).
+2. `validate_path()` para prevenir traversal.
+
 ```python
-def execute(self, path: str) -> ToolResult:
-    if not self.allow_delete:
-        return ToolResult(success=False,
-                         output="Error: eliminación de archivos deshabilitada.",
-                         error="allow_delete=False en WorkspaceConfig")
-    ...
+if not self.allow_delete:
+    return ToolResult(success=False, output="Error: eliminación deshabilitada.",
+                      error="allow_delete=False en WorkspaceConfig")
+```
+
+### `list_files`
+
+```
+ListFilesArgs:
+  path:      str       = "."
+  pattern:   str|None  = None   # glob (ej: "*.py", "**/*.md", "src/**/*.ts")
+  recursive: bool      = False
+```
+
+Retorna una lista de paths relativos al workspace root.
+
+---
+
+## Tools de edición incremental (F9)
+
+Preferir estas tools sobre `write_file` para modificar archivos existentes. Consumen menos tokens y tienen menos riesgo de introducir errores.
+
+### `edit_file` — sustitución exacta de texto
+
+```
+EditFileArgs:
+  path:    str   # archivo a modificar
+  old_str: str   # texto exacto a reemplazar (debe ser único en el archivo)
+  new_str: str   # texto de reemplazo
+```
+
+**Comportamiento**:
+- Valida que `old_str` aparezca **exactamente una vez** en el archivo.
+- Si aparece 0 veces → `ToolResult(success=False, "old_str no encontrado")`.
+- Si aparece más de una vez → `ToolResult(success=False, "old_str no es único")`.
+- Si tiene éxito → devuelve el unified diff del cambio.
+- `sensitive=True`.
+
+**Cuándo usar**: cambiar una función, una clase, un bloque de código. El `old_str` debe ser suficientemente largo para ser único (incluir contexto si es necesario).
+
+```python
+# Ejemplo de uso del agente
+edit_file(
+    path="src/utils.py",
+    old_str="def calculate(a, b):\n    return a + b",
+    new_str="def calculate(a: int, b: int) -> int:\n    \"\"\"Suma dos enteros.\"\"\"\n    return a + b",
+)
+```
+
+### `apply_patch` — unified diff completo
+
+```
+ApplyPatchArgs:
+  path:  str   # archivo a modificar
+  patch: str   # unified diff con uno o más hunks
+```
+
+**Formato del patch**:
+```
+--- a/src/utils.py
++++ b/src/utils.py
+@@ -10,7 +10,10 @@
+ def foo():
+-    return 1
++    return 2
++
++def bar():
++    return 3
+```
+
+**Comportamiento**:
+1. Intenta parsear y aplicar el diff con el parser puro-Python interno.
+2. Si falla (contexto no coincide, numeración incorrecta), intenta con el comando `patch` del sistema.
+3. Si ambos fallan → `ToolResult(success=False)` con descripción del error.
+- `sensitive=True`.
+
+**Cuándo usar**: múltiples cambios en un archivo (varios hunks), o cuando el LLM tiene el diff completo listo.
+
+### Jerarquía de edición (BUILD_PROMPT)
+
+El system prompt del agente `build` incluye esta guía explícita:
+
+```
+1. edit_file   — cambio de un único bloque contiguo (preferido)
+2. apply_patch — múltiples cambios en un archivo o diff preexistente
+3. write_file  — archivos nuevos o reorganizaciones completas del archivo
+```
+
+---
+
+## Tools de búsqueda (F10)
+
+Viven en `tools/search.py`. Reciben `workspace_root: Path`. Todas son `sensitive=False` (solo lectura).
+
+### `search_code` — regex con contexto
+
+```
+SearchCodeArgs:
+  pattern:        str            # expresión regular
+  path:           str = "."      # directorio donde buscar (relativo al workspace)
+  file_pattern:   str = "*.py"   # glob para filtrar archivos
+  context_lines:  int = 2        # líneas antes y después de cada match
+  max_results:    int = 50       # límite de resultados
+```
+
+Usa el módulo `re` de Python. Devuelve matches con número de línea y contexto.
+
+```bash
+# Agente buscando todos los uses de validate_path
+search_code(pattern="validate_path", file_pattern="*.py", context_lines=3)
+```
+
+### `grep` — búsqueda de texto literal
+
+```
+GrepArgs:
+  pattern:       str            # texto literal (no regex)
+  path:          str = "."
+  file_pattern:  str = "*"
+  recursive:     bool = True
+  case_sensitive: bool = True
+  max_results:   int = 100
+```
+
+**Implementación**: usa `rg` (ripgrep) si está instalado, luego `grep`, luego Python puro como fallback. El agente siempre recibe resultados independientemente del sistema.
+
+```bash
+# Agente buscando imports de un módulo específico
+grep(pattern="from architect.core import", file_pattern="*.py")
+```
+
+### `find_files` — buscar archivos por nombre
+
+```
+FindFilesArgs:
+  pattern:   str         # glob de nombre de archivo (ej: "*.yaml", "test_*.py", "README*")
+  path:      str = "."   # directorio raíz de búsqueda
+  recursive: bool = True
+```
+
+```bash
+# Agente buscando todos los archivos de configuración
+find_files(pattern="*.yaml")
+find_files(pattern="*.env*")
+find_files(pattern="conftest.py")
 ```
 
 ---
@@ -71,6 +251,7 @@ El truco es `Path.resolve()`:
 - Colapsa `../..` → ruta absoluta real.
 - Resuelve symlinks → previene escapes vía symlinks.
 - Hace que `../../etc/passwd` → `/etc/passwd`, que claramente no es `is_relative_to(workspace)`.
+- Paths absolutos como `/etc/passwd` también fallan (Python ignora workspace_root con paths absolutos, y luego `is_relative_to` falla).
 
 **Todos los paths del usuario pasan por `validate_path()` antes de cualquier operación de I/O.**
 
@@ -103,6 +284,33 @@ class ToolRegistry:
 ```
 
 `get_schemas(allowed_tools)` es el método crítico que se llama en cada iteración del loop para obtener los schemas que se envían al LLM.
+
+### Función `register_all_tools()`
+
+`tools/setup.py` define cómo se registran todas las tools:
+
+```python
+def register_filesystem_tools(registry, workspace_config):
+    root = workspace_config.root.resolve()
+    registry.register(ReadFileTool(root))
+    registry.register(WriteFileTool(root))
+    registry.register(DeleteFileTool(root, workspace_config.allow_delete))
+    registry.register(ListFilesTool(root))
+    registry.register(EditFileTool(root))
+    registry.register(ApplyPatchTool(root))
+
+def register_search_tools(registry, workspace_config):
+    root = workspace_config.root.resolve()
+    registry.register(SearchCodeTool(root))
+    registry.register(GrepTool(root))
+    registry.register(FindFilesTool(root))
+
+def register_all_tools(registry, workspace_config):
+    register_filesystem_tools(registry, workspace_config)
+    register_search_tools(registry, workspace_config)
+```
+
+La CLI usa `register_all_tools()` — todas las tools siempre están disponibles en el registry. El filtrado por agente se hace a través de `allowed_tools` en `AgentConfig`.
 
 ---
 
@@ -179,9 +387,12 @@ class ConfirmationPolicy:
 ```
 
 Sensibilidad por defecto de cada tool:
-- `read_file`, `list_files` → `sensitive=False`
-- `write_file`, `delete_file` → `sensitive=True`
-- Todas las tools MCP → `sensitive=True`
+
+| Tool | `sensitive` | Requiere confirmación en `confirm-sensitive` |
+|------|-------------|----------------------------------------------|
+| `read_file`, `list_files`, `search_code`, `grep`, `find_files` | No | No |
+| `write_file`, `delete_file`, `edit_file`, `apply_patch` | **Sí** | **Sí** |
+| Todas las tools MCP | **Sí** | **Sí** |
 
 ---
 
@@ -222,25 +433,28 @@ Campos opcionales → `(type | None, None)` (Pydantic optional con default None)
 ## Ciclo de vida de una tool call
 
 ```
-LLMResponse.tool_calls = [ToolCall(id="call_abc", name="write_file", arguments={...})]
+LLMResponse.tool_calls = [ToolCall(id="call_abc", name="edit_file", arguments={...})]
                               │
                               ▼
-ExecutionEngine.execute_tool_call("write_file", {path:"main.py", content:"..."})
+ExecutionEngine.execute_tool_call("edit_file", {path:"main.py", old_str:"...", new_str:"..."})
   │
-  ├─ registry.get("write_file")            → WriteFileTool
-  ├─ validate_args({path:..., content:...}) → WriteFileArgs(path="main.py", content="...")
-  ├─ policy.should_confirm(write_file)      → True (sensitive=True, mode=confirm-sensitive)
-  ├─ request_confirmation("write_file", ...) → user: y
-  ├─ write_file.execute(path="main.py", content="...", mode="overwrite")
+  ├─ registry.get("edit_file")               → EditFileTool
+  ├─ validate_args({path:..., old_str:..., new_str:...}) → EditFileArgs(...)
+  ├─ policy.should_confirm(edit_file)         → True (sensitive=True, mode=confirm-sensitive)
+  ├─ request_confirmation("edit_file", ...)   → user: y
+  ├─ edit_file.execute(path="main.py", old_str="...", new_str="...")
   │     └─ validate_path("main.py", workspace) → /workspace/main.py ✓
-  │     └─ /workspace/main.py.write_text("...")
-  │     └─ ToolResult(success=True, output="Archivo main.py sobrescrito (42 bytes)")
+  │     └─ file.read_text() → content
+  │     └─ assert old_str aparece exactamente 1 vez
+  │     └─ content.replace(old_str, new_str, 1)
+  │     └─ file.write_text(new_content)
+  │     └─ ToolResult(success=True, output="[unified diff del cambio]")
   └─ return ToolResult
 
 ContextBuilder.append_tool_results(messages, [ToolCall(...)], [ToolResult(...)])
   → messages += [
       {"role":"assistant", "tool_calls":[{"id":"call_abc","function":{...}}]},
-      {"role":"tool", "tool_call_id":"call_abc", "content":"Archivo main.py sobrescrito..."}
+      {"role":"tool", "tool_call_id":"call_abc", "content":"[diff...]}
     ]
 ```
 

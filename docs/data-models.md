@@ -49,7 +49,7 @@ class WorkspaceConfig(BaseModel):
     allow_delete: bool  = False       # gate para delete_file tool
 ```
 
-### `MCPServerConfig`
+### `MCPServerConfig` / `MCPConfig`
 
 ```python
 class MCPServerConfig(BaseModel):
@@ -57,24 +57,65 @@ class MCPServerConfig(BaseModel):
     url:       str           # URL base HTTP del servidor MCP
     token_env: str | None = None   # env var con el Bearer token
     token:     str | None = None   # token inline (no recomendado en producción)
-```
 
-### `MCPConfig`
-
-```python
 class MCPConfig(BaseModel):
     servers: list[MCPServerConfig] = []
 ```
+
+### `IndexerConfig` (F10)
+
+```python
+class IndexerConfig(BaseModel):
+    enabled:          bool       = True       # si False, no se indexa y no hay árbol en el prompt
+    max_file_size:    int        = 1_000_000  # bytes; archivos más grandes se omiten
+    exclude_dirs:     list[str]  = []         # dirs adicionales (además de .git, node_modules, etc.)
+    exclude_patterns: list[str]  = []         # patrones adicionales (además de *.pyc, *.min.js, etc.)
+    use_cache:        bool       = True       # caché en disco con TTL de 5 minutos
+```
+
+El indexador siempre excluye por defecto: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.tox`, `.pytest_cache`, `.mypy_cache`.
+
+### `ContextConfig` (F11)
+
+```python
+class ContextConfig(BaseModel):
+    max_tool_result_tokens: int  = 2000   # Nivel 1: truncar tool results largos (~4 chars/token)
+    summarize_after_steps:  int  = 8      # Nivel 2: comprimir mensajes antiguos tras N pasos
+    keep_recent_steps:      int  = 4      # Nivel 2: pasos recientes a preservar íntegros
+    max_context_tokens:     int  = 80000  # Nivel 3: hard limit total (~4 chars/token)
+    parallel_tools:         bool = True   # paralelizar tool calls independientes
+```
+
+Valores `0` desactivan el mecanismo correspondiente:
+- `max_tool_result_tokens=0` → sin truncado de tool results.
+- `summarize_after_steps=0` → sin compresión con LLM.
+- `max_context_tokens=0` → sin ventana deslizante (peligroso para tareas largas).
+
+### `EvaluationConfig` (F12)
+
+```python
+class EvaluationConfig(BaseModel):
+    mode:                 Literal["off", "basic", "full"] = "off"
+    max_retries:          int   = 2    # ge=1, le=5 — reintentos en modo "full"
+    confidence_threshold: float = 0.8  # ge=0.0, le=1.0 — umbral para aceptar resultado
+```
+
+- `mode="off"`: sin evaluación (default, no consume tokens extra).
+- `mode="basic"`: una llamada LLM extra tras la ejecución. Si no pasa, estado → `"partial"`.
+- `mode="full"`: hasta `max_retries` ciclos de evaluación + corrección con nuevo prompt.
 
 ### `AppConfig` (raíz)
 
 ```python
 class AppConfig(BaseModel):
-    llm:       LLMConfig     = LLMConfig()
-    agents:    dict[str, AgentConfig] = {}   # agentes custom del YAML
-    logging:   LoggingConfig = LoggingConfig()
-    workspace: WorkspaceConfig = WorkspaceConfig()
-    mcp:       MCPConfig     = MCPConfig()
+    llm:        LLMConfig        = LLMConfig()
+    agents:     dict[str, AgentConfig] = {}   # agentes custom del YAML
+    logging:    LoggingConfig    = LoggingConfig()
+    workspace:  WorkspaceConfig  = WorkspaceConfig()
+    mcp:        MCPConfig        = MCPConfig()
+    indexer:    IndexerConfig    = IndexerConfig()   # F10
+    context:    ContextConfig    = ContextConfig()   # F11
+    evaluation: EvaluationConfig = EvaluationConfig() # F12
 ```
 
 ---
@@ -88,7 +129,7 @@ Representa una tool call que el LLM solicita ejecutar.
 ```python
 class ToolCall(BaseModel):
     id:        str             # ID único asignado por el LLM (ej: "call_abc123")
-    name:      str             # nombre de la tool (ej: "write_file")
+    name:      str             # nombre de la tool (ej: "edit_file")
     arguments: dict[str, Any]  # argumentos ya parseados (adapter maneja JSON string → dict)
 ```
 
@@ -182,6 +223,37 @@ class AgentState:
         }
 ```
 
+El campo `status` puede ser modificado externamente por el `SelfEvaluator` (F12): si la evaluación falla en modo `basic`, el evaluador cambia `state.status = "partial"`.
+
+---
+
+## Evaluador (`core/evaluator.py`) — F12
+
+### `EvalResult` (dataclass)
+
+Resultado de una evaluación del agente por parte del `SelfEvaluator`.
+
+```python
+@dataclass
+class EvalResult:
+    completed:    bool              # ¿se completó la tarea correctamente?
+    confidence:   float             # nivel de confianza [0.0, 1.0] (clampeado)
+    issues:       list[str] = []    # lista de problemas detectados
+    suggestion:   str = ""          # sugerencia para mejorar el resultado
+    raw_response: str = ""          # respuesta cruda del LLM (debugging)
+```
+
+**Ejemplo de EvalResult con problemas**:
+```python
+EvalResult(
+    completed=False,
+    confidence=0.35,
+    issues=["No se creó el archivo tests/test_utils.py", "Las imports no se actualizaron"],
+    suggestion="Crea el archivo tests/test_utils.py con pytest y actualiza los imports en src/",
+    raw_response='{"completed": false, "confidence": 0.35, ...}'
+)
+```
+
 ---
 
 ## Tool result (`tools/base.py`)
@@ -203,6 +275,8 @@ class ToolResult(BaseModel):
 
 Todos con `extra = "forbid"`.
 
+### Tools del filesystem
+
 ```python
 class ReadFileArgs(BaseModel):
     path: str                          # relativo al workspace root
@@ -221,6 +295,73 @@ class ListFilesArgs(BaseModel):
     recursive: bool      = False
 ```
 
+### Tools de edición (F9)
+
+```python
+class EditFileArgs(BaseModel):
+    path:    str           # archivo a modificar
+    old_str: str           # texto exacto a reemplazar (debe ser único en el archivo)
+    new_str: str           # texto de reemplazo
+
+class ApplyPatchArgs(BaseModel):
+    path:  str             # archivo a modificar
+    patch: str             # unified diff (formato --- +++ @@ ...)
+```
+
+### Tools de búsqueda (F10)
+
+```python
+class SearchCodeArgs(BaseModel):
+    pattern:       str            # expresión regular Python
+    path:          str = "."      # directorio de búsqueda
+    file_pattern:  str = "*.py"   # glob para filtrar archivos
+    context_lines: int = 2        # líneas de contexto por match
+    max_results:   int = 50
+
+class GrepArgs(BaseModel):
+    pattern:        str            # texto literal
+    path:           str = "."
+    file_pattern:   str = "*"
+    recursive:      bool = True
+    case_sensitive: bool = True
+    max_results:    int = 100
+
+class FindFilesArgs(BaseModel):
+    pattern:   str            # glob de nombre de archivo (ej: "*.yaml")
+    path:      str = "."
+    recursive: bool = True
+```
+
+---
+
+## Modelos del indexador (`indexer/tree.py`) — F10
+
+```python
+@dataclass
+class FileInfo:
+    path:     Path     # ruta relativa al workspace root
+    size:     int      # bytes
+    ext:      str      # extensión (ej: ".py", ".ts", ".yaml")
+    language: str      # nombre del lenguaje (ej: "Python", "TypeScript")
+    lines:    int      # número de líneas (0 si no se pudo leer)
+
+@dataclass
+class RepoIndex:
+    root:         Path
+    files:        list[FileInfo]
+    total_files:  int
+    total_lines:  int
+    languages:    dict[str, int]   # {lenguaje: nº de archivos}
+    build_time_ms: float
+
+    def format_tree(self) -> str:
+        # Devuelve el árbol del workspace como string para el system prompt
+        # ≤300 archivos → árbol detallado con conectores Unicode
+        # >300 archivos → vista compacta agrupada por directorio raíz
+```
+
+El `RepoIndexer` construye el `RepoIndex` recorriendo el workspace con `os.walk()`, filtrando directorios y archivos excluidos. El `IndexCache` serializa/deserializa el índice en JSON con TTL de 5 minutos.
+
 ---
 
 ## Jerarquía de errores
@@ -236,6 +377,9 @@ Exception
 │
 ├── ValidationError                 execution/validators.py
 │   # Archivo o directorio no encontrado durante validación
+│
+├── PatchError                      tools/patch.py
+│   # Error al parsear o aplicar un unified diff en apply_patch
 │
 ├── NoTTYError                      execution/policies.py
 │   # Se necesita confirmación interactiva pero no hay TTY (CI/headless)

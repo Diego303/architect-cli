@@ -5,10 +5,22 @@ Exporta todas las tools, el registry y los componentes base.
 """
 
 from .base import BaseTool, ToolResult
-from .filesystem import DeleteFileTool, ListFilesTool, ReadFileTool, WriteFileTool
+from .filesystem import DeleteFileTool, EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
+from .patch import ApplyPatchTool, PatchError
 from .registry import DuplicateToolError, ToolNotFoundError, ToolRegistry
-from .schemas import DeleteFileArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs
-from .setup import register_filesystem_tools
+from .schemas import (
+    ApplyPatchArgs,
+    DeleteFileArgs,
+    EditFileArgs,
+    FindFilesArgs,
+    GrepArgs,
+    ListFilesArgs,
+    ReadFileArgs,
+    SearchCodeArgs,
+    WriteFileArgs,
+)
+from .search import FindFilesTool, GrepTool, SearchCodeTool
+from .setup import register_all_tools, register_filesystem_tools, register_search_tools
 
 __all__ = [
     # Base
@@ -21,13 +33,28 @@ __all__ = [
     # Filesystem tools
     "ReadFileTool",
     "WriteFileTool",
+    "EditFileTool",
     "DeleteFileTool",
     "ListFilesTool",
+    # Patch tool
+    "ApplyPatchTool",
+    "PatchError",
+    # Search tools (F10)
+    "SearchCodeTool",
+    "GrepTool",
+    "FindFilesTool",
     # Schemas
     "ReadFileArgs",
     "WriteFileArgs",
+    "EditFileArgs",
+    "ApplyPatchArgs",
     "DeleteFileArgs",
     "ListFilesArgs",
+    "SearchCodeArgs",
+    "GrepArgs",
+    "FindFilesArgs",
     # Setup
     "register_filesystem_tools",
+    "register_search_tools",
+    "register_all_tools",
 ]

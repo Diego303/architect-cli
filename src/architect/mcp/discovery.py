@@ -6,6 +6,7 @@ y las registra en el ToolRegistry como tools locales.
 """
 
 import structlog
+from typing import Any
 
 from ..config.schema import MCPServerConfig
 from ..tools.registry import ToolRegistry

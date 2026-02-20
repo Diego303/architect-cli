@@ -8,8 +8,11 @@ Incluye:
 - Timeout por step (StepTimeout) para evitar bloqueos indefinidos
 - Comprobación de shutdown antes de cada iteración (GracefulShutdown)
 - Manejo robusto de errores que no rompe el loop
+- Parallel tool calls (F11): ejecución concurrente de tools independientes
+- Context pruning (F11): compresión de mensajes cuando el contexto crece
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Callable
 
 import structlog
@@ -17,13 +20,13 @@ import structlog
 from ..config.schema import AgentConfig
 from ..execution.engine import ExecutionEngine
 from ..llm.adapter import LLMAdapter, StreamChunk
-from .context import ContextBuilder
+from .context import ContextBuilder, ContextManager
 from .shutdown import GracefulShutdown
 from .state import AgentState, StepResult, ToolCallResult
 from .timeout import StepTimeout, StepTimeoutError
 
 if TYPE_CHECKING:
-    pass
+    from ..llm.adapter import ToolCall
 
 logger = structlog.get_logger()
 
@@ -48,6 +51,7 @@ class AgentLoop:
         context_builder: ContextBuilder,
         shutdown: GracefulShutdown | None = None,
         step_timeout: int = 0,
+        context_manager: ContextManager | None = None,
     ):
         """Inicializa el agent loop.
 
@@ -58,6 +62,8 @@ class AgentLoop:
             context_builder: ContextBuilder para mensajes
             shutdown: GracefulShutdown para detectar interrupciones (opcional)
             step_timeout: Segundos máximos por step. 0 = sin timeout.
+            context_manager: ContextManager para pruning del contexto (F11).
+                             Si es None, no se aplica pruning.
         """
         self.llm = llm
         self.engine = engine
@@ -65,6 +71,7 @@ class AgentLoop:
         self.ctx = context_builder
         self.shutdown = shutdown
         self.step_timeout = step_timeout
+        self.context_manager = context_manager
         self.log = logger.bind(component="agent_loop")
 
     def run(
@@ -183,39 +190,25 @@ class AgentLoop:
                     tools=[tc.name for tc in response.tool_calls],
                 )
 
-                tool_results = []
-                for tc in response.tool_calls:
-                    self.log.info(
-                        "agent.tool_call.execute",
-                        step=step,
-                        tool=tc.name,
-                        args=self._sanitize_args_for_log(tc.arguments),
-                    )
-
-                    # Ejecutar tool (nunca lanza excepción — devuelve ToolResult)
-                    result = self.engine.execute_tool_call(tc.name, tc.arguments)
-
-                    tool_result = ToolCallResult(
-                        tool_name=tc.name,
-                        args=tc.arguments,
-                        result=result,
-                        was_confirmed=True,
-                        was_dry_run=self.engine.dry_run,
-                    )
-                    tool_results.append(tool_result)
-
-                    self.log.info(
-                        "agent.tool_call.complete",
-                        step=step,
-                        tool=tc.name,
-                        success=result.success,
-                        error=result.error if not result.success else None,
-                    )
+                # Ejecutar tool calls (paralelo o secuencial según configuración)
+                tool_results = self._execute_tool_calls_batch(
+                    response.tool_calls, step
+                )
 
                 # 4. Actualizar mensajes con tool results
                 state.messages = self.ctx.append_tool_results(
                     state.messages, response.tool_calls, tool_results
                 )
+
+                # F11: Comprimir contexto si hay demasiados pasos (Nivel 2)
+                if self.context_manager:
+                    state.messages = self.context_manager.maybe_compress(
+                        state.messages, self.llm
+                    )
+                    # Nivel 3: Hard limit de tokens
+                    state.messages = self.context_manager.enforce_window(
+                        state.messages
+                    )
 
                 # 5. Registrar step
                 state.steps.append(StepResult(
@@ -271,6 +264,134 @@ class AgentLoop:
         )
 
         return state
+
+    def _execute_tool_calls_batch(
+        self,
+        tool_calls: list,
+        step: int,
+    ) -> list[ToolCallResult]:
+        """Ejecuta un lote de tool calls, paralelizando si es seguro (F11).
+
+        La paralelización solo se activa cuando:
+        - Hay más de una tool call
+        - ``parallel_tools=True`` en la configuración (o no hay context_manager)
+        - El modo de confirmación es ``yolo``
+        - O el modo es ``confirm-sensitive`` y ninguna tool es sensible
+
+        En cualquier otro caso (``confirm-all``, tools sensibles, una sola tool),
+        la ejecución es secuencial para permitir la interacción con el usuario.
+
+        Args:
+            tool_calls: Lista de ToolCall del LLM
+            step: Número de step actual (para logging)
+
+        Returns:
+            Lista de ToolCallResult en el mismo orden que tool_calls
+        """
+        if not tool_calls:
+            return []
+
+        if len(tool_calls) == 1:
+            return [self._execute_single_tool(tool_calls[0], step)]
+
+        if not self._should_parallelize(tool_calls):
+            # Ejecución secuencial
+            return [self._execute_single_tool(tc, step) for tc in tool_calls]
+
+        # Ejecución paralela: preservar orden original
+        self.log.info(
+            "agent.tool_calls.parallel",
+            step=step,
+            count=len(tool_calls),
+            tools=[tc.name for tc in tool_calls],
+        )
+        results: list[ToolCallResult | None] = [None] * len(tool_calls)
+        max_workers = min(len(tool_calls), 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(self._execute_single_tool, tc, step): i
+                for i, tc in enumerate(tool_calls)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()
+
+        return results  # type: ignore[return-value]
+
+    def _execute_single_tool(self, tc: object, step: int) -> ToolCallResult:
+        """Ejecuta una sola tool call y devuelve el resultado.
+
+        Args:
+            tc: ToolCall del LLM
+            step: Número de step (para logging)
+
+        Returns:
+            ToolCallResult con el resultado de la ejecución
+        """
+        # tc es un ToolCall de llm.adapter
+        self.log.info(
+            "agent.tool_call.execute",
+            step=step,
+            tool=tc.name,  # type: ignore[attr-defined]
+            args=self._sanitize_args_for_log(tc.arguments),  # type: ignore[attr-defined]
+        )
+
+        result = self.engine.execute_tool_call(
+            tc.name,  # type: ignore[attr-defined]
+            tc.arguments,  # type: ignore[attr-defined]
+        )
+
+        self.log.info(
+            "agent.tool_call.complete",
+            step=step,
+            tool=tc.name,  # type: ignore[attr-defined]
+            success=result.success,
+            error=result.error if not result.success else None,
+        )
+
+        return ToolCallResult(
+            tool_name=tc.name,  # type: ignore[attr-defined]
+            args=tc.arguments,  # type: ignore[attr-defined]
+            result=result,
+            was_confirmed=True,
+            was_dry_run=self.engine.dry_run,
+        )
+
+    def _should_parallelize(self, tool_calls: list) -> bool:
+        """Determina si las tool calls se pueden ejecutar en paralelo.
+
+        Reglas:
+        - Si ``parallel_tools=False`` en config → no
+        - Si ``confirm-all`` → no (interacción secuencial)
+        - Si ``confirm-sensitive`` y alguna tool es sensible → no
+        - En cualquier otro caso → sí
+
+        Args:
+            tool_calls: Lista de ToolCall a evaluar
+
+        Returns:
+            True si se pueden ejecutar en paralelo
+        """
+        # Respetar configuración explícita de parallel_tools
+        if self.context_manager and not self.context_manager.config.parallel_tools:
+            return False
+
+        confirm_mode = self.agent_config.confirm_mode
+
+        # confirm-all: siempre secuencial (requiere confirmación interactiva)
+        if confirm_mode == "confirm-all":
+            return False
+
+        # confirm-sensitive: verificar si alguna tool es sensible
+        if confirm_mode == "confirm-sensitive":
+            for tc in tool_calls:
+                if self.engine.registry.has_tool(tc.name):  # type: ignore[attr-defined]
+                    tool = self.engine.registry.get(tc.name)  # type: ignore[attr-defined]
+                    if tool.sensitive:
+                        return False
+
+        # yolo o confirm-sensitive con tools no sensibles → paralelo
+        return True
 
     def _sanitize_args_for_log(self, args: dict) -> dict:
         """Sanitiza argumentos para logging (truncar valores largos).

@@ -47,6 +47,7 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `-v / -vv / -vvv` | `logging.verbose` (count) |
 | `--log-level LEVEL` | `logging.level` |
 | `--log-file PATH` | `logging.file` |
+| `--self-eval MODE` | `evaluation.mode` (off/basic/full) |
 
 ---
 
@@ -122,6 +123,49 @@ mcp:
     # - name: internal
     #   url: http://internal:8080
     #   token: "hardcoded-token"
+
+# ==============================================================================
+# Indexer — árbol del repositorio en el system prompt (F10)
+# ==============================================================================
+indexer:
+  enabled: true            # false = sin árbol en el prompt; las search tools siguen disponibles
+  max_file_size: 1000000   # bytes; archivos más grandes se omiten del índice
+  exclude_dirs: []         # dirs adicionales a excluir (además de .git, node_modules, etc.)
+  # exclude_dirs:
+  #   - vendor
+  #   - .terraform
+  exclude_patterns: []     # patrones adicionales a excluir (además de *.pyc, *.min.js, etc.)
+  # exclude_patterns:
+  #   - "*.generated.py"
+  #   - "*.pb.go"
+  use_cache: true          # caché del índice en disco, TTL de 5 minutos
+
+# ==============================================================================
+# Context — gestión del context window (F11)
+# ==============================================================================
+context:
+  # Nivel 1: truncar tool results largos
+  max_tool_result_tokens: 2000   # ~4 chars/token; 0 = desactivar truncado
+
+  # Nivel 2: comprimir pasos antiguos con el LLM
+  summarize_after_steps: 8       # 0 = desactivar compresión
+  keep_recent_steps: 4           # pasos recientes a preservar íntegros
+
+  # Nivel 3: hard limit del context window total
+  max_context_tokens: 80000      # 0 = sin límite (peligroso para tareas largas)
+  # Referencia: gpt-4o/mini → 80000, claude-sonnet-4-6 → 150000
+
+  # Tool calls paralelas
+  parallel_tools: true           # false = siempre secuencial
+
+# ==============================================================================
+# Evaluation — auto-evaluación del resultado (F12)
+# ==============================================================================
+evaluation:
+  mode: off                # "off" | "basic" | "full"
+                           # Override desde CLI: --self-eval basic|full
+  max_retries: 2           # reintentos en modo "full" (rango: 1-5)
+  confidence_threshold: 0.8  # umbral de confianza para aceptar resultado (0.0-1.0)
 ```
 
 ---
@@ -184,6 +228,9 @@ llm:
   model: claude-sonnet-4-6
   api_key_env: ANTHROPIC_API_KEY
   stream: true
+
+context:
+  max_context_tokens: 150000   # Claude tiene ventana más grande
 ```
 
 ### Ollama (local, sin API key)
@@ -193,6 +240,10 @@ llm:
   model: ollama/llama3
   api_base: http://localhost:11434
   retries: 0    # local, sin necesidad de reintentos
+  timeout: 300  # modelos locales pueden ser lentos
+
+context:
+  parallel_tools: false   # sin paralelismo en modelos locales lentos
 ```
 
 ### LiteLLM Proxy (equipos)
@@ -205,13 +256,14 @@ llm:
   api_key_env: LITELLM_PROXY_KEY
 ```
 
-### CI/CD (modo yolo, sin confirmaciones)
+### CI/CD (modo yolo, sin confirmaciones, con evaluación)
 
 ```yaml
 llm:
   model: gpt-4o-mini
   timeout: 120
   retries: 3
+  stream: false
 
 workspace:
   root: .
@@ -219,10 +271,67 @@ workspace:
 logging:
   verbose: 0
   level: warn
+
+evaluation:
+  mode: basic              # evalúa el resultado en CI
+  confidence_threshold: 0.7  # menos estricto que en interactivo
 ```
 
 ```bash
 architect run "actualiza imports obsoletos en src/" \
   --mode yolo --quiet --json \
   -c ci/architect.yaml
+```
+
+### Repos grandes (con optimización de contexto)
+
+```yaml
+indexer:
+  exclude_dirs:
+    - vendor
+    - .terraform
+    - coverage
+  exclude_patterns:
+    - "*.generated.py"
+    - "*.pb.go"
+  use_cache: true
+
+context:
+  max_tool_result_tokens: 1000   # más agresivo en repos grandes
+  summarize_after_steps: 5       # comprimir más rápido
+  keep_recent_steps: 3
+  max_context_tokens: 60000      # más conservador
+  parallel_tools: true
+```
+
+### Config completa con self-eval
+
+```yaml
+llm:
+  model: gpt-4o
+  api_key_env: OPENAI_API_KEY
+  timeout: 120
+
+workspace:
+  root: .
+
+indexer:
+  enabled: true
+  use_cache: true
+
+context:
+  max_tool_result_tokens: 2000
+  summarize_after_steps: 8
+  max_context_tokens: 80000
+  parallel_tools: true
+
+evaluation:
+  mode: full               # reintentar automáticamente si falla
+  max_retries: 2
+  confidence_threshold: 0.85
+```
+
+```bash
+# O usar solo el flag de CLI (ignora evaluation.mode del YAML)
+architect run "genera tests para src/auth.py" -a build --self-eval full
 ```
