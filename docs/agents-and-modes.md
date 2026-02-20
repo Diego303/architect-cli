@@ -8,10 +8,12 @@ Definidos en `agents/registry.py` como `DEFAULT_AGENTS: dict[str, AgentConfig]`.
 
 | Agente | Tools disponibles | confirm_mode | max_steps | Propósito |
 |--------|-------------------|--------------|-----------|-----------|
-| `plan` | `read_file`, `list_files` | `confirm-all` | 10 | Analiza la tarea y genera un plan estructurado. Solo lectura. |
-| `build` | `read_file`, `write_file`, `delete_file`, `list_files` | `confirm-sensitive` | 20 | Ejecuta tareas: crea y modifica archivos. |
-| `resume` | `read_file`, `list_files` | `yolo` | 10 | Lee y resume información. Solo lectura, sin confirmaciones. |
-| `review` | `read_file`, `list_files` | `yolo` | 15 | Revisa código y da feedback. Solo lectura, sin confirmaciones. |
+| `plan` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `confirm-all` | 10 | Analiza la tarea y genera un plan estructurado. Solo lectura. |
+| `build` | todas las tools (filesystem + edición + búsqueda) | `confirm-sensitive` | 20 | Ejecuta tareas: crea y modifica archivos con herramientas completas. |
+| `resume` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 10 | Lee y resume información. Solo lectura, sin confirmaciones. |
+| `review` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 | Revisa código y da feedback. Solo lectura, sin confirmaciones. |
+
+Las tools de búsqueda (`search_code`, `grep`, `find_files`) están disponibles para todos los agentes desde F10. El agente `build` tiene acceso adicional a `edit_file` y `apply_patch` para edición incremental.
 
 ---
 
@@ -21,11 +23,16 @@ Definidos en `agents/registry.py` como `DEFAULT_AGENTS: dict[str, AgentConfig]`.
 - Rol: analista y planificador.
 - **Nunca ejecuta acciones** — su output es el plan, no los cambios.
 - Formato de output esperado: `## Resumen / ## Pasos / ## Archivos afectados / ## Consideraciones`.
+- Incluye guía de herramientas de búsqueda (cuándo usar `search_code` vs `grep` vs `find_files`).
 - Ideal para: entender el alcance de una tarea antes de ejecutarla.
 
 ### `BUILD_PROMPT`
 - Rol: ejecutor cuidadoso.
 - Flujo: lee el código primero, luego modifica, luego verifica.
+- **Jerarquía de edición explícita**:
+  1. `edit_file` — cambio de un único bloque contiguo (preferido).
+  2. `apply_patch` — múltiples cambios o diff preexistente.
+  3. `write_file` — archivos nuevos o reorganizaciones completas.
 - Cambios incrementales y conservadores.
 - Al terminar: resume los cambios realizados.
 - Ideal para: crear, modificar o refactorizar código.
@@ -34,6 +41,7 @@ Definidos en `agents/registry.py` como `DEFAULT_AGENTS: dict[str, AgentConfig]`.
 - Rol: analista de sólo-lectura.
 - Nunca modifica archivos.
 - Output estructurado con bullets.
+- Puede usar `search_code` para encontrar implementaciones específicas.
 - Ideal para: entender un proyecto rápidamente.
 
 ### `REVIEW_PROMPT`
@@ -41,6 +49,7 @@ Definidos en `agents/registry.py` como `DEFAULT_AGENTS: dict[str, AgentConfig]`.
 - Prioriza issues: crítico / importante / menor.
 - Categorías: bugs, seguridad, performance, código limpio.
 - Nunca modifica archivos.
+- Puede usar `grep` para buscar patrones problemáticos a lo largo del proyecto.
 - Ideal para: auditar calidad de código.
 
 ---
@@ -77,13 +86,15 @@ return config
 agents:
   deploy:
     system_prompt: |
-      Eres un agente de deployment...
+      Eres un agente de deployment especializado.
+      Verifica tests, revisa CI/CD, genera reporte antes de actuar.
     allowed_tools:
       - read_file
       - list_files
+      - search_code
       - write_file
     confirm_mode: confirm-all
-    max_steps: 10
+    max_steps: 15
 ```
 
 ### Override parcial de un default
@@ -101,7 +112,7 @@ agents:
 ### Single-agent (`-a nombre`)
 
 ```
-AgentLoop(llm, engine, agent_config, ctx, shutdown, step_timeout)
+AgentLoop(llm, engine, agent_config, ctx, shutdown, step_timeout, context_manager)
   └─ run(prompt, stream, on_stream_chunk)
 ```
 
@@ -112,7 +123,8 @@ El agente especificado ejecuta el prompt directamente. El `engine` usa el `confi
 El modo por defecto. Ejecuta dos agentes en secuencia.
 
 ```
-MixedModeRunner(llm, plan_engine, plan_config, build_engine, build_config, ...)
+MixedModeRunner(llm, plan_engine, plan_config, build_engine, build_config,
+                ctx, shutdown, step_timeout, context_manager)
   └─ run(prompt, stream, on_stream_chunk)
        │
        ├─ FASE 1: plan (sin streaming, confirm-all)
@@ -139,10 +151,10 @@ MixedModeRunner(llm, plan_engine, plan_config, build_engine, build_config, ...)
 El plan enriquece el contexto del build agent. El build agent no parte de cero — ya sabe qué hacer y en qué orden.
 
 **Nota importante**: En modo mixto se crean **dos `ExecutionEngine` distintos**:
-- `plan_engine` con `confirm_mode="confirm-all"` y tools `read_file`, `list_files`.
+- `plan_engine` con `confirm_mode="confirm-all"` y tools solo-lectura + búsqueda.
 - `build_engine` con `confirm_mode="confirm-sensitive"` y todas las tools.
 
-Esto permite que el usuario configure `--mode yolo` solo para el build sin afectar el plan, que nunca modifica archivos y por tanto puede usar confirm-all sin peligro.
+El `ContextManager` se **comparte** entre ambas fases para mantener una contabilidad coherente del contexto. El `SelfEvaluator` se aplica sobre el resultado final del `build_loop`.
 
 ---
 
@@ -153,10 +165,29 @@ Esto permite que el usuario configure `--mode yolo` solo para el build sin afect
 ```python
 tools_schema = registry.get_schemas(agent_config.allowed_tools or None)
 # [] o None → todas las tools registradas
-# ["read_file", "list_files"] → solo esas dos
+# ["read_file", "list_files", "search_code"] → solo esas tres
 ```
 
-Si el LLM intenta llamar a una tool no permitida (ej: `write_file` cuando solo tiene `read_file`), el `ExecutionEngine` la rechaza con `ToolNotFoundError` convertido en `ToolResult(success=False)`. El error vuelve al LLM como mensaje de tool, y el LLM puede adaptar su estrategia.
+Si el LLM intenta llamar a una tool no permitida (ej: `edit_file` cuando solo tiene `read_file`), el `ExecutionEngine` la rechaza con `ToolNotFoundError` convertido en `ToolResult(success=False)`. El error vuelve al LLM como mensaje de tool, y el LLM puede adaptar su estrategia.
+
+### Tools disponibles por agente (con alias)
+
+```
+Agente plan / resume / review:
+  ✓ read_file       — leer cualquier archivo
+  ✓ list_files      — listar directorio
+  ✓ search_code     — buscar con regex en código
+  ✓ grep            — buscar texto literal
+  ✓ find_files      — buscar archivos por nombre
+
+Agente build (+ todo lo anterior):
+  ✓ write_file      — crear o sobrescribir archivos
+  ✓ edit_file       — edición incremental (str-replace)
+  ✓ apply_patch     — aplicar unified diff
+  ✓ delete_file     — eliminar (requiere allow_delete=true)
+
+Agentes custom: definidos explícitamente en allowed_tools
+```
 
 ---
 
@@ -182,3 +213,37 @@ Agentes disponibles:
 ```
 
 El `*` indica que ese agente tiene un override en el YAML (algún campo del default fue sobreescrito).
+
+---
+
+## Indexer y system prompt (F10)
+
+Cuando el `RepoIndexer` está habilitado (`indexer.enabled=true`), el `ContextBuilder` inyecta automáticamente el árbol del proyecto en el system prompt de cada agente:
+
+```
+Eres un agente de build especializado...
+
+## Estructura del Proyecto
+
+Workspace: /home/user/mi-proyecto
+Archivos: 47 archivos | 3,241 líneas
+
+Lenguajes: Python (23), YAML (8), Markdown (6), JSON (4)
+
+src/
+├── architect/
+│   ├── cli.py              Python    412 líneas
+│   ├── config/
+│   │   ├── loader.py       Python    156 líneas
+│   │   └── schema.py       Python    220 líneas
+│   └── core/
+│       ├── context.py      Python    287 líneas
+│       ├── evaluator.py    Python    387 líneas
+│       └── loop.py         Python    201 líneas
+└── tests/
+    └── test_core.py        Python     89 líneas
+```
+
+Esto permite que el agente conozca la estructura del proyecto **antes de leer ningún archivo**, reduciendo el número de llamadas a `list_files` y mejorando la calidad de los planes.
+
+Para repositorios > 300 archivos, se usa una vista compacta agrupada por directorio raíz para no saturar el system prompt.

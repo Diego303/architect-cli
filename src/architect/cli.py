@@ -13,13 +13,14 @@ import click
 
 from .agents import AgentNotFoundError, get_agent, list_available_agents
 from .config.loader import load_config
-from .core import AgentLoop, ContextBuilder, MixedModeRunner
+from .core import AgentLoop, ContextBuilder, ContextManager, MixedModeRunner, SelfEvaluator
 from .core.shutdown import GracefulShutdown
 from .execution import ExecutionEngine
+from .indexer import IndexCache, RepoIndex, RepoIndexer
 from .llm import LLMAdapter
 from .logging import configure_logging
 from .mcp import MCPDiscovery
-from .tools import ToolRegistry, register_filesystem_tools
+from .tools import ToolRegistry, register_all_tools
 
 # Códigos de salida (según Plan_Implementacion.md §6.3)
 EXIT_SUCCESS = 0
@@ -32,7 +33,7 @@ EXIT_INTERRUPTED = 130
 
 
 @click.group()
-@click.version_option(version="0.9.0", prog_name="architect")
+@click.version_option(version="0.12.0", prog_name="architect")
 def main() -> None:
     """architect - Herramienta CLI headless y agentica para orquestar agentes de IA.
 
@@ -137,6 +138,13 @@ def main() -> None:
     is_flag=True,
     help="Modo silencioso (solo errores críticos)",
 )
+@click.option(
+    "--self-eval",
+    "self_eval",
+    type=click.Choice(["off", "basic", "full"]),
+    default=None,
+    help="Modo de auto-evaluación: off|basic|full (default: config YAML)",
+)
 def run(prompt: str, **kwargs) -> None:  # type: ignore
     """Ejecuta una tarea usando un agente de IA.
 
@@ -163,6 +171,14 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         \b
         # Salida JSON estructurada (para pipes)
         $ architect run "resume el proyecto" --quiet --json | jq .
+
+        \b
+        # Auto-evaluación básica (una llamada extra al LLM)
+        $ architect run "refactoriza main.py" --self-eval basic
+
+        \b
+        # Auto-evaluación completa con reintentos automáticos
+        $ architect run "genera tests para utils.py" --self-eval full
     """
     try:
         # Instalar GracefulShutdown para SIGINT + SIGTERM antes de cualquier otra cosa
@@ -200,9 +216,9 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         agent_name = kwargs.get("agent")
         use_mixed_mode = agent_name is None  # Sin agente = modo mixto
 
-        # Crear tool registry y registrar tools
+        # Crear tool registry y registrar tools (filesystem + búsqueda)
         registry = ToolRegistry()
-        register_filesystem_tools(registry, config.workspace)
+        register_all_tools(registry, config.workspace)
 
         # Descubrir y registrar tools MCP si está habilitado
         if not kwargs.get("disable_mcp") and config.mcp.servers:
@@ -229,11 +245,43 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                     )
                 click.echo(err=True)
 
+        # Construir índice del repositorio (F10)
+        repo_index: RepoIndex | None = None
+        if config.indexer.enabled:
+            workspace_root = Path(config.workspace.root).resolve()
+            indexer = RepoIndexer(
+                workspace_root=workspace_root,
+                max_file_size=config.indexer.max_file_size,
+                exclude_dirs=config.indexer.exclude_dirs,
+                exclude_patterns=config.indexer.exclude_patterns,
+            )
+
+            # Intentar cache si está habilitado
+            cache = IndexCache() if config.indexer.use_cache else None
+            if cache:
+                repo_index = cache.get(workspace_root)
+
+            if repo_index is None:
+                repo_index = indexer.build_index()
+                if cache:
+                    cache.set(workspace_root, repo_index)
+
+            if not kwargs.get("quiet") and kwargs.get("verbose", 0) >= 1:
+                click.echo(
+                    f"🗂️  Índice: {repo_index.total_files} archivos, "
+                    f"{repo_index.total_lines:,} líneas "
+                    f"({repo_index.build_time_ms:.0f}ms)",
+                    err=True,
+                )
+
         # Crear LLM adapter
         llm = LLMAdapter(config.llm)
 
-        # Crear context builder
-        ctx = ContextBuilder()
+        # Crear context manager para pruning del contexto (F11)
+        context_mgr = ContextManager(config.context)
+
+        # Crear context builder (con índice del repositorio si está disponible)
+        ctx = ContextBuilder(repo_index=repo_index, context_manager=context_mgr)
 
         # CLI overrides para configuración de agentes
         cli_overrides = {
@@ -267,16 +315,17 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                         err=True,
                     )
 
-            # Crear mixed mode runner (con shutdown y timeout)
+            # Crear mixed mode runner (con shutdown, timeout y context manager)
             runner = MixedModeRunner(
                 llm, build_engine, plan_config, build_config, ctx,
                 shutdown=shutdown,
                 step_timeout=kwargs.get("timeout") or 0,
+                context_manager=context_mgr,
             )
 
             # Mostrar info inicial si no es quiet
             if not kwargs.get("quiet"):
-                click.echo(f"🏗️  architect v0.9.0", err=True)
+                click.echo(f"🏗️  architect v0.12.0", err=True)
                 click.echo(f"📝 Prompt: {prompt}", err=True)
                 click.echo(f"🤖 Modelo: {config.llm.model}", err=True)
                 click.echo(f"📁 Workspace: {config.workspace.root}", err=True)
@@ -287,6 +336,10 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
 
             # Ejecutar flujo plan → build (con streaming en fase build)
             state = runner.run(prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
+
+            # run_fn para evaluate_full: re-ejecuta sin streaming
+            def run_fn(correction_prompt: str):  # type: ignore[misc]
+                return runner.run(correction_prompt, stream=False)
 
         else:
             # Modo single agent
@@ -310,16 +363,17 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                         err=True,
                     )
 
-            # Crear agent loop (con shutdown y timeout)
+            # Crear agent loop (con shutdown, timeout y context manager)
             loop = AgentLoop(
                 llm, engine, agent_config, ctx,
                 shutdown=shutdown,
                 step_timeout=kwargs.get("timeout") or 0,
+                context_manager=context_mgr,
             )
 
             # Mostrar info inicial si no es quiet
             if not kwargs.get("quiet"):
-                click.echo(f"🏗️  architect v0.9.0", err=True)
+                click.echo(f"🏗️  architect v0.12.0", err=True)
                 click.echo(f"📝 Prompt: {prompt}", err=True)
                 click.echo(f"🤖 Modelo: {config.llm.model}", err=True)
                 click.echo(f"📁 Workspace: {config.workspace.root}", err=True)
@@ -330,6 +384,50 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
 
             # Ejecutar agent loop (con streaming si está activo)
             state = loop.run(prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
+
+            # run_fn para evaluate_full: re-ejecuta sin streaming
+            def run_fn(correction_prompt: str):  # type: ignore[misc]
+                return loop.run(correction_prompt, stream=False)
+
+        # Self-evaluation (F12) — evalúa el resultado si está configurado
+        self_eval_mode = kwargs.get("self_eval") or config.evaluation.mode
+        if self_eval_mode != "off" and state.status == "success":
+            if not kwargs.get("quiet"):
+                click.echo("\n🔍 Evaluando resultado...", err=True)
+
+            evaluator = SelfEvaluator(
+                llm,
+                max_retries=config.evaluation.max_retries,
+                confidence_threshold=config.evaluation.confidence_threshold,
+            )
+
+            if self_eval_mode == "basic":
+                eval_result = evaluator.evaluate_basic(prompt, state)
+                passed = (
+                    eval_result.completed
+                    and eval_result.confidence >= config.evaluation.confidence_threshold
+                )
+                if not passed:
+                    state.status = "partial"
+                if not kwargs.get("quiet"):
+                    icon = "✓" if passed else "⚠️ "
+                    click.echo(
+                        f"{icon} Evaluación: {'completado' if passed else 'incompleto'} "
+                        f"({eval_result.confidence:.0%} confianza)",
+                        err=True,
+                    )
+                    for issue in eval_result.issues:
+                        click.echo(f"   - {issue}", err=True)
+                    if not passed and eval_result.suggestion:
+                        click.echo(f"   Sugerencia: {eval_result.suggestion}", err=True)
+
+            elif self_eval_mode == "full":
+                state = evaluator.evaluate_full(prompt, state, run_fn)
+                if not kwargs.get("quiet"):
+                    click.echo(
+                        f"✓ Evaluación full completada (estado: {state.status})",
+                        err=True,
+                    )
 
         # Mostrar resultado
         if kwargs.get("json_output"):

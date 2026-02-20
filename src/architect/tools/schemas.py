@@ -109,3 +109,90 @@ class ListFilesArgs(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+
+class SearchCodeArgs(BaseModel):
+    """Argumentos para search_code tool."""
+
+    pattern: str = Field(
+        description=(
+            "Patrón regex a buscar en el código. "
+            "Ejemplos: 'def process_', 'class.*Tool', 'import (os|sys)'"
+        ),
+    )
+    path: str = Field(
+        default=".",
+        description="Directorio o archivo donde buscar (relativo al workspace)",
+    )
+    file_pattern: str | None = Field(
+        default=None,
+        description="Filtro de archivos por nombre glob (ej: '*.py', '*.ts')",
+        examples=["*.py", "*.js", "*.ts", "*.yaml"],
+    )
+    max_results: int = Field(
+        default=20,
+        description="Número máximo de resultados a retornar",
+        ge=1,
+        le=200,
+    )
+    context_lines: int = Field(
+        default=2,
+        description="Líneas de contexto antes y después de cada coincidencia",
+        ge=0,
+        le=10,
+    )
+    case_sensitive: bool = Field(
+        default=True,
+        description="Si False, la búsqueda ignora mayúsculas/minúsculas",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class GrepArgs(BaseModel):
+    """Argumentos para grep tool."""
+
+    text: str = Field(
+        description=(
+            "Texto literal a buscar (no regex). "
+            "Más rápido que search_code para strings simples."
+        ),
+    )
+    path: str = Field(
+        default=".",
+        description="Directorio o archivo donde buscar (relativo al workspace)",
+    )
+    file_pattern: str | None = Field(
+        default=None,
+        description="Filtro de archivos por nombre glob (ej: '*.py')",
+        examples=["*.py", "*.js", "*.md"],
+    )
+    max_results: int = Field(
+        default=30,
+        description="Número máximo de resultados a retornar",
+        ge=1,
+        le=500,
+    )
+    case_sensitive: bool = Field(
+        default=True,
+        description="Si False, la búsqueda ignora mayúsculas/minúsculas",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class FindFilesArgs(BaseModel):
+    """Argumentos para find_files tool."""
+
+    pattern: str = Field(
+        description=(
+            "Patrón glob para nombres de archivo. "
+            "Ejemplos: '*.test.py', 'Dockerfile*', 'config.yaml', '*.env'"
+        ),
+    )
+    path: str = Field(
+        default=".",
+        description="Directorio donde buscar (relativo al workspace)",
+    )
+
+    model_config = {"extra": "forbid"}

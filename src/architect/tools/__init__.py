@@ -12,11 +12,15 @@ from .schemas import (
     ApplyPatchArgs,
     DeleteFileArgs,
     EditFileArgs,
+    FindFilesArgs,
+    GrepArgs,
     ListFilesArgs,
     ReadFileArgs,
+    SearchCodeArgs,
     WriteFileArgs,
 )
-from .setup import register_filesystem_tools
+from .search import FindFilesTool, GrepTool, SearchCodeTool
+from .setup import register_all_tools, register_filesystem_tools, register_search_tools
 
 __all__ = [
     # Base
@@ -35,6 +39,10 @@ __all__ = [
     # Patch tool
     "ApplyPatchTool",
     "PatchError",
+    # Search tools (F10)
+    "SearchCodeTool",
+    "GrepTool",
+    "FindFilesTool",
     # Schemas
     "ReadFileArgs",
     "WriteFileArgs",
@@ -42,6 +50,11 @@ __all__ = [
     "ApplyPatchArgs",
     "DeleteFileArgs",
     "ListFilesArgs",
+    "SearchCodeArgs",
+    "GrepArgs",
+    "FindFilesArgs",
     # Setup
     "register_filesystem_tools",
+    "register_search_tools",
+    "register_all_tools",
 ]

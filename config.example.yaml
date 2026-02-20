@@ -209,3 +209,108 @@ mcp:
   #   - name: internal-tools
   #     url: http://internal.mcp:8080
   #     token: "token-directo"   # No recomendado en producción — usar token_env
+
+
+# ==============================================================================
+# Indexer - Indexación del repositorio (F10)
+# ==============================================================================
+# El indexador construye un árbol ligero del workspace al iniciar.
+# Este árbol se inyecta en el system prompt del agente para que conozca
+# la estructura del proyecto sin necesidad de explorar a ciegas.
+#
+# También habilita las tools: search_code, grep, find_files
+indexer:
+  # Habilitar el indexador. Con false, el agente no recibe el árbol del proyecto
+  # y las tools search_code/grep/find_files siguen disponibles pero sin contexto previo.
+  enabled: true
+
+  # Tamaño máximo de archivo a indexar (bytes). Archivos más grandes se omiten.
+  # Default: 1MB. Ajustar en repos con archivos de datos grandes.
+  max_file_size: 1000000
+
+  # Directorios adicionales a excluir (además de los defaults):
+  # .git, node_modules, __pycache__, .venv, venv, dist, build, etc.
+  exclude_dirs: []
+  # exclude_dirs:
+  #   - vendor
+  #   - .terraform
+  #   - coverage
+
+  # Patrones de archivos adicionales a excluir (además de los defaults):
+  # *.pyc, *.min.js, *.map, *.lock, etc.
+  exclude_patterns: []
+  # exclude_patterns:
+  #   - "*.generated.py"
+  #   - "*.pb.go"
+
+  # Cache en disco del índice (~5 minutos de TTL).
+  # Evita reconstruir el índice en ejecuciones consecutivas.
+  use_cache: true
+
+
+# ==============================================================================
+# Context - Gestión del context window (F11)
+# ==============================================================================
+# El ContextManager evita que el contexto del LLM se llene en tareas largas.
+# Actúa en tres niveles progresivos:
+#
+#   Nivel 1: Truncado de tool results muy largos (siempre activo si max_tool_result_tokens > 0)
+#   Nivel 2: Resumen de pasos antiguos con el propio LLM (según summarize_after_steps)
+#   Nivel 3: Ventana deslizante con hard limit total de tokens (según max_context_tokens)
+context:
+  # Tokens máximos por tool result antes de truncar (~4 chars/token).
+  # Un read_file de un archivo grande devolverá las primeras 40 y últimas 20 líneas.
+  # 0 = sin truncado (no recomendado para repos grandes).
+  max_tool_result_tokens: 2000
+
+  # Pasos con tool calls antes de intentar comprimir mensajes antiguos.
+  # Cuando el agente supera este número de pasos con tool calls, los pasos
+  # más antiguos se resumen en un párrafo usando el propio LLM.
+  # 0 = desactivar resumen (los mensajes siguen creciendo sin límite).
+  summarize_after_steps: 8
+
+  # Pasos recientes completos a conservar durante la compresión.
+  # Ejemplo: si summarize_after_steps=8 y keep_recent_steps=4,
+  # cuando hay 9+ pasos se resumen los 5 más antiguos y se conservan los 4 recientes.
+  keep_recent_steps: 4
+
+  # Límite hard del context window total estimado en tokens (~4 chars/token).
+  # Si la suma de todos los mensajes supera este límite, se eliminan los más
+  # antiguos hasta que quepa. Ajustar según el modelo usado.
+  #   gpt-4o:              128k tokens
+  #   claude-sonnet-4-6:   200k tokens
+  #   gpt-4o-mini:          128k tokens
+  # 0 = sin límite hard (peligroso para tareas muy largas).
+  max_context_tokens: 80000
+
+  # Ejecutar tool calls independientes en paralelo (ThreadPoolExecutor, 4 workers máx).
+  # Speedup especialmente notable en tool calls MCP remotas o múltiples búsquedas.
+  # Solo aplica cuando hay >1 tool call y ninguna requiere confirmación interactiva.
+  parallel_tools: true
+
+
+# ==============================================================================
+# Evaluation - Auto-evaluación del resultado del agente (F12)
+# ==============================================================================
+# El SelfEvaluator usa el LLM para verificar si la tarea se completó
+# correctamente y, en modo "full", reintenta con un prompt de corrección.
+#
+# Modos disponibles:
+#   off   → Sin evaluación (default). No consume tokens extra.
+#   basic → Una llamada extra (~500 tokens). Si falla, marca estado como "partial".
+#   full  → Hasta max_retries ciclos de evaluación + corrección. Más costoso,
+#           pero consigue resultados de mayor calidad en tareas complejas.
+#
+# Override desde CLI: architect run "..." --self-eval basic|full
+evaluation:
+  # Modo de evaluación: off | basic | full
+  mode: off
+
+  # Número máximo de reintentos en modo "full" (rango: 1-5).
+  # Cada reintento lanza una nueva ejecución completa del agente.
+  max_retries: 2
+
+  # Umbral mínimo de confianza para considerar la tarea completada (0.0-1.0).
+  # Si el LLM evalúa confianza < threshold, se reintenta (solo en modo "full").
+  # 0.8 = requiere 80% de confianza para aceptar el resultado.
+  confidence_threshold: 0.8

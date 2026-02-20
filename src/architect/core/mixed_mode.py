@@ -13,7 +13,7 @@ import structlog
 from ..config.schema import AgentConfig
 from ..execution.engine import ExecutionEngine
 from ..llm.adapter import LLMAdapter
-from .context import ContextBuilder
+from .context import ContextBuilder, ContextManager
 from .loop import AgentLoop
 from .shutdown import GracefulShutdown
 from .state import AgentState
@@ -45,6 +45,7 @@ class MixedModeRunner:
         context_builder: ContextBuilder,
         shutdown: GracefulShutdown | None = None,
         step_timeout: int = 0,
+        context_manager: ContextManager | None = None,
     ):
         """Inicializa el mixed mode runner.
 
@@ -56,6 +57,7 @@ class MixedModeRunner:
             context_builder: ContextBuilder para mensajes
             shutdown: GracefulShutdown para detectar interrupciones (opcional)
             step_timeout: Segundos máximos por step. 0 = sin timeout.
+            context_manager: ContextManager para pruning del contexto (F11).
         """
         self.llm = llm
         self.engine = engine
@@ -64,6 +66,7 @@ class MixedModeRunner:
         self.ctx = context_builder
         self.shutdown = shutdown
         self.step_timeout = step_timeout
+        self.context_manager = context_manager
         self.log = logger.bind(component="mixed_mode_runner")
 
     def run(
@@ -96,6 +99,7 @@ class MixedModeRunner:
             self.ctx,
             shutdown=self.shutdown,
             step_timeout=self.step_timeout,
+            context_manager=self.context_manager,
         )
 
         plan_state = plan_loop.run(prompt, stream=False)
@@ -141,6 +145,7 @@ class MixedModeRunner:
             self.ctx,
             shutdown=self.shutdown,
             step_timeout=self.step_timeout,
+            context_manager=self.context_manager,
         )
 
         # Ejecutar build (con streaming si está habilitado)

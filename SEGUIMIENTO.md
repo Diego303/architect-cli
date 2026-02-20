@@ -7,8 +7,8 @@ Este documento registra el progreso de implementación del proyecto architect si
 ## Estado General
 
 - **Inicio**: 2026-02-18
-- **Fase Actual**: F9 Completada — Diff Inteligente y apply_patch
-- **Estado**: ✅ v0.9.0 — Edición incremental de archivos
+- **Fase Actual**: F12 Completada — Self-Evaluation (Critic Agent)
+- **Estado**: ✅ v0.12.0 — SelfEvaluator (basic + full) + --self-eval CLI flag
 
 ---
 
@@ -708,14 +708,238 @@ Este documento registra el progreso de implementación del proyecto architect si
 
 ---
 
+### ✅ F10 - Contexto Incremental Inteligente (Completada: 2026-02-20)
+
+**Objetivo**: El agente conoce la estructura del repo al inicio y puede buscar código eficientemente sin leer archivos uno a uno.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 10.1 - `RepoIndexer` + `FileInfo` + `RepoIndex` en `indexer/tree.py`
+- [x] 10.2 - `IndexCache` en `indexer/cache.py` (cache en disco con TTL)
+- [x] 10.3 - `SearchCodeTool` (`search_code`) en `tools/search.py`
+- [x] 10.4 - `GrepTool` (`grep`) con fallback a Python en `tools/search.py`
+- [x] 10.5 - `FindFilesTool` (`find_files`) en `tools/search.py`
+- [x] 10.6 - Schemas (`SearchCodeArgs`, `GrepArgs`, `FindFilesArgs`) en `tools/schemas.py`
+- [x] 10.7 - `IndexerConfig` en `config/schema.py` + campo en `AppConfig`
+- [x] 10.8 - `ContextBuilder` actualizado para aceptar `repo_index` e inyectarlo en system prompt
+- [x] 10.9 - `register_search_tools()` y `register_all_tools()` en `tools/setup.py`
+- [x] 10.10 - Agentes por defecto actualizados con search tools en `allowed_tools`
+- [x] 10.11 - Prompts actualizados con guía de herramientas de búsqueda
+- [x] 10.12 - CLI actualizado: indexa al inicio, pasa índice a ContextBuilder
+- [x] 10.13 - Sección `indexer` en `config.example.yaml`
+- [x] 10.14 - Versión bump 0.9.0 → 0.10.0 (4 sitios)
+- [x] 10.15 - `scripts/test_phase10.py` (12 tests)
+
+#### Archivos Creados
+- `src/architect/indexer/__init__.py` — módulo indexer
+- `src/architect/indexer/tree.py` — `RepoIndexer`, `FileInfo`, `RepoIndex`, `EXT_MAP`
+- `src/architect/indexer/cache.py` — `IndexCache` con TTL
+- `src/architect/tools/search.py` — `SearchCodeTool`, `GrepTool`, `FindFilesTool`
+- `scripts/test_phase10.py` — 12 tests sin API key
+
+#### Archivos Modificados
+- `src/architect/tools/schemas.py` — añadidos `SearchCodeArgs`, `GrepArgs`, `FindFilesArgs`
+- `src/architect/tools/setup.py` — añadidos `register_search_tools()`, `register_all_tools()`
+- `src/architect/tools/__init__.py` — exportaciones actualizadas
+- `src/architect/config/schema.py` — añadido `IndexerConfig` + campo `indexer` en `AppConfig`
+- `src/architect/core/context.py` — `ContextBuilder.__init__(repo_index=None)` + inyección
+- `src/architect/agents/registry.py` — search tools en `allowed_tools` de todos los agentes
+- `src/architect/agents/prompts.py` — guía de herramientas de búsqueda en PLAN_PROMPT y BUILD_PROMPT
+- `src/architect/cli.py` — indexación al inicio + `register_all_tools` + `ContextBuilder(repo_index=...)`
+- `config.example.yaml` — sección `indexer` documentada
+- `src/architect/__init__.py` — versión 0.10.0
+- `pyproject.toml` — versión 0.10.0
+- `src/architect/cli.py` — versión 0.10.0 en 3 sitios
+
+#### Decisiones de Diseño
+
+**RepoIndexer**:
+- Recorre el workspace con `os.walk()` modificando `dirnames` in-place (eficiente, poda el árbol)
+- Ignorados por defecto: `.git`, `node_modules`, `__pycache__`, `.venv`, `dist`, `build`, etc.
+- Archivos >1MB ignorados (configurable)
+- `_format_tree_detailed()` para repos ≤300 archivos (árbol completo con conectores Unicode)
+- `_format_tree_compact()` para repos >300 archivos (agrupado por directorio de primer nivel)
+
+**IndexCache**:
+- Archivo JSON por workspace (identificado por hash SHA-256 del path)
+- TTL de 5 minutos (configurable); expirado → None → el indexador reconstruye
+- Fallo silencioso: si no se puede escribir el cache, el sistema continúa
+
+**SearchCodeTool**: regex con contexto (líneas antes/después). No sensible.
+**GrepTool**: texto literal. Usa rg/grep del sistema si está disponible; Python puro como fallback.
+**FindFilesTool**: glob sobre nombres de archivo. No sensible.
+
+**ContextBuilder**: el `repo_index` se almacena en la instancia. `build_initial()` lo inyecta al final del system prompt como sección "## Estructura del Proyecto" con árbol y estadísticas de lenguajes.
+
+**CLI**: el indexador se ejecuta después del setup de MCP y antes de crear el LLM adapter. Si `indexer.use_cache=true`, intenta recuperar del cache primero.
+
+#### Entregable
+✅ v0.10.0. El agente recibe el árbol del proyecto en su system prompt. Tiene acceso a `search_code`, `grep` y `find_files` para navegar el código eficientemente. En repos de 500+ archivos el agente encuentra lo que necesita sin listar directorios uno a uno.
+
+---
+
+### ✅ F11 - Optimización de Tokens y Parallel Tool Calls (Completada: 2026-02-20)
+
+**Objetivo**: Evitar crashes por context window lleno en tareas largas. Speedup en tool calls independientes mediante paralelismo.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 11.1 - `ContextConfig` en `config/schema.py` + campo en `AppConfig`
+- [x] 11.2 - `ContextManager` en `core/context.py` (3 niveles de pruning)
+- [x] 11.3 - Nivel 1: `truncate_tool_result()` — truncado de tool results largos
+- [x] 11.4 - Nivel 2: `maybe_compress()` — resumen de pasos antiguos con el LLM
+- [x] 11.5 - Nivel 3: `enforce_window()` — hard limit de tokens totales
+- [x] 11.6 - `ContextBuilder` integra `context_manager` para truncar tool results
+- [x] 11.7 - `AgentLoop._execute_tool_calls_batch()` — parallel tool calls con ThreadPoolExecutor
+- [x] 11.8 - `AgentLoop._should_parallelize()` — decisión de paralelismo
+- [x] 11.9 - `AgentLoop` llama `maybe_compress()` y `enforce_window()` tras cada step
+- [x] 11.10 - `MixedModeRunner` propaga `context_manager` a ambos loops
+- [x] 11.11 - CLI crea `ContextManager` desde `config.context` y lo pasa a todo
+- [x] 11.12 - Sección `context:` en `config.example.yaml`
+- [x] 11.13 - Versión bump 0.10.0 → 0.11.0 (4 sitios)
+- [x] 11.14 - `scripts/test_phase11.py` (22 tests)
+
+#### Archivos Creados
+- `scripts/test_phase11.py` — 22 tests sin API key
+
+#### Archivos Modificados
+- `src/architect/config/schema.py` — `ContextConfig` (5 campos) + campo `context` en `AppConfig`
+- `src/architect/core/context.py` — `ContextManager` (3 métodos de pruning) + integración en `ContextBuilder`
+- `src/architect/core/loop.py` — `_execute_tool_calls_batch()`, `_execute_single_tool()`, `_should_parallelize()` + context pruning en loop
+- `src/architect/core/mixed_mode.py` — acepta y propaga `context_manager`
+- `src/architect/core/__init__.py` — exporta `ContextManager`
+- `src/architect/cli.py` — crea `ContextManager(config.context)` y lo pasa al loop
+- `config.example.yaml` — sección `context:` documentada con los 5 campos
+- `src/architect/__init__.py` — versión 0.11.0
+- `pyproject.toml` — versión 0.11.0
+- `src/architect/cli.py` — versión 0.11.0 en 3 sitios
+
+#### Decisiones de Diseño
+
+**ContextManager — 3 niveles progresivos**:
+1. **Nivel 1 — truncate_tool_result()** (siempre activo): Preserva primeras 40 líneas + últimas 20. Inserta marcador `"[... N líneas omitidas ...]"`. Activo cuando `max_tool_result_tokens > 0` (default: 2000 tokens ≈ 8000 chars).
+2. **Nivel 2 — maybe_compress()** (cuando hay demasiados pasos): Cuando los tool-exchanges superan `summarize_after_steps` (default: 8), comprime los pasos más antiguos en un párrafo usando el propio LLM. Conserva siempre `keep_recent_steps` (default: 4) pasos recientes íntegros. Falla silenciosamente si el LLM no está disponible.
+3. **Nivel 3 — enforce_window()** (hard limit): Si el total estimado de tokens supera `max_context_tokens` (default: 80k), elimina pares de mensajes antiguos de 2 en 2 hasta que quepa. Siempre conserva system + user.
+
+**Parallel Tool Calls**:
+- Usa `ThreadPoolExecutor(max_workers=min(N, 4))` para ejecutar tool calls concurrentes
+- Preserva el orden original de resultados usando `futures = {future: idx}` + `as_completed()`
+- Desactivado cuando: `parallel_tools=False`, `confirm-all`, o herramienta sensible en `confirm-sensitive`
+- Valor `yolo` o `confirm-sensitive` sin tools sensibles → paralelo habilitado automáticamente
+
+**Integración ContextBuilder**:
+- `ContextBuilder(context_manager=...)` — acepta manager opcional
+- `_format_tool_result()` aplica truncado (Nivel 1) automáticamente si hay manager
+- `AgentLoop` llama `maybe_compress()` + `enforce_window()` después de `append_tool_results()`
+
+**Token estimation**: `len(str(messages)) // 4` — aproximación de ~4 chars/token válida para inglés y código.
+
+#### Entregable
+✅ v0.11.0. El contexto no explota en tareas de 15+ pasos. Los tool results largos se truncan automáticamente. Las tool calls paralelas funcionan automáticamente en modo yolo o cuando no hay herramientas sensibles.
+
+---
+
+### ✅ F12 - Self-Evaluation (Critic Agent) (Completada: 2026-02-20)
+
+**Objetivo**: El agente evalúa automáticamente su propio resultado al terminar y, en modo `full`, reintenta con un prompt de corrección hasta conseguir un resultado aceptable.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 12.1 - `EvaluationConfig` en `config/schema.py` + campo `evaluation` en `AppConfig`
+- [x] 12.2 - `EvalResult` dataclass en `core/evaluator.py`
+- [x] 12.3 - `SelfEvaluator.evaluate_basic()` — una llamada LLM, parsea JSON, retorna `EvalResult`
+- [x] 12.4 - `SelfEvaluator.evaluate_full()` — loop hasta `max_retries`, llama `run_fn` para corregir
+- [x] 12.5 - `_parse_eval()` con 3 estrategias de parseo JSON + fallback conservador
+- [x] 12.6 - `_summarize_steps()` — resume steps del agente en texto legible
+- [x] 12.7 - `_build_correction_prompt()` — prompt de corrección con issues y sugerencia
+- [x] 12.8 - Exports en `core/__init__.py` (`SelfEvaluator`, `EvalResult`)
+- [x] 12.9 - Opción `--self-eval` en CLI (`off`|`basic`|`full`)
+- [x] 12.10 - Integración en CLI: tras ejecución, si `self_eval_mode != "off"` → evalúa
+- [x] 12.11 - `run_fn` capturado en ambas ramas (mixed mode y single agent)
+- [x] 12.12 - Sección `evaluation:` en `config.example.yaml`
+- [x] 12.13 - Versión bump 0.11.0 → 0.12.0 (4 sitios)
+- [x] 12.14 - `scripts/test_phase12.py` (28 tests)
+
+#### Archivos Creados
+- `src/architect/core/evaluator.py` — `EvalResult`, `SelfEvaluator`, `_EVAL_SYSTEM_PROMPT`
+- `scripts/test_phase12.py` — 28 tests unitarios sin API key
+
+#### Archivos Modificados
+- `src/architect/config/schema.py` — `EvaluationConfig` (3 campos) + campo `evaluation` en `AppConfig`
+- `src/architect/core/__init__.py` — exporta `SelfEvaluator`, `EvalResult`
+- `src/architect/cli.py` — opción `--self-eval`, integración completa post-ejecución, versión 0.12.0
+- `config.example.yaml` — sección `evaluation:` documentada
+- `src/architect/__init__.py` — versión 0.12.0
+- `pyproject.toml` — versión 0.12.0
+
+#### Componentes Implementados
+
+**`EvalResult`** (dataclass):
+- `completed: bool` — ¿se completó la tarea?
+- `confidence: float` — nivel de confianza [0.0, 1.0]
+- `issues: list[str]` — lista de problemas detectados
+- `suggestion: str` — sugerencia de mejora
+- `raw_response: str` — respuesta cruda del LLM (para debugging)
+
+**`SelfEvaluator`**:
+- `_EVAL_SYSTEM_PROMPT` — prompt estricto que pide JSON `{completed, confidence, issues, suggestion}`
+- `evaluate_basic(prompt, state)` → `EvalResult`:
+  - Construye contexto: prompt original + `state.final_output[:500]` + `_summarize_steps()`
+  - Llama `llm.completion(messages, tools=None)` — sin tools para reducir tokens
+  - Parsea respuesta con `_parse_eval()` (3 estrategias + fallback conservador)
+- `evaluate_full(prompt, state, run_fn)` → `AgentState`:
+  - Loop hasta `max_retries` veces
+  - Si `completed=True` y `confidence >= threshold` → retorna estado (éxito)
+  - Si no → construye `correction_prompt` y llama `run_fn(correction_prompt)`
+  - Error en `run_fn` → detiene el loop silenciosamente
+  - `run_fn: Callable[[str], AgentState]` — evita acoplamiento circular con AgentLoop
+
+**`_parse_eval()` — 3 estrategias en orden**:
+1. `json.loads(content)` directo — caso ideal
+2. Regex `r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'` — bloque de código
+3. Regex `r'\{[\s\S]*?\}'` — primer `{...}` válido en el texto
+
+**Integración CLI**:
+- `self_eval_mode = kwargs.get("self_eval") or config.evaluation.mode` — CLI overridea YAML
+- Solo evalúa si `state.status == "success"` (no pierde tiempo en fallos obvios)
+- Modo `basic`: si no pasa → `state.status = "partial"` + muestra issues
+- Modo `full`: `run_fn` capturado en closure desde la rama ejecutada
+- Output en stderr (no rompe pipes con `--json`)
+
+#### Decisiones de Diseño
+
+**`run_fn: Callable[[str], AgentState]`** en lugar de pasar `AgentLoop` directamente:
+- Evita importaciones circulares
+- Simplifica el API del evaluador (sin estado interno del loop)
+- Permite al CLI resetear streaming a `False` para los reintentos
+
+**`tools=None` en la llamada de evaluación**:
+- El evaluador no necesita tool calls — solo texto
+- Reduce tokens y latencia de la llamada de evaluación
+
+**Modo `basic` marca como `partial`** en lugar de fallar:
+- El output del agente puede ser útil aunque incompleto
+- El usuario puede decidir qué hacer con el output
+- Código de salida `2` (EXIT_PARTIAL) correcto según especificación
+
+**Confidence threshold** (default: 0.8):
+- Conservador: requiere 80% de confianza para aceptar
+- Evita falsos positivos del evaluador
+- Configurable en YAML y potencialmente por CLI en futuras versiones
+
+#### Entregable
+✅ v0.12.0. `architect run "tarea compleja" --self-eval basic` evalúa el resultado y marca como `partial` si detecta problemas. `--self-eval full` reintenta automáticamente hasta `max_retries` veces. El modo `off` (default) mantiene el comportamiento anterior sin coste extra de tokens.
+
+---
+
 ## Próximas Fases
 
-F9 completada. Posibles extensiones futuras:
-- F10: Contexto persistente (memoria entre sesiones)
-- F11: Multi-agente (agentes que delegan en otros)
-- F12: Plugin system (tools desde paquetes Python externos)
-- Prompt caching para desarrollo
-- Métricas: tokens usados, coste estimado, duración por step
+F12 completada. Siguiente según el plan:
+- F13: run_command — ejecución de código con seguridad por capas
+- F14: Cost tracking + prompt caching
 
 ---
 

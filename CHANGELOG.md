@@ -10,7 +10,385 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 ## [No Publicado]
 
 ### En Progreso
-(F9 completada — sin cambios pendientes)
+(F12 completada — sin cambios pendientes)
+
+---
+
+## [0.12.0] - 2026-02-20
+
+### Fase 12 - Self-Evaluation (Critic Agent) ✅
+
+#### Agregado
+
+**`SelfEvaluator`** (`src/architect/core/evaluator.py`) — evaluador automático del resultado del agente:
+
+- **`evaluate_basic(original_prompt, state)`** → `EvalResult`:
+  - Construye contexto: prompt original + `state.final_output[:500]` + resumen de steps
+  - Llama `llm.completion(messages, tools=None)` — sin tools, solo evaluación de texto
+  - Parsea la respuesta JSON con 3 estrategias en orden:
+    1. JSON directo (`json.loads`)
+    2. Extracción de bloque de código `` ```json ... ``` ``
+    3. Extracción del primer `{...}` válido con regex
+  - Fallback conservador si ninguna estrategia funciona: `EvalResult(completed=False, confidence=0.0)`
+  - Coste: ~500 tokens extra por evaluación
+
+- **`evaluate_full(original_prompt, state, run_fn)`** → `AgentState`:
+  - Loop de hasta `max_retries` ciclos de evaluación + corrección
+  - Si `completed=True` y `confidence >= confidence_threshold` → retorna estado (éxito temprano)
+  - Si no → construye prompt de corrección con issues y sugerencia, llama `run_fn(correction_prompt)`
+  - Error en `run_fn` → detiene el loop silenciosamente (retorna último estado disponible)
+  - `run_fn: Callable[[str], AgentState]` — evita acoplamiento circular con `AgentLoop`
+
+- **`_EVAL_SYSTEM_PROMPT`** — prompt estricto que pide respuesta exclusivamente en JSON:
+  `{"completed": bool, "confidence": float, "issues": [str, ...], "suggestion": str}`
+
+**`EvalResult`** (dataclass):
+- `completed: bool` — ¿se completó la tarea?
+- `confidence: float` — nivel de confianza del LLM evaluador [0.0, 1.0] (clampeado)
+- `issues: list[str]` — lista de problemas detectados (vacía si todo OK)
+- `suggestion: str` — sugerencia para mejorar el resultado
+- `raw_response: str` — respuesta cruda del LLM (para debugging)
+
+**`EvaluationConfig`** (`src/architect/config/schema.py`) — nueva sección de configuración:
+- `mode: Literal["off", "basic", "full"] = "off"` — modo de evaluación
+- `max_retries: int = 2` — reintentos en modo `full` (rango: 1-5)
+- `confidence_threshold: float = 0.8` — umbral para aceptar resultado en modo `full`
+- `extra="forbid"` — validación estricta
+
+**Opción `--self-eval` en CLI** (`src/architect/cli.py`):
+- `--self-eval off|basic|full` — override del modo configurado en YAML
+- Precedencia: CLI flag > `config.evaluation.mode`
+- Solo se activa si `state.status == "success"` (evita evaluar fallos obvios)
+- Modo `basic`: si no pasa → `state.status = "partial"`, muestra issues en stderr
+- Modo `full`: `run_fn` capturado en closure sin streaming para los reintentos
+- Output siempre a stderr (compatible con `--json` y pipes)
+
+**Sección `evaluation:` en `config.example.yaml`**:
+- Documentación completa de los 3 modos con ejemplos de uso
+- Descripción de `max_retries` y `confidence_threshold`
+- Override desde CLI documentado
+
+#### Modificado
+
+- **`src/architect/core/__init__.py`**: exporta `SelfEvaluator` y `EvalResult`
+- **`src/architect/__init__.py`**: versión `0.12.0`
+- **`pyproject.toml`**: versión `0.12.0`
+- **`src/architect/cli.py`**: versión `0.12.0` en 3 sitios (version_option + 2 headers)
+
+---
+
+## [0.11.0] - 2026-02-20
+
+### Fase 11 - Optimización de Tokens y Parallel Tool Calls ✅
+
+#### Agregado
+
+**`ContextManager`** (`src/architect/core/context.py`) — gestor del context window en 3 niveles:
+
+- **Nivel 1 — `truncate_tool_result(content)`** (siempre activo):
+  - Trunca tool results que superen `max_tool_result_tokens * 4` caracteres
+  - Preserva las primeras 40 líneas y las últimas 20 (inicio + final, lo más valioso)
+  - Inserta marcador `"[... N líneas omitidas ...]"` o `"[... N caracteres omitidos ...]"`
+  - `max_tool_result_tokens=0` desactiva el truncado completamente
+  - Integrado en `ContextBuilder._format_tool_result()` — transparente para el loop
+
+- **Nivel 2 — `maybe_compress(messages, llm)`** (cuando hay demasiados pasos):
+  - Se activa cuando el número de tool-exchanges supera `summarize_after_steps` (default: 8)
+  - Separa los mensajes en "antiguos" y "recientes" (los últimos `keep_recent_steps*3`)
+  - Llama al LLM para resumir los pasos antiguos en ~200 palabras
+  - Produce: `[system, user, summary_assistant, *recent_steps]`
+  - Falla silenciosamente si el LLM falla — retorna mensajes originales sin cambios
+  - `summarize_after_steps=0` desactiva la compresión
+
+- **Nivel 3 — `enforce_window(messages)`** (hard limit):
+  - Si `_estimate_tokens(messages) > max_context_tokens`, elimina pares de mensajes (de 2 en 2) desde el más antiguo
+  - Siempre conserva `messages[0]` (system) y `messages[1]` (user)
+  - `max_context_tokens=0` desactiva el límite hard
+  - Log warning cuando se eliminan mensajes
+
+- Método auxiliar `_estimate_tokens(messages)` — estimación por `len(str) // 4` (≈4 chars/token)
+- Método `_count_tool_exchanges(messages)` — cuenta assistant messages con tool_calls
+
+**`ContextConfig`** (`src/architect/config/schema.py`) — nueva sección de configuración:
+- `max_tool_result_tokens: int = 2000` — límite por tool result (Nivel 1)
+- `summarize_after_steps: int = 8` — threshold para compresión (Nivel 2)
+- `keep_recent_steps: int = 4` — pasos recientes conservados en compresión (Nivel 2)
+- `max_context_tokens: int = 80000` — límite hard total (Nivel 3)
+- `parallel_tools: bool = True` — habilitar parallel tool calls
+- `extra="forbid"` — validación estricta
+
+**Parallel Tool Calls** (`src/architect/core/loop.py`):
+- `AgentLoop._execute_tool_calls_batch(tool_calls, step)` — ejecución del lote
+- `AgentLoop._execute_single_tool(tc, step)` — ejecución de una sola tool call
+- `AgentLoop._should_parallelize(tool_calls)` — lógica de decisión:
+  - `parallel_tools=False` → siempre secuencial
+  - `confirm-all` → siempre secuencial (requiere confirmación interactiva)
+  - `confirm-sensitive` + alguna tool `sensitive=True` → secuencial
+  - `yolo` o `confirm-sensitive` sin tools sensibles → `ThreadPoolExecutor(max_workers=4)`
+  - Una sola tool call → secuencial (sin overhead de threads)
+- `ThreadPoolExecutor` con `futures = {future: idx}` + `as_completed()` → **orden preservado**
+
+**Testing** (`scripts/test_phase11.py`) — 22 tests:
+1. Importaciones y versión 0.11.0
+2. `ContextConfig` defaults y validación estricta
+3. `ContextConfig` en `AppConfig`
+4. `truncate_tool_result` — contenido corto (sin truncar)
+5. `truncate_tool_result` — contenido largo (truncar)
+6. `truncate_tool_result` — preserva inicio y fin
+7. `truncate_tool_result` — `max_tool_result_tokens=0` (desactivado)
+8. `enforce_window` — dentro del límite (sin cambios)
+9. `enforce_window` — fuera del límite (recortar)
+10. `enforce_window` — `max_context_tokens=0` (desactivado)
+11. `maybe_compress` — pocos pasos (sin compresión, LLM no llamado)
+12. `maybe_compress` — `summarize_after_steps=0` (desactivado)
+13. `maybe_compress` — 9 pasos (compresión con LLM mock)
+14. `ContextBuilder` con `context_manager` — trunca tool results
+15. `ContextBuilder` sin `context_manager` — no trunca
+16. `_should_parallelize` — modo yolo → paralelo
+17. `_should_parallelize` — `confirm-all` → secuencial
+18. `_should_parallelize` — `confirm-sensitive` + tool sensible → secuencial
+19. `_should_parallelize` — `parallel_tools=False` → secuencial
+20. Parallel tool calls — orden de resultados preservado
+21. Integración `ContextManager` en `ContextBuilder`
+22. Versión 0.11.0 consistente en 4 sitios
+
+#### Modificado
+
+**`src/architect/core/context.py`**:
+- `ContextBuilder.__init__(context_manager: ContextManager | None = None)` — acepta manager
+- `ContextBuilder._format_tool_result()` — aplica `truncate_tool_result()` si hay manager
+- Importados: `structlog`, `ContextConfig`, `LLMAdapter` (runtime para `maybe_compress`)
+
+**`src/architect/core/loop.py`**:
+- `AgentLoop.__init__` añade parámetro `context_manager: ContextManager | None = None`
+- Bloque de tool calls refactorizado: `_execute_tool_calls_batch()` reemplaza el bucle inline
+- Tras `append_tool_results()`, se aplican niveles 2 y 3 del `ContextManager`
+- Import añadido: `from concurrent.futures import ThreadPoolExecutor, as_completed`
+- Import añadido: `ContextManager` desde `context`
+
+**`src/architect/core/mixed_mode.py`**:
+- `MixedModeRunner.__init__` añade `context_manager: ContextManager | None = None`
+- Propaga `context_manager` a `plan_loop` y `build_loop` al crearlos
+
+**`src/architect/core/__init__.py`**:
+- Exporta `ContextManager`
+
+**`src/architect/config/schema.py`**:
+- Añadido `ContextConfig` (antes de `AppConfig`)
+- `AppConfig` añade campo `context: ContextConfig = Field(default_factory=ContextConfig)`
+
+**`src/architect/cli.py`**:
+- Crea `context_mgr = ContextManager(config.context)` entre el indexador y el LLM
+- `ContextBuilder(repo_index=repo_index, context_manager=context_mgr)`
+- Pasa `context_manager=context_mgr` a `MixedModeRunner` y `AgentLoop`
+- Import añadido: `ContextManager` desde `.core`
+
+**`config.example.yaml`**:
+- Nueva sección `context:` con los 5 campos documentados y ejemplos de modelos con sus límites
+
+#### Versión
+- `src/architect/__init__.py`: `0.10.0` → `0.11.0`
+- `pyproject.toml`: `0.10.0` → `0.11.0`
+- `src/architect/cli.py`: `0.10.0` → `0.11.0` (3 sitios: `version_option` + 2 headers)
+
+#### Características Implementadas
+
+- ✅ Tool results largos truncados automáticamente (preservando inicio+fin)
+- ✅ Pasos antiguos resumidos con el propio LLM cuando el contexto crece
+- ✅ Hard limit de tokens con ventana deslizante
+- ✅ Parallel tool calls con `ThreadPoolExecutor` y orden preservado
+- ✅ Decisión de paralelismo basada en `confirm_mode` y sensibilidad de tools
+- ✅ `ContextConfig` integrado en `AppConfig` con validación estricta
+- ✅ Sección `context:` en `config.example.yaml` completamente documentada
+- ✅ 22 tests sin API key
+
+#### Notas Técnicas
+
+- `_estimate_tokens()` usa `len(str(messages)) // 4` — estimación suficientemente precisa para decisiones de compresión
+- `ThreadPoolExecutor(max_workers=min(N, 4))` — cap de 4 workers para evitar saturar la red en MCP calls
+- `as_completed(futures)` + `futures = {future: idx}` — patrón estándar para preservar orden con concurrencia
+- `maybe_compress` falla silenciosamente — si el LLM no está disponible (offline, error de red), el loop continúa con los mensajes originales
+- Nivel 2 (resumen) reduce `tool_exchanges` de `>summarize_after_steps` a `keep_recent_steps`, por lo que comprime cada `summarize_after_steps - keep_recent_steps` pasos adicionales
+
+---
+
+## [0.10.0] - 2026-02-20
+
+### Fase 10 - Contexto Incremental Inteligente ✅
+
+#### Agregado
+
+**Módulo `src/architect/indexer/`** — nuevo módulo de indexación:
+
+- **`src/architect/indexer/tree.py`** — indexador de repositorio:
+  - `FileInfo` (dataclass) — metadatos de un archivo: `path`, `relative_path`, `size`, `language`, `lines`
+  - `RepoIndex` (dataclass) — índice completo del repo: `files`, `tree_summary`, `total_files`, `total_lines`, `languages`, `build_time_ms`, `workspace_root`
+  - `RepoIndexer` — clase principal de indexación:
+    - Constructor: `workspace_root`, `max_file_size`, `exclude_dirs`, `exclude_patterns`
+    - `build_index()` — construye y retorna un `RepoIndex`; usa `os.walk()` con modificación in-place de `dirnames` para pruning eficiente
+    - `_format_tree_detailed()` — árbol Unicode (├──, └──, │) para repos ≤300 archivos
+    - `_format_tree_compact()` — árbol agrupado por directorio raíz para repos >300 archivos
+    - `_count_languages()` — dict de lenguajes ordenado por frecuencia
+  - `EXT_MAP` — mapeo de 40+ extensiones a nombres de lenguaje
+  - `DEFAULT_IGNORE_DIRS` — frozenset: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `.tox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.hypothesis`, `dist`, `build`, `.eggs`
+  - `DEFAULT_IGNORE_PATTERNS` — tuple: `*.min.js`, `*.min.css`, `*.map`, `*.pyc`, `*.pyo`, `*.pyd`, `.DS_Store`, `Thumbs.db`, `*.lock`, `*.log`
+  - `MAX_TREE_FILES_DETAILED = 300` — umbral entre árbol detallado y compacto
+
+- **`src/architect/indexer/cache.py`** — caché en disco del índice:
+  - `IndexCache` — caché JSON por workspace con TTL configurable:
+    - Clave de caché: SHA-256 (16 chars) del path absoluto del workspace
+    - Directorio por defecto: `~/.architect/index_cache/`
+    - TTL por defecto: 300 segundos (5 minutos)
+    - `get(workspace_root)` — retorna `RepoIndex` si existe y no expiró, o `None`
+    - `set(workspace_root, index)` — persiste índice como JSON, falla silenciosamente
+    - `clear(workspace_root=None)` — limpia caché de un workspace o de todos
+    - Serialización/deserialización completa de `RepoIndex` a/desde JSON
+
+- **`src/architect/indexer/__init__.py`** — exports: `FileInfo`, `RepoIndex`, `RepoIndexer`, `IndexCache`
+
+**`src/architect/tools/search.py`** — tres nuevas tools de búsqueda:
+
+- `SearchCodeTool` (`search_code`, `sensitive=False`) — búsqueda por regex:
+  - Args: `pattern`, `path="."`, `file_pattern=None`, `max_results=20`, `context_lines=2`, `case_sensitive=True`
+  - Output con marcador `>` en líneas que coinciden, contexto arriba/abajo configurable
+  - Formato: `📄 file.py:lineno` + bloque de código con contexto
+
+- `GrepTool` (`grep`, `sensitive=False`) — búsqueda literal de texto:
+  - Args: `text`, `path="."`, `file_pattern=None`, `max_results=30`, `case_sensitive=True`
+  - Usa `rg` (ripgrep) o `grep` del sistema si están disponibles (`shutil.which`)
+  - Fallback puro-Python cuando el comando no está disponible o hace timeout
+  - `rg` con `--fixed-strings`, `--glob`; `grep` con `-F`, `--include`, `--exclude-dir`
+
+- `FindFilesTool` (`find_files`, `sensitive=False`) — búsqueda de archivos por nombre glob:
+  - Args: `pattern`, `path="."`
+  - Usa `fnmatch.fnmatch(filename, pattern)` para matching
+  - Omite los mismos `DEFAULT_IGNORE_DIRS` del indexador
+
+**Schemas nuevos** (`src/architect/tools/schemas.py`):
+- `SearchCodeArgs` — `pattern`, `path`, `file_pattern`, `max_results` (1–200), `context_lines` (0–10), `case_sensitive`
+- `GrepArgs` — `text`, `path`, `file_pattern`, `max_results` (1–500), `case_sensitive`
+- `FindFilesArgs` — `pattern`, `path`; todos con `extra="forbid"`
+
+**`IndexerConfig`** (`src/architect/config/schema.py`):
+- Nuevo modelo Pydantic con `extra="forbid"`:
+  - `enabled: bool = True`
+  - `max_file_size: int = 1_000_000` (1 MB)
+  - `exclude_dirs: list[str] = []`
+  - `exclude_patterns: list[str] = []`
+  - `use_cache: bool = True`
+- Añadido a `AppConfig`: `indexer: IndexerConfig = Field(default_factory=IndexerConfig)`
+
+**Testing** (`scripts/test_phase10.py`) — 12 grupos de pruebas:
+1. Importaciones del módulo indexer y tools de búsqueda
+2. `RepoIndexer` básico — indexa el workspace actual, cuenta archivos y lenguajes
+3. Exclusión de directorios (`node_modules`, `__pycache__`, `.git`)
+4. `FileInfo` — campos path, size, language, lines correctamente poblados
+5. Detección de lenguajes — Python, YAML, Markdown detectados
+6. `IndexCache` set/get — persistencia y recuperación del índice
+7. `IndexCache` TTL — retorna `None` si el TTL expiró
+8. `SearchCodeTool` — búsqueda básica, file_pattern, context_lines, sin resultados, regex inválido, case insensitive
+9. `GrepTool` — búsqueda literal básica, file_pattern, sin resultados, case insensitive
+10. `FindFilesTool` — glob básico, patrón `test_*`, sin resultados, extensiones yaml
+11. `ContextBuilder` — sin índice (prompt sin sección), con índice (inyecta "Estructura del Proyecto"), prompt base preservado
+12. Consistencia de versión, `IndexerConfig` en `AppConfig`, search tools en registry, agentes con search tools, build con edit tools, CLI `--version`
+
+#### Modificado
+
+**`src/architect/tools/setup.py`**:
+- Nueva función `register_search_tools(registry, workspace_config)` — registra `search_code`, `grep`, `find_files`
+- Nueva función `register_all_tools(registry, workspace_config)` — combina filesystem + search tools
+- `register_filesystem_tools()` sin cambios
+
+**`src/architect/tools/__init__.py`**:
+- Nuevos exports: `SearchCodeTool`, `GrepTool`, `FindFilesTool`, `SearchCodeArgs`, `GrepArgs`, `FindFilesArgs`, `register_search_tools`, `register_all_tools`
+
+**`src/architect/core/context.py`** — inyección de índice en system prompt:
+- `ContextBuilder.__init__(self, repo_index: RepoIndex | None = None)` — acepta índice opcional
+- `build_initial()` llama `_inject_repo_index()` si hay índice disponible
+- `_inject_repo_index()` añade sección "## Estructura del Proyecto" al system prompt:
+  - Totales: archivos, líneas, lenguajes top-5
+  - `tree_summary` completo del repositorio
+  - Guía de uso de `search_code`, `grep`, `find_files`
+- Import de `RepoIndex` bajo `TYPE_CHECKING` para evitar importaciones circulares
+
+**`src/architect/agents/registry.py`** — search tools en todos los agentes:
+- Agentes `plan`, `build`, `resume`, `review` añaden: `search_code`, `grep`, `find_files` a `allowed_tools`
+- Agente `build` añade también `edit_file`, `apply_patch` (faltaban)
+- Agente `build` aumenta `max_steps` de 20 a 25
+
+**`src/architect/agents/prompts.py`** — guía de herramientas de búsqueda:
+- `PLAN_PROMPT`: nueva tabla "Herramientas de Exploración" con cuándo usar cada tool
+- `BUILD_PROMPT`: nueva tabla "Herramientas de Búsqueda (F10)" + "Flujo de Trabajo Típico" actualizado para referenciar search tools primero
+
+**`src/architect/cli.py`** — integración del indexador:
+- Import cambiado: `register_filesystem_tools` → `register_all_tools`
+- Imports añadidos: `IndexCache`, `RepoIndex`, `RepoIndexer`
+- Bloque de indexación al inicio de `run()`:
+  - Respeta `config.indexer.enabled`
+  - Lee de caché si `config.indexer.use_cache=True` y la caché es fresca
+  - Construye índice si no hay caché o está obsoleta
+  - Actualiza caché tras construir
+  - Log de estado si `verbose >= 1`
+- `ContextBuilder(repo_index=repo_index)` recibe el índice
+
+**`config.example.yaml`**:
+- Nueva sección `indexer:` documentando todos los campos de `IndexerConfig` con comentarios explicativos, ejemplos de `exclude_dirs` y `exclude_patterns`
+
+#### Versión
+- `src/architect/__init__.py`: `0.9.0` → `0.10.0`
+- `pyproject.toml`: `0.9.0` → `0.10.0`
+- `src/architect/cli.py`: `0.9.0` → `0.10.0` (3 sitios: `version_option` + 2 headers)
+
+#### Características Implementadas
+
+- ✅ Indexador de repositorio con árbol Unicode (detallado ≤300 archivos, compacto >300)
+- ✅ Caché en disco con SHA-256 por workspace y TTL de 5 minutos
+- ✅ `SearchCodeTool` — búsqueda regex con contexto configurable
+- ✅ `GrepTool` — búsqueda literal con rg/grep del sistema + fallback Python
+- ✅ `FindFilesTool` — búsqueda de archivos por patrón glob
+- ✅ `IndexerConfig` — sección `indexer:` en YAML con validación estricta
+- ✅ System prompt enriquecido con árbol del proyecto + guía de search tools
+- ✅ Todos los agentes (plan/build/resume/review) con acceso a search tools
+- ✅ CLI con indexación automática al inicio, respetando config y caché
+- ✅ 12 grupos de tests sin API key
+
+#### Uso
+
+```bash
+# El indexador actúa automáticamente al iniciar (con verbose=1 muestra stats)
+architect run "analiza la arquitectura del proyecto" -a resume -v
+
+# Deshabilitar indexador en repos muy grandes
+architect run "tarea puntual" --no-stream  # el indexador sigue activo
+```
+
+```yaml
+# config.yaml — deshabilitar caché o excluir directorios extra
+indexer:
+  enabled: true
+  use_cache: true
+  exclude_dirs:
+    - vendor
+    - .terraform
+  exclude_patterns:
+    - "*.generated.py"
+```
+
+```bash
+# El agente ahora puede usar search_code/grep/find_files directamente
+# Inyectado automáticamente en el system prompt:
+# "Usa search_code para buscar patrones regex,
+#  grep para texto literal, find_files para nombres de archivo"
+```
+
+#### Notas Técnicas
+
+- `os.walk()` modifica `dirnames` in-place → poda eficiente sin descender a dirs excluidos
+- Árbol detallado usa conectores Unicode: `├──`, `└──`, `│` (compatible con terminales UTF-8)
+- `GrepTool` detecta rg vs grep por `os.path.basename(cmd)` para construir flags correctos
+- `IndexCache` falla silenciosamente en escritura — nunca rompe la ejecución si `~/.architect/` no es accesible
+- `ContextBuilder` usa `TYPE_CHECKING` guard para el import de `RepoIndex` (evita importaciones circulares)
+- Paths en resultados de search usan `.replace("\\", "/")` para compatibilidad Windows/WSL
 
 ---
 

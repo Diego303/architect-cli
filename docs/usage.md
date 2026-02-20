@@ -1,6 +1,6 @@
 # Formas de uso — architect CLI
 
-Guía práctica de uso real: desde el caso más simple hasta configuraciones avanzadas para CI/CD, múltiples proyectos y equipos. Incluye todos los flags, combinaciones de logging, archivos de configuración y patrones de automatización.
+Guía práctica de uso real: desde el caso más simple hasta configuraciones avanzadas para CI/CD, múltiples proyectos y equipos. Incluye todos los flags, combinaciones de logging y patrones de automatización.
 
 ---
 
@@ -17,12 +17,16 @@ Guía práctica de uso real: desde el caso más simple hasta configuraciones ava
 9. [Archivos de configuración](#9-archivos-de-configuración)
 10. [Configuraciones por entorno](#10-configuraciones-por-entorno)
 11. [MCP: herramientas remotas](#11-mcp-herramientas-remotas)
-12. [Uso en scripts y pipes](#12-uso-en-scripts-y-pipes)
-13. [CI/CD: GitHub Actions, GitLab, cron](#13-cicd-github-actions-gitlab-cron)
-14. [Multi-proyecto: workspace y config por proyecto](#14-multi-proyecto-workspace-y-config-por-proyecto)
-15. [Agentes custom en YAML](#15-agentes-custom-en-yaml)
-16. [Comandos auxiliares](#16-comandos-auxiliares)
-17. [Referencia rápida de flags](#17-referencia-rápida-de-flags)
+12. [Herramientas de edición incremental (F9)](#12-herramientas-de-edición-incremental-f9)
+13. [Indexer y herramientas de búsqueda (F10)](#13-indexer-y-herramientas-de-búsqueda-f10)
+14. [Gestión del context window (F11)](#14-gestión-del-context-window-f11)
+15. [Auto-evaluación --self-eval (F12)](#15-auto-evaluación---self-eval-f12)
+16. [Uso en scripts y pipes](#16-uso-en-scripts-y-pipes)
+17. [CI/CD: GitHub Actions, GitLab, cron](#17-cicd-github-actions-gitlab-cron)
+18. [Multi-proyecto: workspace y config por proyecto](#18-multi-proyecto-workspace-y-config-por-proyecto)
+19. [Agentes custom en YAML](#19-agentes-custom-en-yaml)
+20. [Comandos auxiliares](#20-comandos-auxiliares)
+21. [Referencia rápida de flags](#21-referencia-rápida-de-flags)
 
 ---
 
@@ -35,7 +39,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.8.0
+architect --version   # architect, version 0.12.0
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -90,6 +94,7 @@ Sin `-c config.yaml`, architect usa todos los defaults:
 - Streaming: activo
 - `allow_delete`: deshabilitado
 - Confirmación: según el agente elegido
+- Indexer: habilitado (construye árbol del proyecto automáticamente)
 
 ---
 
@@ -153,6 +158,8 @@ architect run "PROMPT" --dry-run
 
 El flag `--mode` sobreescribe el `confirm_mode` del agente. Si el agente tiene `confirm_mode: confirm-all` en YAML pero pasas `--mode yolo`, prevalece el flag de CLI.
 
+**Nota sobre parallel tools**: con `--mode yolo`, las tool calls independientes se ejecutan en paralelo automáticamente (hasta 4 en paralelo). Con `--mode confirm-sensitive`, si alguna tool es sensible (`write_file`, `edit_file`, etc.) se vuelve secuencial para permitir confirmación interactiva.
+
 ---
 
 ## 5. Flags de output: `--json`, `--quiet`, `--dry-run`
@@ -196,8 +203,9 @@ Formato del JSON:
   "output":           "El proyecto consiste en...",
   "steps":            3,
   "tools_used": [
-    {"name": "list_files", "success": true},
-    {"name": "read_file",  "success": true}
+    {"name": "read_file", "success": true},
+    {"name": "edit_file", "success": true},
+    {"name": "search_code", "success": true}
   ],
   "duration_seconds": 8.5,
   "model":            "gpt-4o-mini"
@@ -245,17 +253,13 @@ Ejemplo de output con `-v`:
 ```
 [INFO] agent.loop.start  agent=build step_timeout=0
 [INFO] agent.step.start  step=1
-[INFO] agent.tool_call.execute  tool=read_file path=src/main.py
-[INFO] agent.tool_call.complete tool=read_file success=True chars=1243
-[INFO] agent.step.start  step=2
+[INFO] agent.tool_call.execute  tool=search_code pattern="def validate" file_pattern="*.py"
+[INFO] agent.tool_call.complete tool=search_code success=True chars=842
+[INFO] agent.tool_call.execute  tool=edit_file path=src/utils.py
+[INFO] agent.tool_call.complete tool=edit_file success=True
+[INFO] eval.basic.start   prompt_preview="refactoriza validate_path..."
+[INFO] eval.basic.complete completed=True confidence=92%
 [INFO] agent.complete     status=success steps=2
-```
-
-Ejemplo adicional con `-vv` (incluye todo lo de `-v` más):
-```
-[DEBUG] llm.completion.start  model=gpt-4o-mini messages=3 tools=4
-[DEBUG] tool.execute.args     tool=write_file path=src/utils.py content="def foo():..."
-[DEBUG] tool.execute.result   output="Archivo sobrescrito (234 bytes)"
 ```
 
 ### `--log-level` — nivel base del logger
@@ -266,32 +270,22 @@ architect run "PROMPT" --log-level error
 
 # Debug completo (equivalente a -vvv, pero sin --verbose count)
 architect run "PROMPT" --log-level debug
-
-# Combinado con -v (verbose controla la consola, log-level el base)
-architect run "PROMPT" --log-level debug -v
 ```
 
 ### `--log-file` — guardar logs en archivo JSON
 
 ```bash
-# Guardar logs en archivo JSON Lines (además de mostrar en consola)
+# Guardar logs en archivo JSON Lines
 architect run "PROMPT" -a build -v --log-file logs/session.jsonl
 
 # El archivo captura DEBUG completo independientemente del verbose de consola
-# (consola con -v = INFO, archivo = DEBUG siempre)
 architect run "PROMPT" --log-file logs/session.jsonl     # consola quiet, archivo DEBUG
 
 # Analizar los logs después
-cat logs/session.jsonl | jq 'select(.event == "tool.call")'
+cat logs/session.jsonl | jq 'select(.event == "agent.tool_call.execute")'
 cat logs/session.jsonl | jq 'select(.level == "error")'
+cat logs/session.jsonl | jq 'select(.event | startswith("eval."))'
 cat logs/session.jsonl | jq -r '.event + " " + (.step | tostring)' 2>/dev/null
-cat logs/session.jsonl | jq '.duration_ms' | awk '{sum+=$1} END {print sum "ms total"}'
-```
-
-Formato de cada línea del archivo `.jsonl`:
-```json
-{"timestamp": "2026-02-19T10:30:45.123456Z", "level": "info", "logger": "architect.core.loop", "event": "agent.step.start", "step": 1, "agent": "build"}
-{"timestamp": "2026-02-19T10:30:46.891234Z", "level": "debug", "logger": "architect.tools.filesystem", "event": "tool.execute", "tool": "read_file", "path": "src/main.py", "chars": 1243}
 ```
 
 ---
@@ -306,9 +300,6 @@ architect run "resume el proyecto en 3 líneas" -a resume --quiet
 
 # Resultado a archivo, errores a /dev/null
 architect run "genera README.md" -a build --quiet 2>/dev/null
-
-# Resultado a archivo, errores a log
-architect run "genera README.md" -a build --quiet 2>errors.log
 
 # Solo JSON parseado, silencio total
 architect run "analiza dependencias" -a resume --quiet --json 2>/dev/null | jq -r .output
@@ -352,29 +343,9 @@ architect run "PROMPT" --model gemini/gemini-1.5-pro
 architect run "PROMPT" --model ollama/llama3 --api-base http://localhost:11434
 architect run "PROMPT" --model ollama/mistral --api-base http://localhost:11434
 architect run "PROMPT" --model ollama/codellama --api-base http://localhost:11434
-
-# Together AI
-architect run "PROMPT" --model together_ai/meta-llama/Llama-3-70b-chat-hf
 ```
 
-### API key inline (no recomendado, mejor usar env var)
-
-```bash
-architect run "PROMPT" --api-key sk-...
-# La key se pasa directamente a LiteLLM; NO se loggea
-```
-
-### API base custom (LiteLLM Proxy, endpoints propios)
-
-```bash
-# LiteLLM Proxy (equipo compartido)
-architect run "PROMPT" --api-base http://proxy.interno:8000
-
-# Endpoint compatible con OpenAI (local o cloud)
-architect run "PROMPT" --model gpt-4o --api-base https://mi-openai-compatible.com/v1
-```
-
-### Timeout
+### Timeout y reintentos
 
 ```bash
 # Timeout de 120 segundos por llamada al LLM (y por step)
@@ -387,29 +358,9 @@ architect run "analiza todo el código fuente del repositorio" -a resume --timeo
 architect run "resume README" -a resume --timeout 30
 ```
 
-### Desactivar streaming
-
-```bash
-# --no-stream: espera respuesta completa (sin chunks en tiempo real)
-architect run "PROMPT" --no-stream
-
-# Útil cuando el terminal no soporta streaming o en tests
-architect run "PROMPT" --no-stream --log-file debug.jsonl
-```
-
 ---
 
 ## 9. Archivos de configuración
-
-### Cuáles existen y para qué
-
-```
-config.example.yaml       ← plantilla completa con comentarios (no editar)
-config.yaml               ← tu configuración local (gitignoreado habitualmente)
-ci/architect.yaml         ← config específica para CI/CD
-config/dev.yaml           ← config para desarrollo local
-config/prod.yaml          ← config para producción
-```
 
 ### Estructura mínima de `config.yaml`
 
@@ -424,29 +375,41 @@ workspace:
   allow_delete: false
 ```
 
-### `config.yaml` de desarrollo (con verbose)
+### `config.yaml` de desarrollo (con verbose y self-eval)
 
 ```yaml
 llm:
-  model: gpt-4o-mini        # modelo económico para desarrollo
+  model: gpt-4o-mini
   api_key_env: LITELLM_API_KEY
   timeout: 60
-  retries: 1                # menos reintentos en desarrollo (falla rápido)
+  retries: 1
   stream: true
 
 workspace:
   root: .
-  allow_delete: false       # prevenir borrados accidentales
+  allow_delete: false
 
 logging:
   level: debug
-  verbose: 2                # -vv por defecto
-  file: logs/dev.jsonl      # guardar todos los logs
+  verbose: 2
+  file: logs/dev.jsonl
+
+indexer:
+  enabled: true
+  use_cache: true
+
+context:
+  max_tool_result_tokens: 2000
+  parallel_tools: true
+
+evaluation:
+  mode: basic              # evalúa siempre en desarrollo
+  confidence_threshold: 0.75
 
 agents:
   build:
-    confirm_mode: confirm-sensitive   # confirmar escrituras
-    max_steps: 10                     # limitar para no gastar tokens
+    confirm_mode: confirm-sensitive
+    max_steps: 10
 ```
 
 ### `config.yaml` para producción / automatización
@@ -456,8 +419,8 @@ llm:
   model: gpt-4o
   api_key_env: OPENAI_API_KEY
   timeout: 120
-  retries: 3                # más reintentos en producción
-  stream: false             # sin streaming en pipelines
+  retries: 3
+  stream: false
 
 workspace:
   root: /ruta/al/proyecto
@@ -465,54 +428,41 @@ workspace:
 
 logging:
   level: warn
-  verbose: 0                # mínimo ruido
+  verbose: 0
   file: /var/log/architect/run.jsonl
+
+indexer:
+  enabled: true
+  use_cache: true
+
+context:
+  max_tool_result_tokens: 2000
+  max_context_tokens: 80000
+  parallel_tools: true
+
+evaluation:
+  mode: full               # con reintentos en producción
+  max_retries: 2
+  confidence_threshold: 0.8
 
 agents:
   build:
-    confirm_mode: yolo      # sin confirmaciones en pipelines
+    confirm_mode: yolo
     max_steps: 30
-```
-
-### `config.yaml` con Ollama local (sin API key)
-
-```yaml
-llm:
-  model: ollama/llama3
-  api_base: http://localhost:11434
-  retries: 0
-  timeout: 300              # modelos locales pueden ser lentos
-  stream: true
-
-workspace:
-  root: .
-  allow_delete: false
-
-logging:
-  verbose: 1
 ```
 
 ### Usar `-c` para especificar el archivo
 
 ```bash
-# Config por defecto (busca config.yaml en CWD si existe; sino, usa defaults)
+# Config por defecto (usa defaults si no hay YAML)
 architect run "PROMPT"
 
 # Config explícita
 architect run "PROMPT" -c config.yaml
 architect run "PROMPT" -c /etc/architect/prod.yaml
-architect run "PROMPT" -c ~/configs/architect-dev.yaml
 
 # Config + overrides de CLI (CLI siempre gana)
-architect run "PROMPT" -c config.yaml --model gpt-4o --mode yolo
-```
-
-### Validar antes de usar
-
-```bash
-architect validate-config -c config.yaml
-# Salida: "Configuración válida: model=gpt-4o-mini, workspace=., ..."
-# Exit 0 si válida, exit 1 si inválida, exit 3 si archivo no encontrado
+architect run "PROMPT" -c config.yaml --model gpt-4o --mode yolo --self-eval basic
 ```
 
 ---
@@ -522,31 +472,17 @@ architect validate-config -c config.yaml
 ### Variables de entorno como override
 
 ```bash
-# Cambiar modelo sin tocar el YAML
 ARCHITECT_MODEL=gpt-4o architect run "PROMPT"
-
-# Cambiar workspace
 ARCHITECT_WORKSPACE=/otro/proyecto architect run "PROMPT"
-
-# Cambiar log level
 ARCHITECT_LOG_LEVEL=debug architect run "PROMPT"
-
-# Cambiar API base
-ARCHITECT_API_BASE=http://proxy:8000 architect run "PROMPT"
 ```
 
 ### Múltiples configs con alias en shell
 
 ```bash
 # En ~/.bashrc o ~/.zshrc
-
-# Alias para desarrollo
 alias architect-dev='architect -c ~/configs/architect-dev.yaml'
-
-# Alias para producción (requiere confirmar todo)
 alias architect-prod='architect -c ~/configs/architect-prod.yaml --mode confirm-all'
-
-# Alias para análisis rápido (sin confirmaciones, modelo barato)
 alias aresume='architect run -a resume --mode yolo --quiet'
 alias areview='architect run -a review --mode yolo'
 
@@ -556,27 +492,11 @@ areview "revisa src/auth.py"
 architect-dev run "refactoriza config.py" -a build
 ```
 
-### `.envrc` con direnv (por proyecto)
-
-```bash
-# .envrc en la raíz del proyecto
-export LITELLM_API_KEY="sk-..."
-export ARCHITECT_MODEL="gpt-4o-mini"
-export ARCHITECT_WORKSPACE="$(pwd)"
-```
-
-```bash
-direnv allow   # activa .envrc automáticamente al entrar al directorio
-architect run "analiza el proyecto" -a resume   # usa modelo y workspace del .envrc
-```
-
 ---
 
 ## 11. MCP: herramientas remotas
 
 MCP (Model Context Protocol) permite al agente usar tools en servidores remotos.
-
-### Configuración en `config.yaml`
 
 ```yaml
 mcp:
@@ -588,28 +508,333 @@ mcp:
     - name: database
       url: https://mcp.empresa.com/db
       token_env: DB_MCP_TOKEN
-
-    - name: jira
-      url: http://jira-mcp:3002
-      token_env: JIRA_TOKEN
 ```
 
 ```bash
-# Las tools MCP se descubren automáticamente y están disponibles como locales
+# Las tools MCP se descubren automáticamente
 architect run "crea un PR con los cambios actuales" --mode yolo
 
-# Deshabilitar MCP (ignorar servidores de config)
+# Deshabilitar MCP
 architect run "PROMPT" --disable-mcp
 
-# Ver qué tools MCP hay disponibles (salen en --agents con config)
+# Ver tools MCP disponibles
 architect agents -c config.yaml
 ```
 
-Las tools MCP reciben el nombre `mcp_{servidor}_{nombre_tool}`. Si el servidor `github` expone una tool `create_pr`, el agente la ve como `mcp_github_create_pr`.
+Las tools MCP reciben el nombre `mcp_{servidor}_{nombre_tool}`. Con `parallel_tools=true`, las tool calls MCP independientes se ejecutan en paralelo, lo que es especialmente útil dado que son llamadas de red.
 
 ---
 
-## 12. Uso en scripts y pipes
+## 12. Herramientas de edición incremental (F9)
+
+A partir de v0.9.0, el agente `build` tiene herramientas de edición más precisas que `write_file`:
+
+### `edit_file` — sustitución exacta de texto
+
+El agente puede modificar un bloque específico de código sin reescribir el archivo completo.
+
+```bash
+# Ejemplo: el agente usará edit_file para cambiar una función
+architect run "cambia la función calculate() en utils.py para que acepte parámetros float" \
+  -a build --mode yolo
+```
+
+El agente internamente:
+1. Lee el archivo con `read_file`
+2. Identifica el bloque a cambiar
+3. Llama a `edit_file` con el texto exacto a reemplazar y el nuevo texto
+4. Verifica el resultado
+
+**Ventajas sobre `write_file`**:
+- Consume menos tokens (solo manda el bloque cambiado, no el archivo completo)
+- Menor riesgo de perder código no relacionado
+- El diff del cambio queda en el historial del LLM
+
+### `apply_patch` — unified diff
+
+Para múltiples cambios en un archivo:
+
+```bash
+# Ejemplo: el agente aplica varios cambios a la vez
+architect run "actualiza la API de logging en todos los módulos" -a build --mode yolo
+```
+
+El agente puede generar un unified diff y aplicarlo directamente.
+
+### Controlar la estrategia de edición
+
+El `BUILD_PROMPT` incluye una tabla de prioridades que el agente sigue:
+
+```
+1. edit_file   — un solo cambio contiguo (preferido)
+2. apply_patch — múltiples cambios o diff preexistente
+3. write_file  — archivos nuevos o reorganización completa
+```
+
+No hay un flag de CLI para forzar una estrategia — el agente decide según la tarea.
+
+---
+
+## 13. Indexer y herramientas de búsqueda (F10)
+
+A partir de v0.10.0, el agente conoce la estructura del proyecto desde el primer momento.
+
+### El árbol del proyecto en el system prompt
+
+Al iniciar, architect indexa el workspace y añade automáticamente el árbol al system prompt:
+
+```
+🏗️  architect v0.12.0
+📝 Prompt: refactoriza el módulo de autenticación
+🤖 Modelo: gpt-4o-mini
+📁 Workspace: /home/user/mi-proyecto
+```
+
+El agente ve algo como esto en su context:
+
+```
+## Estructura del Proyecto
+
+Workspace: /home/user/mi-proyecto
+Archivos: 47 archivos | 3,241 líneas
+Lenguajes: Python (23), YAML (8), Markdown (6)
+
+src/
+├── auth/
+│   ├── __init__.py     Python    12 líneas
+│   ├── jwt.py          Python    89 líneas
+│   └── middleware.py   Python    134 líneas
+└── utils/
+    └── validators.py   Python    67 líneas
+```
+
+Esto reduce el número de llamadas a `list_files` y permite planes más precisos desde el principio.
+
+### Mostrar el árbol del índice con verbose
+
+```bash
+# -v muestra estadísticas del índice al iniciar
+architect run "analiza el proyecto" -a resume -v
+
+# Salida de ejemplo:
+# 🗂️  Índice: 47 archivos, 3,241 líneas (23ms)
+```
+
+### Configurar el indexer
+
+```yaml
+indexer:
+  enabled: true
+  max_file_size: 1000000     # omitir archivos > 1MB
+  use_cache: true            # caché de 5 minutos en disco
+
+  # Excluir dirs adicionales (además de .git, node_modules, etc.)
+  exclude_dirs:
+    - vendor
+    - .terraform
+    - migrations/auto
+
+  # Excluir patrones adicionales (además de *.pyc, *.min.js, etc.)
+  exclude_patterns:
+    - "*.generated.py"
+    - "*.pb.go"
+    - "*.lock"
+```
+
+```bash
+# Deshabilitar indexer (el agente aún puede usar search_code, grep, find_files)
+# En config.yaml: indexer.enabled: false
+```
+
+### Herramientas de búsqueda disponibles
+
+Los agentes pueden usar estas tools durante su ejecución:
+
+```bash
+# El agente las usará internamente — ejemplos de lo que haría
+
+# search_code: regex con contexto
+# "Encuentra todos los usos de validate_path con contexto"
+# → busca con patrón regex, devuelve líneas con N líneas de contexto
+
+# grep: texto literal
+# "Encuentra todas las importaciones de jwt"
+# → busca texto exacto, más rápido que regex
+
+# find_files: por nombre
+# "Encuentra todos los archivos de configuración YAML"
+# → busca por patrón de nombre de archivo
+```
+
+**Cuándo el agente usa cada tool** (instruido en el prompt):
+- `search_code` — buscar implementaciones, patrones de código, usos de una función
+- `grep` — buscar texto literal, imports, strings específicos
+- `find_files` — localizar archivos por nombre o extensión
+
+```bash
+# Forzar uso de herramientas de búsqueda en el prompt
+architect run "usa search_code para encontrar todos los lugares donde se llama a validate()" \
+  -a review --quiet
+```
+
+---
+
+## 14. Gestión del context window (F11)
+
+A partir de v0.11.0, architect gestiona automáticamente el contexto para tareas largas.
+
+### Cómo funciona (sin acción del usuario)
+
+El `ContextManager` actúa en 3 niveles automáticamente:
+
+1. **Truncado de tool results** (siempre activo): si un `read_file` devuelve 500 líneas, el agente recibe las primeras 40 + las últimas 20 con un marcador.
+2. **Compresión con LLM** (tras 8+ pasos): cuando el agente ha hecho muchos pasos, los más antiguos se resumen en un párrafo.
+3. **Ventana deslizante** (hard limit): si el total supera 80k tokens estimados, se eliminan los mensajes más antiguos.
+
+### Configurar según el modelo
+
+```yaml
+context:
+  max_tool_result_tokens: 2000   # tokens max por tool result (~8000 chars)
+
+  # Para tareas muy largas: comprimir antes
+  summarize_after_steps: 5       # default: 8
+  keep_recent_steps: 3           # default: 4
+
+  # Ajustar límite al modelo usado:
+  max_context_tokens: 80000      # gpt-4o/mini
+  # max_context_tokens: 150000   # claude-sonnet-4-6 (más grande)
+  # max_context_tokens: 0        # desactivar (peligroso para tareas largas)
+
+  parallel_tools: true           # tool calls independientes en paralelo
+```
+
+### Desactivar el parallel execution
+
+```bash
+# En config.yaml:
+# context.parallel_tools: false
+
+# O crear un agente que no lo use:
+# agents:
+#   build:
+#     confirm_mode: confirm-all  # también desactiva paralelo (interacción TTY)
+```
+
+### Ver cuándo se activa la compresión
+
+```bash
+# Con -vv, verás logs de contexto
+architect run "tarea larga con muchos pasos" -a build -vv
+
+# Logs relevantes:
+# [DEBUG] context.compress.start    tool_exchanges=9 threshold=8
+# [DEBUG] context.compress.complete old_msgs=18 summary_len=342
+# [DEBUG] context.window.enforce    estimated_tokens=85000 max=80000 removed=2
+```
+
+---
+
+## 15. Auto-evaluación `--self-eval` (F12)
+
+A partir de v0.12.0, architect puede verificar automáticamente si la tarea se completó correctamente.
+
+### Modo `basic` — una evaluación extra
+
+```bash
+# El LLM evalúa el resultado tras completar la tarea
+architect run "genera tests unitarios para src/auth.py" -a build --self-eval basic
+
+# Output de ejemplo:
+# 🏗️  architect v0.12.0
+# ...
+# 🔍 Evaluando resultado...
+# ✓ Evaluación: completado (92% confianza)
+```
+
+Si la evaluación detecta problemas:
+```
+🔍 Evaluando resultado...
+⚠️  Evaluación: incompleto (41% confianza)
+   - No se crearon los tests para el método login()
+   - Los imports de pytest faltan en el archivo generado
+   Sugerencia: Añade tests para login() y el import pytest al principio
+```
+
+En este caso el estado cambia a `partial` (exit code 2).
+
+**Coste**: ~500 tokens extra por la llamada de evaluación. Sin efecto en los archivos.
+
+### Modo `full` — evaluación con reintentos automáticos
+
+```bash
+# Evalúa y, si falla, reintenta hasta 2 veces con un prompt de corrección
+architect run "migra database.py de SQLite a PostgreSQL" -a build --self-eval full
+
+# Output de ejemplo:
+# 🔍 Evaluando resultado...
+# (1er intento: falla → reintenta)
+# (2do intento: pasa)
+# ✓ Evaluación full completada (estado: success)
+```
+
+**Cuándo usar `full`**:
+- Tareas complejas donde un error parcial es costoso
+- Cuando el LLM puede necesitar ver el resultado de sus propias acciones para corregir
+- CI/CD donde se prefiere reintentar antes de fallar
+
+**Coste**: hasta `max_retries * (ejecución_completa + evaluación)`. Usar con criterio.
+
+### Configurar en YAML (persistente)
+
+```yaml
+evaluation:
+  mode: basic              # siempre evalúa (override con --self-eval off)
+  confidence_threshold: 0.8
+  max_retries: 2           # solo para modo full
+```
+
+```bash
+# CLI siempre sobreescribe el YAML
+architect run "PROMPT" --self-eval off    # desactiva aunque YAML diga basic/full
+architect run "PROMPT" --self-eval full   # activa aunque YAML diga off
+```
+
+### Casos de uso prácticos
+
+```bash
+# Generación de código con verificación
+architect run "genera una clase Python completa para manejar conexiones Redis" \
+  -a build --mode yolo --self-eval basic
+
+# Tests críticos — verificar que se crearon correctamente
+architect run "escribe tests de integración para el módulo de pagos" \
+  -a build --mode yolo --self-eval full
+
+# Documentación — verificar que está completa
+architect run "documenta toda la API pública de src/api.py con docstrings" \
+  -a build --mode yolo --self-eval basic
+
+# Combinado con --json para pipelines
+architect run "refactoriza el módulo auth" \
+  --mode yolo --quiet --json --self-eval basic \
+  | jq '{status, output, steps}'
+```
+
+### Interpretar exit codes con self-eval
+
+```bash
+architect run "PROMPT" --self-eval basic --quiet
+case $? in
+  0) echo "Completado y verificado por el evaluador" ;;
+  2) echo "Completado parcialmente — el evaluador detectó problemas" ;;
+  1) echo "El agente falló antes de llegar a la evaluación" ;;
+esac
+```
+
+---
+
+## 16. Uso en scripts y pipes
 
 ### Capturar resultado en variable
 
@@ -633,7 +858,7 @@ architect run "tarea" --mode yolo --quiet
 case $? in
   0)   echo "Completado con éxito" ;;
   1)   echo "El agente falló" ;;
-  2)   echo "Completado parcialmente" ;;
+  2)   echo "Completado parcialmente (o evaluador falló)" ;;
   3)   echo "Error de configuración" ;;
   4)   echo "Error de autenticación (API key)" ;;
   5)   echo "Timeout" ;;
@@ -652,9 +877,9 @@ architect run "genera un .gitignore completo para un proyecto Python con pytest"
 architect run "genera un README.md para este proyecto basándote en el código fuente" \
   -a build --mode yolo --quiet > README_generated.md
 
-# Generar tests
+# Generar tests con verificación
 architect run "genera tests unitarios para src/utils.py usando pytest" \
-  -a build --mode yolo --quiet > tests/test_utils.py
+  -a build --mode yolo --self-eval basic --quiet > tests/test_utils.py
 ```
 
 ### Encadenar con otras herramientas
@@ -673,11 +898,22 @@ for file in src/*.py; do
   architect run "revisa $file en busca de bugs y code smells" \
     -a review --quiet -w "$(dirname "$file")"
 done
+
+# Verificar si la auto-evaluación pasó
+architect run "genera la documentación de la API" -a build --self-eval basic --quiet --json \
+  | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+if data['status'] == 'partial':
+    print('ADVERTENCIA: documentación incompleta', file=sys.stderr)
+    sys.exit(2)
+print(data['output'])
+"
 ```
 
 ---
 
-## 13. CI/CD: GitHub Actions, GitLab, cron
+## 17. CI/CD: GitHub Actions, GitLab, cron
 
 ### GitHub Actions
 
@@ -705,13 +941,14 @@ jobs:
       - name: Install architect
         run: pip install -e .
 
-      - name: Run architect
+      - name: Run architect with self-eval
         env:
           LITELLM_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           architect run "revisa los cambios del último commit y detecta posibles bugs" \
             -a review \
             --mode yolo \
+            --self-eval basic \
             --quiet \
             --json \
             -c ci/architect.yaml \
@@ -725,6 +962,9 @@ jobs:
           if [ "$STATUS" = "failed" ]; then
             echo "::error::Architect falló: $STATUS"
             exit 1
+          fi
+          if [ "$STATUS" = "partial" ]; then
+            echo "::warning::Architect completó parcialmente (evaluación detectó problemas)"
           fi
 
       - name: Upload logs
@@ -752,7 +992,18 @@ workspace:
 logging:
   verbose: 0
   level: warn
-  file: logs/ci-run.jsonl  # guardar logs para artifacts
+  file: logs/ci-run.jsonl
+
+indexer:
+  enabled: true
+  use_cache: false         # en CI siempre reconstruir (cada run es fresco)
+
+context:
+  parallel_tools: true
+
+evaluation:
+  mode: basic              # evaluar en CI
+  confidence_threshold: 0.7  # más permisivo en CI
 ```
 
 ### GitLab CI
@@ -769,6 +1020,7 @@ architect-review:
       architect run "revisa los archivos modificados en este MR" \
         -a review \
         --mode yolo \
+        --self-eval basic \
         --quiet \
         --json \
         -c ci/architect.yaml \
@@ -791,12 +1043,6 @@ architect-review:
 ### Cron job (análisis periódico)
 
 ```bash
-# /etc/cron.d/architect-review
-# Análisis semanal del proyecto los domingos a las 23:00
-0 23 * * 0 deploy-user /usr/local/bin/architect-review.sh >> /var/log/architect-cron.log 2>&1
-```
-
-```bash
 #!/bin/bash
 # /usr/local/bin/architect-review.sh
 
@@ -809,6 +1055,7 @@ LOG_FILE="logs/review-${FECHA}.jsonl"
 architect run "analiza el estado actual del proyecto, detecta deuda técnica y genera un reporte" \
   -a review \
   --mode yolo \
+  --self-eval basic \
   --quiet \
   --json \
   --log-file "$LOG_FILE" \
@@ -821,7 +1068,7 @@ echo "[$(date)] Review completado: status=$STATUS log=$LOG_FILE"
 
 ---
 
-## 14. Multi-proyecto: workspace y config por proyecto
+## 18. Multi-proyecto: workspace y config por proyecto
 
 ### Workspace explícito con `-w`
 
@@ -842,38 +1089,40 @@ architect run "analiza el proyecto" -a resume -w ~/projects/proyecto-b -c $BASE_
 
 ### Config por proyecto (en la raíz de cada repo)
 
-```
-mi-proyecto/
-├── architect.yaml      ← config específica del proyecto
-├── config.example.yaml ← plantilla (opcional, copiada de architect-cli)
-├── .gitignore          ← incluye architect.yaml si tiene tokens
-└── src/
-```
-
 ```yaml
 # mi-proyecto/architect.yaml
 llm:
-  model: claude-sonnet-4-6      # este proyecto usa Claude
+  model: claude-sonnet-4-6
   api_key_env: ANTHROPIC_API_KEY
   timeout: 90
 
 workspace:
   root: .
-  allow_delete: true            # este proyecto permite borrado
+  allow_delete: true
+
+indexer:
+  exclude_dirs:
+    - vendor
+    - .terraform
+
+context:
+  max_context_tokens: 150000   # Claude tiene ventana más grande
+
+evaluation:
+  mode: full
+  max_retries: 2
 
 agents:
   build:
-    max_steps: 30               # tareas largas
-
-  # Agente especializado para este proyecto
+    max_steps: 30
   migrator:
     system_prompt: |
       Eres un experto en migrar este proyecto de Python 2 a Python 3.
-      Conoces las diferencias entre print statements, unicode handling, etc.
     allowed_tools:
       - read_file
+      - search_code
+      - edit_file
       - write_file
-      - list_files
     confirm_mode: confirm-sensitive
     max_steps: 50
 ```
@@ -885,7 +1134,7 @@ architect run "migra auth.py a Python 3" -a migrator -c architect.yaml
 
 ---
 
-## 15. Agentes custom en YAML
+## 19. Agentes custom en YAML
 
 ### Definir y usar un agente custom completo
 
@@ -898,7 +1147,7 @@ agents:
       Eres un agente de deployment especializado.
 
       Tu trabajo es preparar el código para producción:
-      1. Verifica que existan tests
+      1. Verifica que existan tests (usa find_files y read_file)
       2. Revisa la configuración de producción
       3. Lee CI/CD files para entender el pipeline
       4. Genera un reporte ANTES de hacer cualquier cambio
@@ -907,6 +1156,7 @@ agents:
     allowed_tools:
       - read_file
       - list_files
+      - search_code
       - write_file
     confirm_mode: confirm-all
     max_steps: 15
@@ -921,6 +1171,8 @@ agents:
       - No modifiques lógica del código
     allowed_tools:
       - read_file
+      - search_code
+      - edit_file
       - write_file
       - list_files
     confirm_mode: confirm-sensitive
@@ -935,12 +1187,15 @@ agents:
       - Secretos hardcoded (API keys, passwords)
       - Validación de input de usuario
       - Dependencias con CVEs conocidos
-      - Principio de mínimo privilegio
 
+      Usa grep para buscar patrones peligrosos y search_code para analizar el código.
       Genera un reporte priorizado: CRÍTICO > ALTO > MEDIO > BAJO.
     allowed_tools:
       - read_file
       - list_files
+      - grep
+      - search_code
+      - find_files
     confirm_mode: yolo
     max_steps: 25
 ```
@@ -948,7 +1203,7 @@ agents:
 ```bash
 # Usar agentes custom
 architect run "prepara el release 1.2.0" -a deploy -c config.yaml
-architect run "documenta el módulo de autenticación" -a documenter -c config.yaml
+architect run "documenta el módulo de autenticación" -a documenter -c config.yaml --self-eval basic
 architect run "audita la seguridad de toda la aplicación" -a security -c config.yaml
 ```
 
@@ -965,7 +1220,7 @@ agents:
 
 ---
 
-## 16. Comandos auxiliares
+## 20. Comandos auxiliares
 
 ### `architect agents` — listar agentes disponibles
 
@@ -994,19 +1249,14 @@ architect validate-config -c config.yaml
 # → "Configuración válida: model=gpt-4o-mini, workspace=., retries=2"
 # Exit 0
 
-# Archivo no encontrado
-architect validate-config -c no-existe.yaml
-# Exit 3
-
-# Config con error (campo desconocido, tipo incorrecto, etc.)
-architect validate-config -c config-invalida.yaml
-# → "Error de configuración: llm.retries debe ser int, recibido 'dos'"
-# Exit 1
+# Validar con todas las nuevas secciones
+architect validate-config -c config.example.yaml
+# → "Configuración válida: model=gpt-4o-mini, workspace=., retries=2, agentes=0, MCP servers=0"
 ```
 
 ---
 
-## 17. Referencia rápida de flags
+## 21. Referencia rápida de flags
 
 ### `architect run PROMPT [OPTIONS]`
 
@@ -1039,6 +1289,9 @@ Logging
 
 MCP
   --disable-mcp             No conectar a servidores MCP configurados
+
+Auto-evaluación (F12)
+  --self-eval MODE          off | basic | full (default: usa config YAML)
 ```
 
 ### Combinaciones más comunes
@@ -1053,15 +1306,22 @@ architect run "PROMPT" -a review -v
 # Tarea automatizada (CI/scripts)
 architect run "PROMPT" --mode yolo --quiet --json
 
+# Con evaluación automática (recomendado para tareas importantes)
+architect run "PROMPT" -a build --mode yolo --self-eval basic
+
 # Debug completo de una ejecución
 architect run "PROMPT" -a build -vvv --log-file debug.jsonl --no-stream
 
 # Simulación antes de ejecutar
 architect run "PROMPT" -a build --dry-run -v
 
-# Con modelo específico y timeout largo
-architect run "PROMPT" -a build --model gpt-4o --timeout 300 --mode yolo
+# Con modelo específico, self-eval y timeout largo
+architect run "PROMPT" -a build --model gpt-4o --timeout 300 --mode yolo --self-eval full
 
 # Proyecto externo con config propia
 architect run "PROMPT" -a build -w /ruta/proyecto -c /ruta/proyecto/architect.yaml
+
+# Pipeline completo: ejecutar, evaluar, capturar JSON
+architect run "PROMPT" --mode yolo --self-eval basic --quiet --json \
+  | jq '{status, steps, output: .output[:200]}'
 ```
