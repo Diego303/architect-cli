@@ -303,9 +303,10 @@ def test_integration_structure():
     _ok(f"MixedModeRunner.__init__ tiene: {params}")
 
     _info("Verificar que CLI importa GracefulShutdown y lo usa")
-    from architect import cli
-    import inspect as ins
-    source = ins.getsource(cli.run)
+    # cli.run es un objeto Click Command, no una función Python —
+    # hay que leer el fuente directamente
+    cli_path = Path(__file__).parent.parent / "src" / "architect" / "cli.py"
+    source = cli_path.read_text()
     assert "GracefulShutdown()" in source, "CLI no instancia GracefulShutdown"
     assert "shutdown=shutdown" in source, "CLI no pasa shutdown a los loops"
     assert "step_timeout=" in source, "CLI no pasa step_timeout a los loops"

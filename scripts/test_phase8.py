@@ -44,7 +44,7 @@ def _warn(msg: str) -> None:
 def _run_cli(*args) -> tuple[int, str, str]:
     """Ejecuta el CLI architect y retorna (returncode, stdout, stderr)."""
     result = subprocess.run(
-        ["python", "-m", "architect", *args],
+        [sys.executable, "-m", "architect", *args],
         capture_output=True,
         text=True,
         cwd=Path(__file__).parent.parent,
@@ -136,10 +136,10 @@ def test_version_consistency():
     # CLI headers (verificar en código fuente)
     cli_path = Path(__file__).parent.parent / "src" / "architect" / "cli.py"
     cli_content = cli_path.read_text()
-    assert f"v{EXPECTED_VERSION}" in cli_content, (
-        f"cli.py no tiene v{EXPECTED_VERSION} en headers"
+    assert EXPECTED_VERSION in cli_content, (
+        f"cli.py no tiene {EXPECTED_VERSION} en el fuente"
     )
-    _ok(f"cli.py headers: v{EXPECTED_VERSION}")
+    _ok(f"cli.py _VERSION = {EXPECTED_VERSION!r}")
 
     return True
 

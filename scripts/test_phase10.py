@@ -136,7 +136,9 @@ def test_repo_indexer_excludes():
     index = indexer.build_index()
 
     # Los archivos en dirs ignorados NO deben aparecer
-    excluded = [f for f in index.files if "__pycache__" in f or "node_modules" in f or ".git" in f]
+    # Usamos partes de ruta para evitar falsos positivos (.gitignore contiene ".git")
+    IGNORED = {"__pycache__", "node_modules", ".git"}
+    excluded = [f for f in index.files if any(part in IGNORED for part in Path(f).parts)]
     assert not excluded, f"Dirs ignorados no deben indexarse: {excluded}"
 
 
@@ -766,12 +768,12 @@ test("Versión 0.15.0 consistente en __init__.py y pyproject.toml", test_version
 def test_cli_version():
     import subprocess
     result = subprocess.run(
-        ["python", "-m", "architect", "--version"],
+        [sys.executable, "-m", "architect", "--version"],
         cwd=str(Path(__file__).parent.parent),
         capture_output=True,
         text=True,
     )
-    assert "0.15.0" in result.output or "0.15.0" in result.stderr
+    assert "0.15.0" in result.stdout or "0.15.0" in result.stderr
 
 
 test("CLI --version muestra 0.15.0", test_cli_version)

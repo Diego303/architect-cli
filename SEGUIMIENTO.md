@@ -8,7 +8,7 @@ Este documento registra el progreso de implementación del proyecto architect si
 
 - **Inicio**: 2026-02-18
 - **Fase Actual**: v3-core Completada — Rediseño del núcleo del agente
-- **Estado**: ✅ v0.15.0 — AgentLoop while-True, StopReason, graceful close, ContextManager.manage(), PostEditHooks, nivel HUMAN, Args Summarizer
+- **Estado**: ✅ v0.15.3 — AgentLoop while-True, StopReason, graceful close, ContextManager.manage(), PostEditHooks, nivel HUMAN con iconos (fix pipeline), Args Summarizer
 
 ---
 
@@ -1197,14 +1197,20 @@ Verificación automática tras operaciones de edición de archivos:
 - `HookConfig`: `name`, `command` (con `{file}` como placeholder), `file_patterns`, `timeout=15`, `enabled=True`
 - El output del hook se añade al resultado de la tool para que el LLM pueda corregir errores automáticamente
 
-**M5 — Log level HUMAN (25)**
+**M5 — Log level HUMAN (25) — con formato visual completo (v0.15.2)**
 
 Nuevo nivel entre INFO (20) y WARNING (30) para trazabilidad del agente:
 
 - `HUMAN = 25` en `logging/levels.py`, registrado con `logging.addLevelName()`
-- `HumanFormatter.format_event(event, **kw)`: match/case sobre ~12 tipos de eventos del agente
+- `HumanFormatter.format_event(event, **kw)`: match/case sobre ~15 tipos de eventos del agente, con iconos:
+  - 🔄 LLM calls y cierre | 🔧 Tools locales | 🌐 Tools MCP | 🔍 Hooks | ✅ Completado
+  - ⚠️ Safety nets | ❌ Errores | ⚡ Detenido | 📦 Contexto | ✓/✗ Resultados
+- Evento `agent.llm.response` — muestra "LLM respondió con N tool calls" o "texto final"
+- Distinción visual MCP vs local en tool calls (`🌐` vs `🔧`)
+- Hooks individualizados con nombre, resultado y detalle (`🔍 Hook python-lint: ✓`)
+- Coste opcional en mensaje de completado (`✅ Agente completado ... Coste: $X.XXXX`)
 - `HumanLogHandler(logging.Handler)`: filtra `record.levelno == HUMAN`, escribe a stderr
-- `HumanLog`: helper tipado con métodos `llm_call()`, `tool_call()`, `tool_result()`, `hook_complete()`, `agent_done()`, `safety_net()`, `closing()`, `loop_complete()`
+- `HumanLog`: helper tipado con métodos `llm_call()`, `llm_response()`, `tool_call(is_mcp, mcp_server)`, `tool_result()`, `hook_complete(hook, success, detail)`, `agent_done(cost)`, `safety_net()`, `closing()`, `loop_complete()`
 - **Tres pipelines de logging independientes**: JSON file (DEBUG+) + Human handler (solo HUMAN) + Console técnico (excluye HUMAN, controlado por -v)
 - Por defecto sin `-v`: el usuario solo ve los logs HUMAN (trazabilidad limpia)
 

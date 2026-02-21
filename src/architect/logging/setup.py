@@ -92,33 +92,25 @@ def configure_logging(
         # Excluir eventos HUMAN del console handler (ya los muestra el human_handler)
         console_handler.addFilter(lambda record: record.levelno != HUMAN)
 
-        if file_handler:
-            # Dual pipeline: usar ProcessorFormatter para consistencia
-            console_formatter = structlog.stdlib.ProcessorFormatter(
-                processor=structlog.dev.ConsoleRenderer(
-                    colors=sys.stderr.isatty(),
-                ),
-                foreign_pre_chain=shared_processors,
-            )
-            console_handler.setFormatter(console_formatter)
+        # Siempre usar ProcessorFormatter para que los handlers stdlib
+        # reciban LogRecords estructurados (necesario para HumanLogHandler)
+        console_formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.dev.ConsoleRenderer(
+                colors=sys.stderr.isatty(),
+            ),
+            foreign_pre_chain=shared_processors,
+        )
+        console_handler.setFormatter(console_formatter)
 
         logging.root.addHandler(console_handler)
 
     # ── Configurar structlog ──────────────────────────────────────────────
-    if file_handler:
-        # Con archivo: usar ProcessorFormatter.wrap_for_formatter para dual pipeline
-        processors = shared_processors + [
-            structlog.processors.format_exc_info,
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ]
-    else:
-        # Sin archivo: pipeline directo a ConsoleRenderer
-        processors = shared_processors + [
-            structlog.processors.format_exc_info,
-            structlog.dev.ConsoleRenderer(
-                colors=sys.stderr.isatty(),
-            ),
-        ]
+    # Siempre usar wrap_for_formatter para que los eventos fluyan por
+    # stdlib handlers (HumanLogHandler necesita LogRecords estructurados)
+    processors = shared_processors + [
+        structlog.processors.format_exc_info,
+        structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+    ]
 
     structlog.configure(
         processors=processors,

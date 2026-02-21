@@ -7,17 +7,21 @@ El usuario ve qué hace el agente paso a paso, sin ruido técnico.
 Formato de ejemplo:
     ─── architect · build · gpt-4.1 ──────────────────
 
-    Paso 1 → LLM (2 mensajes)
-      tool read_file → src/main.py
-        OK (142 líneas)
-      tool edit_file → src/main.py
-        OK
-        [Hook python-lint: OK]
+    🔄 Paso 1 → Llamada al LLM (3 mensajes)
+       ✓ LLM respondió con 2 tool calls
 
-    Paso 2 → LLM (7 mensajes)
-      LLM terminó sin tools
+       🔧 read_file → src/main.py
+          ✓ OK (142 líneas)
 
-    ✓ Completado (2 pasos)
+       🔧 edit_file → src/main.py
+          ✓ OK
+          🔍 Hook python-lint: OK
+
+    🔄 Paso 2 → Llamada al LLM (7 mensajes)
+       ✓ LLM respondió con texto final
+
+    ✅ Agente completado (2 pasos)
+       Razón: LLM decidió que terminó
 """
 
 import logging
@@ -47,90 +51,118 @@ class HumanFormatter:
 
             # ── LLM ─────────────────────────────────────────────────────
             case "agent.step.start":
-                step = kw.get("step", "?")
-                # No imprimir "Paso 0" antes del primer step visible
-                return None  # Se imprime en llm.call
+                # Suprimido — se imprime en agent.llm.call
+                return None
 
             case "agent.llm.call":
                 step = kw.get("step", "?")
                 msgs = kw.get("messages_count", "?")
-                return f"\nPaso {step + 1} → LLM ({msgs} mensajes)"
+                return f"\n🔄 Paso {step + 1} → Llamada al LLM ({msgs} mensajes)"
+
+            case "agent.llm.response":
+                tool_count = kw.get("tool_calls", 0)
+                if tool_count:
+                    s = "s" if tool_count > 1 else ""
+                    return f"   ✓ LLM respondió con {tool_count} tool call{s}"
+                return "   ✓ LLM respondió con texto final"
 
             case "agent.complete":
                 step = kw.get("step", "?")
-                return f"\n✓ Completado ({step} pasos)"
+                cost = kw.get("cost")
+                cost_line = ""
+                if cost:
+                    cost_line = f"\n   Coste: {cost}"
+                return f"\n✅ Agente completado ({step} pasos)\n   Razón: LLM decidió que terminó{cost_line}"
 
             # ── TOOLS ────────────────────────────────────────────────────
             case "agent.tool_call.execute":
                 tool = kw.get("tool", "?")
                 args = kw.get("args", {})
                 summary = _summarize_args(tool, args)
-                return f"  tool {tool} → {summary}"
+                is_mcp = kw.get("is_mcp", False)
+                if is_mcp:
+                    server = kw.get("mcp_server", "")
+                    return f"\n   🌐 {tool} → {summary}  (MCP: {server})"
+                return f"\n   🔧 {tool} → {summary}"
 
             case "agent.tool_call.complete":
                 tool = kw.get("tool", "?")
                 success = kw.get("success", True)
                 error = kw.get("error")
                 if success:
-                    return "    OK"
-                return f"    ERROR: {error}"
+                    return "      ✓ OK"
+                return f"      ✗ ERROR: {error}"
 
             case "agent.hook.complete":
-                return "    [hooks ejecutados]"
+                hook = kw.get("hook", "")
+                success = kw.get("success", True)
+                detail = kw.get("detail", "")
+                icon = "✓" if success else "⚠️"
+                if hook:
+                    line = f"      🔍 Hook {hook}: {icon}"
+                    if detail:
+                        line += f" {detail}"
+                    return line
+                return "      🔍 hooks ejecutados"
 
             # ── SAFETY NETS ──────────────────────────────────────────────
             case "safety.user_interrupt":
-                return "\n⚠  Interrumpido por el usuario"
+                return "\n⚠️  Interrumpido por el usuario"
 
             case "safety.max_steps":
                 step = kw.get("step", "?")
                 mx = kw.get("max_steps", "?")
-                return f"\n⚠  Límite de pasos alcanzado ({step}/{mx}) — pidiendo resumen..."
+                return f"\n⚠️  Límite de pasos alcanzado ({step}/{mx})\n    Pidiendo al agente que resuma..."
 
             case "safety.budget_exceeded" | "safety.budget":
                 spent = kw.get("spent", kw.get("error", "?"))
-                return f"\n⚠  Presupuesto excedido ({spent}) — pidiendo resumen..."
+                budget = kw.get("budget", "?")
+                return f"\n⚠️  Presupuesto excedido (${spent}/{budget})\n    Pidiendo al agente que resuma..."
 
             case "safety.timeout":
-                return "\n⚠  Timeout alcanzado — pidiendo resumen..."
+                return "\n⚠️  Timeout alcanzado\n    Pidiendo al agente que resuma..."
 
             case "safety.context_full":
-                return "\n⚠  Contexto lleno — pidiendo resumen..."
+                return "\n⚠️  Contexto lleno\n    Pidiendo al agente que resuma..."
 
             # ── LLM ERRORS ──────────────────────────────────────────────
             case "agent.llm_error":
                 error = kw.get("error", "desconocido")
-                return f"\n✗ Error del LLM: {error}"
+                return f"\n❌ Error del LLM: {error}"
 
             case "agent.step_timeout":
                 seconds = kw.get("seconds", "?")
-                return f"\n⚠  Step timeout ({seconds}s) — pidiendo resumen..."
+                return f"\n⚠️  Step timeout ({seconds}s)\n    Pidiendo al agente que resuma..."
 
             # ── AGENT LIFECYCLE ──────────────────────────────────────────
             case "agent.closing":
                 reason = kw.get("reason", "?")
                 steps = kw.get("steps", "?")
-                return f"\n→ Cerrando ({reason}, {steps} pasos completados)"
+                return f"\n🔄 Cerrando ({reason}, {steps} pasos completados)"
 
             case "agent.loop.complete":
                 status = kw.get("status", "?")
                 stop_reason = kw.get("stop_reason")
                 steps = kw.get("total_steps", "?")
                 tool_calls = kw.get("total_tool_calls", "?")
+                cost = kw.get("cost")
+                cost_line = ""
+                if cost:
+                    cost_line = f"\n   Coste: {cost}"
                 if status == "success":
-                    return f"  ({steps} pasos, {tool_calls} tool calls)"
+                    return f"  ({steps} pasos, {tool_calls} tool calls){cost_line}"
                 else:
                     reason_str = f" — {stop_reason}" if stop_reason else ""
-                    return f"\n⚡ Detenido ({status}{reason_str}, {steps} pasos)"
+                    return f"\n⚡ Detenido ({status}{reason_str}, {steps} pasos){cost_line}"
 
             # ── CONTEXT ──────────────────────────────────────────────────
             case "context.compressing":
                 exchanges = kw.get("tool_exchanges", "?")
-                return f"  [comprimiendo contexto — {exchanges} intercambios]"
+                return f"   📦 Comprimiendo contexto — {exchanges} intercambios"
 
             case "context.window_enforced":
                 removed = kw.get("removed_messages", "?")
-                return f"  [ventana de contexto: eliminados {removed} mensajes antiguos]"
+                return f"   📦 Ventana de contexto: eliminados {removed} mensajes antiguos"
 
             case _:
                 return None
@@ -148,25 +180,43 @@ class HumanLogHandler(logging.Handler):
         self.stream = stream or sys.stderr
         self.formatter_inst = HumanFormatter()
 
+    # Campos estándar de LogRecord (para fallback, extracción de record.__dict__)
+    _RECORD_FIELDS = frozenset({
+        "msg", "args", "levelname", "levelno", "pathname",
+        "filename", "module", "exc_info", "exc_text", "stack_info",
+        "lineno", "funcName", "created", "msecs", "relativeCreated",
+        "thread", "threadName", "processName", "process", "message",
+        "taskName", "name", "event",
+        "log_level", "logger", "logger_name", "timestamp",
+    })
+
+    # Campos añadidos por procesadores de structlog (para event dict de wrap_for_formatter)
+    _STRUCTLOG_META = frozenset({
+        "event", "level", "log_level", "logger", "logger_name", "timestamp",
+    })
+
     def emit(self, record: logging.LogRecord) -> None:
         try:
             # Solo procesar eventos de nivel HUMAN exacto
             if record.levelno != HUMAN:
                 return
 
-            # Extraer event y kwargs del record de structlog
-            event = getattr(record, "event", None) or record.getMessage()
-            # structlog pone los kwargs en el dict del record
-            kw = {
-                k: v for k, v in record.__dict__.items()
-                if not k.startswith("_") and k not in (
-                    "msg", "args", "levelname", "levelno", "pathname",
-                    "filename", "module", "exc_info", "exc_text", "stack_info",
-                    "lineno", "funcName", "created", "msecs", "relativeCreated",
-                    "thread", "threadName", "processName", "process", "message",
-                    "taskName", "name", "event",
-                )
-            }
+            # Extraer event y kwargs del record.
+            # wrap_for_formatter almacena el event dict completo en record.msg
+            if isinstance(record.msg, dict) and not record.args:
+                event_dict = record.msg
+                event = event_dict.get("event", "")
+                kw = {
+                    k: v for k, v in event_dict.items()
+                    if k not in self._STRUCTLOG_META
+                }
+            else:
+                # Fallback: extraer de atributos del record
+                event = getattr(record, "event", None) or record.getMessage()
+                kw = {
+                    k: v for k, v in record.__dict__.items()
+                    if not k.startswith("_") and k not in self._RECORD_FIELDS
+                }
 
             formatted = self.formatter_inst.format_event(event, **kw)
             if formatted is not None:
@@ -194,17 +244,38 @@ class HumanLog:
     def llm_call(self, step: int, messages_count: int) -> None:
         self._log.log(HUMAN, "agent.llm.call", step=step, messages_count=messages_count)
 
-    def tool_call(self, name: str, args: dict) -> None:
-        self._log.log(HUMAN, "agent.tool_call.execute", tool=name, args=args)
+    def llm_response(self, tool_calls: int = 0) -> None:
+        self._log.log(HUMAN, "agent.llm.response", tool_calls=tool_calls)
+
+    def tool_call(
+        self,
+        name: str,
+        args: dict,
+        is_mcp: bool = False,
+        mcp_server: str = "",
+    ) -> None:
+        self._log.log(
+            HUMAN, "agent.tool_call.execute",
+            tool=name, args=args, is_mcp=is_mcp, mcp_server=mcp_server,
+        )
 
     def tool_result(self, name: str, success: bool, error: str | None = None) -> None:
         self._log.log(HUMAN, "agent.tool_call.complete", tool=name, success=success, error=error)
 
-    def hook_complete(self, name: str) -> None:
-        self._log.log(HUMAN, "agent.hook.complete", tool=name)
+    def hook_complete(
+        self,
+        name: str,
+        hook: str = "",
+        success: bool = True,
+        detail: str = "",
+    ) -> None:
+        self._log.log(
+            HUMAN, "agent.hook.complete",
+            tool=name, hook=hook, success=success, detail=detail,
+        )
 
-    def agent_done(self, step: int) -> None:
-        self._log.log(HUMAN, "agent.complete", step=step)
+    def agent_done(self, step: int, cost: str | None = None) -> None:
+        self._log.log(HUMAN, "agent.complete", step=step, cost=cost)
 
     def safety_net(self, reason: str, **kw) -> None:
         self._log.log(HUMAN, f"safety.{reason}", **kw)

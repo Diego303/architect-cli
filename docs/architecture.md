@@ -23,14 +23,14 @@
 │     ├─ 8. ContextBuilder(repo_index, context_manager)                  │
 │     ├─ 8b. PostEditHooks(config)      core/hooks.py — auto-verificación│
 │     │                                                                   │
-│     ├─ 9a. AgentLoop (modo single-agent, -a flag)                      │
+│     ├─ 9a. AgentLoop (modo por defecto: build, o -a flag)              │
 │     │       ├─ ExecutionEngine(registry, config, confirm_mode,         │
 │     │       │                  hooks: PostEditHooks)                    │
 │     │       ├─ while True + safety nets (_check_safety_nets)           │
 │     │       ├─ HumanLog(log) — trazabilidad a stderr                    │
 │     │       ├─ step_timeout (por step) + timeout (total ejecución)     │
 │     │       └─ cost_tracker (CostTracker, opcional)                     │
-│     └─ 9b. MixedModeRunner (modo mixto, sin -a)                        │
+│     └─ 9b. MixedModeRunner (modo mixto, ya no es default)              │
 │             ├─ engine compartido (plan + build)                         │
 │             ├─ cost_tracker compartido                                  │
 │             └─ ContextManager compartido entre fases                    │
@@ -84,7 +84,7 @@ cli.py
 
 ## Flujo de ejecución completo
 
-### Modo single-agent (`architect run PROMPT -a build`)
+### Modo single-agent — el modo por defecto (`architect run PROMPT`)
 
 ```
 GracefulShutdown()
@@ -190,7 +190,7 @@ si normal: stdout ← state.final_output
 sys.exit(0)
 ```
 
-### Modo mixto (`architect run PROMPT`, sin -a)
+### Modo mixto (legacy, ya no es el default)
 
 ```
 [configuración igual que single-agent]
@@ -285,7 +285,7 @@ El `SelfEvaluator` puede cambiar un `"success"` a `"partial"` (exit 2) si detect
 | Decisión | Justificación |
 |----------|---------------|
 | Sync-first (no asyncio) | Predecible, debuggable; las llamadas al LLM son la única latencia |
-| Sin LangChain/LangGraph | El loop es simple (~200 líneas); añadir abstracción oscurecería el flujo |
+| Sin LangChain/LangGraph | El loop es simple (~300 líneas); añadir abstracción oscurecería el flujo |
 | Pydantic v2 como fuente de verdad | Validación, serialización y documentación en un solo sitio |
 | Tools nunca lanzan excepciones | El loop de agente permanece estable ante cualquier fallo de tool |
 | stdout limpio | Pipes Unix: `architect run ... | jq .` funciona sin filtrar |
@@ -298,5 +298,6 @@ El `SelfEvaluator` puede cambiar un `"success"` a `"partial"` (exit 2) si detect
 | `RepoIndexer` con `os.walk()` | Eficiente; poda directorios `in-place` (no los visita) |
 | `while True` + safety nets | El LLM decide cuando parar; los watchdogs son seguridad, no drivers |
 | `HUMAN` log level (25) | Trazabilidad del agente separada del noise técnico |
+| `HumanFormatter` con iconos | Formato visual (🔄🔧🌐✅⚡❌📦🔍) permite entender de un vistazo qué hace el agente |
 | `PostEditHooks` | Auto-verificación post-edit sin romper el loop; resultados vuelven al LLM |
 | Graceful close | Watchdogs piden resumen al LLM en lugar de cortar (excepto USER_INTERRUPT) |

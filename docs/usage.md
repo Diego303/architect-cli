@@ -42,7 +42,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.15.0
+architect --version   # architect, version 0.15.3
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -104,7 +104,7 @@ Sin `-c config.yaml`, architect usa todos los defaults:
 ## 3. Selección de agente (`-a`)
 
 ```bash
-# Sin -a → modo mixto automático (plan → build)
+# Sin -a → agente build directamente (default desde v0.15.0)
 architect run "refactoriza el módulo de autenticación"
 
 # Agente específico con -a / --agent
@@ -126,8 +126,8 @@ architect run "PROMPT" -a security-audit -c config.yaml
 | Detectar bugs o problemas | `review` |
 | Planificar antes de ejecutar | `plan` |
 | Crear archivos o refactorizar | `build` o modo mixto |
-| Tarea compleja que requiere análisis previo | modo mixto (sin `-a`) |
-| Tarea ya clara y bien definida | `build` directamente |
+| Tarea compleja que requiere análisis previo | `plan` primero, luego `build` |
+| Tarea ya clara y bien definida | `build` (default, sin `-a`) |
 
 ---
 
@@ -239,7 +239,7 @@ architect run "resume el proyecto" -a resume --quiet --json | jq -r .output
 ### Niveles de verbose
 
 ```bash
-# Sin -v: solo errores en stderr (WARNING level)
+# Sin -v: solo pasos del agente con iconos en stderr (nivel HUMAN, WARNING técnico)
 architect run "PROMPT" -a resume
 
 # -v: steps del agente y tool calls (INFO level)
@@ -1022,7 +1022,7 @@ print(f\"Tokens: {costs.get('total_tokens', 0):,}\")
 
 ## 18. Post-edit hooks (v3-M4)
 
-A partir de v0.15.0, architect puede ejecutar hooks automaticamente cuando el agente edita archivos. Los resultados vuelven al LLM para que pueda auto-corregir errores.
+A partir de v0.15.0, architect puede ejecutar hooks automáticamente cuando el agente edita archivos. Los resultados vuelven al LLM para que pueda auto-corregir errores. A partir de v0.15.2, cada hook se muestra individualmente con iconos: `🔍 Hook python-lint: ✓`.
 
 ### Configurar hooks en YAML
 

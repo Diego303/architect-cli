@@ -7,7 +7,7 @@ con el sistema local de tools.
 
 from typing import Any
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, ConfigDict, create_model
 
 from ..tools.base import BaseTool, ToolResult
 from .client import MCPClient, MCPConnectionError, MCPToolCallError
@@ -68,7 +68,7 @@ class MCPToolAdapter(BaseTool):
         if not self._raw_schema or not self._raw_schema.get("properties"):
             return create_model(
                 f"{self.name}_Args",
-                __config__=type("Config", (), {"extra": "forbid"}),
+                __config__=ConfigDict(extra="forbid"),
             )
 
         # Extraer propiedades del schema
@@ -91,7 +91,7 @@ class MCPToolAdapter(BaseTool):
         # Crear modelo dinámico
         model = create_model(
             f"{self.name}_Args",
-            __config__=type("Config", (), {"extra": "forbid"}),
+            __config__=ConfigDict(extra="forbid"),
             **fields,
         )
 

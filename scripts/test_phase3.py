@@ -20,7 +20,7 @@ from architect.core import AgentLoop, ContextBuilder, MixedModeRunner
 from architect.execution import ExecutionEngine
 from architect.llm import LLMAdapter
 from architect.logging import configure_logging_basic
-from architect.tools import ToolRegistry, register_filesystem_tools
+from architect.tools import ToolRegistry, register_filesystem_tools, register_search_tools
 
 
 def test_agents_registry():
@@ -84,6 +84,7 @@ def test_single_agent_mode():
     # Setup completo
     registry = ToolRegistry()
     register_filesystem_tools(registry, config.workspace)
+    register_search_tools(registry, config.workspace)
 
     try:
         llm = LLMAdapter(config.llm)
@@ -157,6 +158,7 @@ def test_mixed_mode():
     # Setup
     registry = ToolRegistry()
     register_filesystem_tools(registry, config.workspace)
+    register_search_tools(registry, config.workspace)
 
     try:
         llm = LLMAdapter(config.llm)

@@ -220,6 +220,7 @@ class AgentLoop:
 
             # ── EL LLM DECIDIÓ TERMINAR (no pidió tools) ──────────────────
             if not response.tool_calls:
+                self.hlog.llm_response(tool_calls=0)
                 self.log.info(
                     "agent.complete",
                     step=step,
@@ -230,13 +231,18 @@ class AgentLoop:
                         else response.content
                     ),
                 )
-                self.hlog.agent_done(step)
+                # Include cost in completion message if tracker available
+                cost_str = None
+                if self.cost_tracker:
+                    cost_str = self.cost_tracker.format_summary_line()
+                self.hlog.agent_done(step, cost=cost_str)
                 state.final_output = response.content
                 state.status = "success"
                 state.stop_reason = StopReason.LLM_DONE
                 break
 
             # ── EL LLM PIDIÓ TOOLS → EJECUTAR ────────────────────────────
+            self.hlog.llm_response(tool_calls=len(response.tool_calls))
             self.log.info(
                 "agent.tool_calls_received",
                 step=step,
@@ -438,7 +444,14 @@ class AgentLoop:
             tool=tc.name,  # type: ignore[attr-defined]
             args=self._sanitize_args_for_log(tc.arguments),  # type: ignore[attr-defined]
         )
-        self.hlog.tool_call(tc.name, tc.arguments)  # type: ignore[attr-defined]
+        # Detectar si es MCP tool para logging diferenciado
+        tool_name = tc.name  # type: ignore[attr-defined]
+        is_mcp = tool_name.startswith("mcp_")
+        mcp_server = tool_name.split("_")[1] if is_mcp and "_" in tool_name[4:] else ""
+        self.hlog.tool_call(
+            tool_name, tc.arguments,  # type: ignore[attr-defined]
+            is_mcp=is_mcp, mcp_server=mcp_server,
+        )
 
         result = self.engine.execute_tool_call(
             tc.name,  # type: ignore[attr-defined]
@@ -461,7 +474,7 @@ class AgentLoop:
                 error=result.error,
             )
             self.log.info("agent.hook.complete", step=step, tool=tc.name)  # type: ignore[attr-defined]
-            self.hlog.hook_complete(tc.name)  # type: ignore[attr-defined]
+            self.hlog.hook_complete(tc.name, hook="post-edit", success=True)  # type: ignore[attr-defined]
 
         self.log.info(
             "agent.tool_call.complete",

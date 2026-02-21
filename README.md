@@ -135,7 +135,7 @@ Valida la sintaxis y los valores del archivo de configuración antes de ejecutar
 
 Un agente define el **rol**, las **tools disponibles** y el **nivel de confirmación**.
 
-El agente por defecto es **`build`**: analiza el proyecto, elabora un plan interno y lo ejecuta en un solo paso, sin necesitar un agente `plan` previo.
+El agente por defecto es **`build`** (se usa automáticamente si no se especifica `-a`): analiza el proyecto, elabora un plan interno y lo ejecuta en un solo paso, sin necesitar un agente `plan` previo.
 
 | Agente | Descripción | Tools | Confirmación | Pasos |
 |--------|-------------|-------|-------------|-------|
@@ -275,17 +275,28 @@ Cuando un watchdog activa (`max_steps`, `timeout`, etc.), el agente recibe una i
 
 ## Logging
 
-Por defecto, architect muestra solo los pasos relevantes en un formato legible:
+Por defecto, architect muestra los pasos del agente en un formato legible con iconos:
 
 ```
-Paso 1 → LLM (6 mensajes)
-  tool read_file → src/main.py
-  [Hook ruff: OK]
-Paso 2 → LLM (10 mensajes)
-  tool edit_file → src/main.py (3→5 líneas)
-  [Hook ruff: OK]
-✓ Completado (2 pasos)
+🔄 Paso 1 → Llamada al LLM (6 mensajes)
+   ✓ LLM respondió con 2 tool calls
+
+   🔧 read_file → src/main.py
+      ✓ OK
+
+   🔧 edit_file → src/main.py (3→5 líneas)
+      ✓ OK
+      🔍 Hook ruff: ✓
+
+🔄 Paso 2 → Llamada al LLM (10 mensajes)
+   ✓ LLM respondió con texto final
+
+✅ Agente completado (2 pasos)
+   Razón: LLM decidió que terminó
+   Coste: $0.0042
 ```
+
+Las tools MCP se distinguen visualmente: `🌐 mcp_github_search → query (MCP: github)`
 
 ```bash
 # Solo pasos legibles (default — nivel HUMAN)
@@ -311,9 +322,11 @@ cat logs/session.jsonl | jq 'select(.event == "tool.call")'
 ```
 
 **Pipelines de logging independientes**:
-- **HUMAN** (stderr, default): pasos, tool calls, hooks — formato legible, sin ruido técnico
+- **HUMAN** (stderr, default): pasos, tool calls, hooks — formato legible con iconos, sin ruido técnico
 - **Técnico** (stderr, con `-v`): debug de LLM, tokens, retries — excluye mensajes HUMAN
 - **JSON file** (archivo, con `--log-file`): todos los eventos estructurados
+
+Ver [`docs/logging.md`](docs/logging.md) para detalles de la arquitectura de logging.
 
 ---
 
@@ -531,3 +544,5 @@ architect run PROMPT
 | v0.13.0 | **`run_command`**: ejecución de comandos (tests, linters) con 4 capas de seguridad |
 | v0.14.0 | **Cost tracking**: `CostTracker`, `--budget`, prompt caching, `LocalLLMCache` |
 | v0.15.0 | **v3-core** — rediseño del núcleo: `while True` loop, safety nets con cierre limpio, `PostEditHooks`, nivel de log HUMAN, `StopReason`, `ContextManager.manage()` |
+| v0.15.2 | **Human logging con iconos** — formato visual alineado con plan v3: 🔄🔧🌐✅⚡❌📦🔍, distinción MCP, eventos nuevos (`llm_response`), coste en completado |
+| v0.15.3 | **Fix pipeline structlog** — human logging funciona sin `--log-file`; `wrap_for_formatter` siempre activo |

@@ -14,7 +14,9 @@ Retries configurables desde LLMConfig:
 - Logging estructurado en cada reintento con número de intento y espera.
 """
 
+import json
 import os
+import uuid
 from typing import Any, Generator
 
 import litellm
@@ -488,6 +490,19 @@ class LLMAdapter:
                 )
             )
 
+        # Fallback: algunos modelos (llama3.1, mistral vía ollama) devuelven tool calls
+        # como JSON en el campo content en lugar de usar el campo tool_calls de OpenAI.
+        if not tool_calls and content:
+            text_tool_calls = self._try_parse_text_tool_calls(content)
+            if text_tool_calls:
+                self.log.debug(
+                    "llm.text_tool_calls_detected",
+                    count=len(text_tool_calls),
+                    tools=[tc.name for tc in text_tool_calls],
+                )
+                tool_calls = text_tool_calls
+                content = None  # El content era solo el tool call, no texto al usuario
+
         # Extraer finish_reason
         finish_reason = choice.finish_reason or "stop"
 
@@ -510,6 +525,85 @@ class LLMAdapter:
             finish_reason=finish_reason,
             usage=usage,
         )
+
+    def _try_parse_text_tool_calls(self, content: str) -> list[ToolCall]:
+        """Intenta parsear tool calls embebidos como texto en el content.
+
+        Algunos modelos (llama3.1, mistral via ollama) no usan el campo tool_calls
+        de la API OpenAI y devuelven la llamada como JSON en el campo content.
+
+        Formatos detectados:
+          {"name": "tool", "arguments": {...}}
+          {"type": "function", "name": "tool", "parameters": {...}}
+          [{"name": "tool1", ...}, {"name": "tool2", ...}]
+
+        Solo activa si el JSON tiene 'name' (str) + 'arguments'/'parameters'/'args'.
+        """
+        text = content.strip()
+
+        # Quitar bloques de código markdown si los hay
+        if text.startswith("```"):
+            lines = text.splitlines()
+            inner = lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
+            text = "\n".join(inner).strip()
+
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return []
+
+        def _to_tool_call(d: dict) -> ToolCall | None:
+            # Formato OpenAI nativo anidado:
+            # {"id": "...", "type": "function", "function": {"name": "...", "arguments": {...}}}
+            if "function" in d and isinstance(d["function"], dict):
+                fn = d["function"]
+                name = fn.get("name")
+                if name and isinstance(name, str):
+                    raw_args = fn.get("arguments") or fn.get("parameters") or {}
+                    if isinstance(raw_args, str):
+                        try:
+                            raw_args = json.loads(raw_args)
+                        except (json.JSONDecodeError, ValueError):
+                            raw_args = {}
+                    tc_id = d.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                    return ToolCall(id=tc_id, name=name, arguments=raw_args or {})
+
+            # Formato plano: {"name": "tool", "arguments": {...}}
+            # o {"type": "function", "name": "tool", "parameters": {...}}
+            name = d.get("name") or d.get("tool_name")
+            if not name or not isinstance(name, str):
+                return None
+            # Debe tener un campo de argumentos explícito para distinguir de JSON normal
+            if not any(k in d for k in ("arguments", "parameters", "args")):
+                return None
+            raw_args = d.get("arguments") or d.get("parameters") or d.get("args") or {}
+            if isinstance(raw_args, str):
+                try:
+                    raw_args = json.loads(raw_args)
+                except (json.JSONDecodeError, ValueError):
+                    raw_args = {}
+            if not isinstance(raw_args, dict):
+                raw_args = {}
+            return ToolCall(
+                id=d.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+                name=name,
+                arguments=raw_args,
+            )
+
+        if isinstance(parsed, dict):
+            tc = _to_tool_call(parsed)
+            return [tc] if tc else []
+
+        if isinstance(parsed, list):
+            result = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    tc = _to_tool_call(item)
+                    if tc:
+                        result.append(tc)
+            return result
+
+        return []
 
     def _parse_arguments(self, arguments: Any) -> dict[str, Any]:
         """Parsea los argumentos de un tool call.

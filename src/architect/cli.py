@@ -260,21 +260,21 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         $ architect run "refactoriza todo" --budget 0.50 --show-costs
     """
     try:
-        # Instalar GracefulShutdown para SIGINT + SIGTERM
-        shutdown = GracefulShutdown()
-
         # Cargar configuración
         config = load_config(
             config_path=kwargs.get("config"),
             cli_args=kwargs,
         )
 
-        # Configurar logging
+        # Configurar logging antes de cualquier otra cosa (evita debug spurious)
         configure_logging(
             config.logging,
             json_output=kwargs.get("json_output", False),
             quiet=kwargs.get("quiet", False),
         )
+
+        # Instalar GracefulShutdown para SIGINT + SIGTERM (después del logging)
+        shutdown = GracefulShutdown()
 
         # v3-M3: Sin agente → usar 'build' directamente (no MixedModeRunner)
         agent_name = kwargs.get("agent") or "build"
