@@ -35,20 +35,20 @@ architect run "resume qué hace este proyecto" -a resume
 # Revisar código
 architect run "revisa main.py y encuentra problemas" -a review
 
-# Planificar una tarea
+# Generar un plan detallado (sin modificar archivos)
 architect run "planifica cómo añadir tests al proyecto" -a plan
 
-# Modificar archivos (con confirmación)
-architect run "añade docstrings a todas las funciones de utils.py" -a build
-
-# Modo mixto automático (plan → build)
-architect run "refactoriza el módulo de config para usar dataclasses"
+# Modificar archivos — build planifica y ejecuta en un solo paso
+architect run "añade docstrings a todas las funciones de utils.py"
 
 # Ejecutar sin confirmaciones (CI/automatización)
 architect run "genera un archivo README.md para este proyecto" --mode yolo
 
 # Ver qué haría sin ejecutar nada
 architect run "reorganiza la estructura de carpetas" --dry-run
+
+# Limitar tiempo total de ejecución
+architect run "refactoriza el módulo de auth" --timeout 300
 ```
 
 ---
@@ -82,18 +82,19 @@ architect run PROMPT [opciones]
 | `--api-base URL` | URL base de la API |
 | `--api-key KEY` | API key directa |
 | `--no-stream` | Desactivar streaming |
-| `--timeout N` | Timeout en segundos (también aplica como timeout por step) |
+| `--timeout N` | Tiempo máximo total de ejecución en segundos (watchdog global) |
 
 **Opciones de output**:
 
 | Opción | Descripción |
 |--------|-------------|
-| `-v / -vv / -vvv` | Nivel de verbose (más `-v` = más detalle) |
-| `--log-level LEVEL` | Nivel de log: `debug`, `info`, `warn`, `error` |
+| `-v / -vv / -vvv` | Nivel de verbose técnico (sin `-v` solo se muestran los pasos del agente) |
+| `--log-level LEVEL` | Nivel de log: `human` (default), `debug`, `info`, `warn`, `error` |
 | `--log-file PATH` | Guardar logs JSON estructurados en archivo |
 | `--json` | Salida en formato JSON (compatible con `jq`) |
 | `--quiet` | Modo silencioso (solo resultado final en stdout) |
 | `--max-steps N` | Límite máximo de pasos del agente |
+| `--budget N` | Límite de coste en USD (detiene el agente si se supera) |
 
 **Opciones de evaluación**:
 
@@ -132,16 +133,16 @@ Valida la sintaxis y los valores del archivo de configuración antes de ejecutar
 
 ## Agentes
 
-Un agente define el **rol**, las **tools disponibles** y el **nivel de confirmación**:
+Un agente define el **rol**, las **tools disponibles** y el **nivel de confirmación**.
 
-| Agente | Descripción | Tools | Confirmación |
-|--------|-------------|-------|-------------|
-| `plan` | Analiza y genera un plan detallado | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `confirm-all` |
-| `build` | Crea y modifica archivos | todas (`edit_file`, `apply_patch`, `write_file`, `delete_file`, búsqueda y lectura) | `confirm-sensitive` |
-| `resume` | Lee y resume información | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` |
-| `review` | Revisión de código y mejoras | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` |
+El agente por defecto es **`build`**: analiza el proyecto, elabora un plan interno y lo ejecuta en un solo paso, sin necesitar un agente `plan` previo.
 
-**Modo mixto** (sin `-a`): ejecuta `plan → build` automáticamente. El plan generado se inyecta como contexto al agente build.
+| Agente | Descripción | Tools | Confirmación | Pasos |
+|--------|-------------|-------|-------------|-------|
+| `build` | Planifica y ejecuta modificaciones | todas (edición, búsqueda, lectura, `run_command`) | `confirm-sensitive` | 50 |
+| `plan` | Analiza y genera un plan detallado | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
+| `resume` | Lee y resume información | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 |
+| `review` | Revisión de código y mejoras | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
 
 **Agentes custom** en `config.yaml`:
 
@@ -153,6 +154,7 @@ agents:
     allowed_tools:
       - read_file
       - list_files
+      - run_command
     confirm_mode: confirm-all
     max_steps: 10
 ```
@@ -194,7 +196,8 @@ workspace:
   allow_delete: false
 
 logging:
-  verbose: 1
+  level: human                 # human (default), debug, info, warn, error
+  verbose: 0
 ```
 
 ### Variables de entorno
@@ -251,6 +254,7 @@ architect run "analiza el proyecto" -a review --quiet --json
 ```json
 {
   "status": "success",
+  "stop_reason": null,
   "output": "El proyecto consiste en...",
   "steps": 3,
   "tools_used": [
@@ -258,19 +262,36 @@ architect run "analiza el proyecto" -a review --quiet --json
     {"name": "read_file", "path": "src/main.py", "success": true}
   ],
   "duration_seconds": 8.5,
-  "model": "gpt-4o-mini"
+  "model": "gpt-4o-mini",
+  "costs": {"total_usd": 0.0023, "prompt_tokens": 4200, "completion_tokens": 380}
 }
 ```
+
+**`stop_reason`**: indica por qué terminó el agente. `null` = terminó naturalmente. Otros valores: `max_steps`, `timeout`, `budget_exceeded`, `context_full`, `user_interrupt`, `llm_error`.
+
+Cuando un watchdog activa (`max_steps`, `timeout`, etc.), el agente recibe una instrucción de cierre y hace una última llamada al LLM para resumir qué completó y qué queda pendiente antes de terminar.
 
 ---
 
 ## Logging
 
-```bash
-# Sin logs (resultado solo)
-architect run "..." --quiet
+Por defecto, architect muestra solo los pasos relevantes en un formato legible:
 
-# Pasos y tool calls
+```
+Paso 1 → LLM (6 mensajes)
+  tool read_file → src/main.py
+  [Hook ruff: OK]
+Paso 2 → LLM (10 mensajes)
+  tool edit_file → src/main.py (3→5 líneas)
+  [Hook ruff: OK]
+✓ Completado (2 pasos)
+```
+
+```bash
+# Solo pasos legibles (default — nivel HUMAN)
+architect run "..."
+
+# Nivel HUMAN + logs técnicos por step
 architect run "..." -v
 
 # Detalle completo (args, respuestas LLM)
@@ -279,12 +300,66 @@ architect run "..." -vv
 # Todo (HTTP, payloads)
 architect run "..." -vvv
 
+# Sin logs (resultado solo)
+architect run "..." --quiet
+
 # Logs a archivo JSON + consola
 architect run "..." -v --log-file logs/session.jsonl
 
 # Analizar logs después
 cat logs/session.jsonl | jq 'select(.event == "tool.call")'
 ```
+
+**Pipelines de logging independientes**:
+- **HUMAN** (stderr, default): pasos, tool calls, hooks — formato legible, sin ruido técnico
+- **Técnico** (stderr, con `-v`): debug de LLM, tokens, retries — excluye mensajes HUMAN
+- **JSON file** (archivo, con `--log-file`): todos los eventos estructurados
+
+---
+
+## Post-Edit Hooks
+
+Los hooks se ejecutan automáticamente después de cada operación de edición (`edit_file`, `write_file`, `apply_patch`). El resultado se añade al contexto del agente para que pueda corregir errores.
+
+```yaml
+hooks:
+  post_edit:
+    - name: ruff
+      command: "ruff check {file} --fix"
+      file_patterns: ["*.py"]
+      timeout: 15
+
+    - name: mypy
+      command: "mypy {file} --ignore-missing-imports"
+      file_patterns: ["*.py"]
+      timeout: 30
+
+    - name: prettier
+      command: "prettier --write {file}"
+      file_patterns: ["*.ts", "*.tsx", "*.json"]
+      timeout: 10
+```
+
+- `{file}` se reemplaza por el path del archivo editado
+- También disponible como variable de entorno `ARCHITECT_EDITED_FILE`
+- Un hook que falla (exit code != 0) devuelve su output al LLM como feedback
+
+---
+
+## Control de costes
+
+```yaml
+costs:
+  budget_usd: 2.0         # Detiene el agente si supera $2
+  warn_at_usd: 1.5        # Avisa en logs al llegar a $1.5
+```
+
+```bash
+# Límite de presupuesto por CLI
+architect run "..." --budget 1.0
+```
+
+El coste acumulado aparece en el output `--json` bajo `costs`. Cuando se supera el presupuesto, el agente recibe una instrucción de cierre y hace un último resumen antes de terminar (`stop_reason: "budget_exceeded"`).
 
 ---
 
@@ -326,6 +401,7 @@ architect run "analiza el proyecto" --disable-mcp
       --mode yolo \
       --quiet \
       --json \
+      --budget 3.0 \
       -c ci/architect.yaml \
     | tee result.json
 
@@ -333,7 +409,7 @@ architect run "analiza el proyecto" --disable-mcp
   run: |
     STATUS=$(cat result.json | jq -r .status)
     if [ "$STATUS" != "success" ]; then
-      echo "architect falló con status: $STATUS"
+      echo "architect falló con status: $STATUS ($(cat result.json | jq -r .stop_reason))"
       exit 1
     fi
 ```
@@ -350,7 +426,14 @@ workspace:
   root: .
 
 logging:
+  level: human
   verbose: 0
+
+hooks:
+  post_edit:
+    - name: lint
+      command: "ruff check {file} --fix"
+      file_patterns: ["*.py"]
 ```
 
 ---
@@ -359,6 +442,7 @@ logging:
 
 - **Path traversal**: todas las operaciones de archivos están confinadas al `workspace.root`. Intentos de acceder a `../../etc/passwd` son bloqueados.
 - **delete_file** requiere `workspace.allow_delete: true` explícito en config.
+- **run_command**: lista de comandos bloqueados (`rm -rf`, `dd`, `mkfs`, etc.) y whitelist de comandos de desarrollo seguros. El directorio de trabajo está siempre confinado al workspace.
 - **Tools MCP** son marcadas como sensibles por defecto (requieren confirmación en `confirm-sensitive`).
 - **API keys** nunca se loggean, solo el nombre de la variable de entorno.
 
@@ -393,46 +477,57 @@ architect run "..." --api-base http://proxy.internal:8000
 architect run PROMPT
     │
     ├── load_config()          YAML + env vars + CLI flags
-    ├── configure_logging()    stderr dual-pipeline (consola + JSON)
-    ├── ToolRegistry           tools locales (fs, edición, búsqueda) + MCP remotas
+    ├── configure_logging()    3 pipelines: HUMAN + técnico + JSON file
+    ├── ToolRegistry           tools locales (fs, edición, búsqueda, run_command) + MCP remotas
     ├── RepoIndexer            árbol del workspace → inyectado en system prompt
-    ├── LLMAdapter             LiteLLM con retries selectivos
-    ├── ContextManager         pruning del context window (3 niveles)
+    ├── LLMAdapter             LiteLLM con retries selectivos + prompt caching
+    ├── ContextManager         pruning: compress + enforce_window + is_critically_full
+    ├── PostEditHooks          lint/test automático post-edición
+    ├── CostTracker            coste acumulado + watchdog de presupuesto
     │
-    ├── AgentLoop (o MixedModeRunner)
-    │       │
-    │       ├── [check shutdown]      SIGINT/SIGTERM graceful
-    │       ├── [StepTimeout]         SIGALRM por step
-    │       ├── llm.completion()      → streaming chunks a stderr
-    │       ├── engine.execute()      → paralelo si posible → confirmar → ejecutar
-    │       ├── ctx.append_results()  → siguiente iteración
-    │       └── context_mgr.prune()   → truncar/resumir/ventana deslizante
-    │
-    └── SelfEvaluator (opcional, --self-eval basic|full)
-            └── evaluate_basic() / evaluate_full() con reintentos
+    └── AgentLoop (while True — el LLM decide cuándo parar)
+            │
+            ├── _check_safety_nets()   max_steps / budget / timeout / context_full
+            │       └── si salta → _graceful_close(): última LLM call sin tools
+            │                         el agente resume qué hizo y qué queda pendiente
+            ├── context_manager.manage()     compress + enforce_window si necesario
+            ├── llm.completion()             → streaming chunks a stderr
+            ├── si no hay tool_calls         → LLM_DONE, fin natural
+            ├── engine.execute_tool_calls()  → paralelo si posible → confirmar → ejecutar
+            ├── engine.run_post_edit_hooks() → lint/test → feedback al LLM si falla
+            └── repetir
 ```
 
+**Razones de parada** (`stop_reason` en el output JSON):
+
+| Razón | Descripción |
+|-------|-------------|
+| `null` / `llm_done` | El LLM decidió que terminó (terminación natural) |
+| `max_steps` | Watchdog: límite de pasos alcanzado |
+| `budget_exceeded` | Watchdog: límite de coste superado |
+| `context_full` | Watchdog: context window lleno (>95%) |
+| `timeout` | Watchdog: tiempo total excedido |
+| `user_interrupt` | El usuario hizo Ctrl+C / SIGTERM (corte inmediato) |
+| `llm_error` | Error irrecuperable del LLM |
+
 **Decisiones de diseño**:
-- Sync-first (predecible, debuggable; el loop principal es ~400 líneas sin magia)
+- Sync-first (predecible, debuggable; el loop principal es ~300 líneas sin magia)
 - Sin LangChain/LangGraph (el loop es directo y controlado)
 - Pydantic v2 como fuente de verdad para schemas y validación
 - Errores de tools devueltos al LLM como resultado (no rompen el loop)
 - stdout limpio para pipes, todo lo demás a stderr
-- Context pruning en 3 niveles para tareas largas sin explotar el context window
+- Watchdogs piden cierre limpio — el agente nunca termina a mitad de frase
 
 ---
 
-## Funcionalidades avanzadas (v0.9–v0.12)
+## Historial de versiones
 
 | Versión | Funcionalidad |
 |---------|---------------|
-| v0.9.0 | **Edición incremental**: `edit_file` (str-replace exacto) y `apply_patch` (unified diff) — el agente modifica archivos sin reescribirlos completos |
-| v0.10.0 | **Indexer + búsqueda**: árbol del repo en el system prompt, `search_code` (regex), `grep` (literal), `find_files` (glob) |
-| v0.11.0 | **Context management**: truncado de tool results largos, compresión de pasos antiguos con LLM, hard limit de tokens, parallel tool calls |
-| v0.12.0 | **Self-evaluation**: `--self-eval basic` evalúa el resultado, `--self-eval full` reintenta con prompt de corrección automáticamente |
-
-## Extensiones futuras (F13–F14)
-
-- `run_command` — ejecución de comandos (tests, linters, compilación) con seguridad por capas
-- Cost tracking — visibilidad del coste por step y presupuesto configurable (`--budget`)
-- Prompt caching — ahorro de tokens en llamadas repetidas al proveedor LLM
+| v0.9.0 | **Edición incremental**: `edit_file` (str-replace exacto) y `apply_patch` (unified diff) |
+| v0.10.0 | **Indexer + búsqueda**: árbol del repo en el system prompt, `search_code`, `grep`, `find_files` |
+| v0.11.0 | **Context management**: truncado de tool results, compresión de pasos con LLM, hard limit, parallel tool calls |
+| v0.12.0 | **Self-evaluation**: `--self-eval basic/full` evalúa y reintenta automáticamente |
+| v0.13.0 | **`run_command`**: ejecución de comandos (tests, linters) con 4 capas de seguridad |
+| v0.14.0 | **Cost tracking**: `CostTracker`, `--budget`, prompt caching, `LocalLLMCache` |
+| v0.15.0 | **v3-core** — rediseño del núcleo: `while True` loop, safety nets con cierre limpio, `PostEditHooks`, nivel de log HUMAN, `StopReason`, `ContextManager.manage()` |

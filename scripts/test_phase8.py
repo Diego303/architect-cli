@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-EXPECTED_VERSION = "0.8.0"
+EXPECTED_VERSION = "0.15.0"
 
 
 def _separator(title: str) -> None:
@@ -82,6 +82,14 @@ def test_imports():
         ("architect.mcp.adapter", "MCP adapter"),
         ("architect.mcp.discovery", "MCP discovery"),
         ("architect.logging.setup", "logging setup"),
+        # Módulos añadidos en v3-core
+        ("architect.core.hooks", "post-edit hooks (v3-M4)"),
+        ("architect.core.evaluator", "self-evaluator (F12)"),
+        ("architect.logging.levels", "HUMAN log level (v3-M5)"),
+        ("architect.logging.human", "HumanFormatter/HumanLog (v3-M5/M6)"),
+        ("architect.indexer.tree", "repo indexer (F10)"),
+        ("architect.costs", "cost tracker (F14)"),
+        ("architect.llm.cache", "LLM cache (F14)"),
     ]
 
     for module, description in modules:

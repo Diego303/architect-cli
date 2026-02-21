@@ -7,10 +7,38 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
-## [No Publicado]
+## [0.15.1] - 2026-02-21
 
-### En Progreso
-(v3-core completada — sin cambios pendientes)
+### Correcciones — Alineación del Test Suite con v3-core
+
+#### Modificado
+
+**`scripts/test_phase3.py`**:
+- Añadida nota de deprecación en `test_mixed_mode()`: `MixedModeRunner` es legacy a partir de v3-M3. El agente `build` planifica internamente; la CLI ya no usa `MixedModeRunner` como modo por defecto.
+
+**`scripts/test_phase5.py`**:
+- Añadida nota en docstring indicando que las pruebas de los componentes v3-M5 (nivel `HUMAN`, `HumanFormatter`, `HumanLogHandler`, 3 pipelines) están en `scripts/test_v3_m5.py`.
+
+**`scripts/test_phase6.py`**:
+- Añadido `stop_reason` a `required_fields` en `test_json_output_format()`: en v3, `AgentState.to_output_dict()` siempre incluye `stop_reason` (valor `None` si terminó limpiamente).
+- Separada la verificación de `model` (campo condicional, solo presente si `state.model` está seteado).
+
+**`scripts/test_phase8.py`**:
+- Actualizado `EXPECTED_VERSION = "0.8.0"` → `"0.15.0"`.
+- Añadidos 7 módulos v3 al `test_imports()`: `architect.core.hooks`, `architect.core.evaluator`, `architect.logging.levels`, `architect.logging.human`, `architect.indexer.tree`, `architect.costs`, `architect.llm.cache`.
+
+**`scripts/test_phase9.py`**:
+- Actualizado `EXPECTED_VERSION = "0.9.0"` → `"0.15.0"`.
+
+**`scripts/test_phase10.py`**:
+- Actualizada versión `"0.10.0"` → `"0.15.0"` (2 ocurrencias).
+
+**`scripts/test_phase11.py`**:
+- Actualizada versión `"0.11.0"` → `"0.15.0"` (2 ocurrencias).
+- Los métodos de la API original (`truncate_tool_result`, `enforce_window`, `maybe_compress`) siguen presentes en `ContextManager` junto con el nuevo `manage()` unificado de v3-M2.
+
+**`scripts/test_phase12.py`**:
+- Actualizada versión `"0.12.0"` → `"0.15.0"` (2 ocurrencias).
 
 ---
 

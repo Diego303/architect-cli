@@ -119,9 +119,16 @@ def test_single_agent_mode():
 
 
 def test_mixed_mode():
-    """Prueba modo mixto plan→build."""
+    """Prueba modo mixto plan→build.
+
+    NOTA v3-M3 (legacy): MixedModeRunner fue eliminado como modo por defecto
+    en v3-core. El agente 'build' ahora planifica internamente (prompt integrado
+    ANALIZAR→PLANIFICAR→EJECUTAR→VERIFICAR→CORREGIR) sin necesitar un agente
+    'plan' previo. MixedModeRunner se mantiene en el código por compatibilidad,
+    pero ya no se invoca desde la CLI.
+    """
     print("=" * 70)
-    print("PRUEBA 3: Modo Mixto (plan → build)")
+    print("PRUEBA 3: Modo Mixto (plan → build) [LEGACY — ver v3-M3]")
     print("=" * 70)
     print()
 
