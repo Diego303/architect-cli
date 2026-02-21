@@ -371,7 +371,7 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         # Crear cost tracker
         cost_tracker: CostTracker | None = None
         if config.costs.enabled:
-            price_loader = PriceLoader(custom_prices_file=config.costs.prices_file)
+            price_loader = PriceLoader(custom_path=config.costs.prices_file)
             budget_usd = kwargs.get("budget") or config.costs.budget_usd
             cost_tracker = CostTracker(
                 price_loader=price_loader,

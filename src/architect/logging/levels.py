@@ -18,3 +18,19 @@ import logging
 # Nivel custom: entre INFO (20) y WARNING (30)
 HUMAN = 25
 logging.addLevelName(HUMAN, "HUMAN")
+
+# Inyectar el método .human() en la clase Logger de Python 
+# Esto evita el AttributeError: object has no attribute 'human'
+def _human_method(self, message, *args, **kwargs):
+    if self.isEnabledFor(HUMAN):
+        self._log(HUMAN, message, args, **kwargs)
+
+logging.Logger.human = _human_method
+
+# Registrar el nivel en structlog para evitar KeyError: 25
+import structlog
+if hasattr(structlog, "stdlib"):
+    try:
+        structlog.stdlib.LEVEL_TO_NAME[HUMAN] = "human"
+    except (AttributeError, KeyError):
+        pass
