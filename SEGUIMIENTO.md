@@ -7,8 +7,8 @@ Este documento registra el progreso de implementación del proyecto architect si
 ## Estado General
 
 - **Inicio**: 2026-02-18
-- **Fase Actual**: F12 Completada — Self-Evaluation (Critic Agent)
-- **Estado**: ✅ v0.12.0 — SelfEvaluator (basic + full) + --self-eval CLI flag
+- **Fase Actual**: v3-core Completada — Rediseño del núcleo del agente
+- **Estado**: ✅ v0.15.0 — AgentLoop while-True, StopReason, graceful close, ContextManager.manage(), PostEditHooks, nivel HUMAN, Args Summarizer
 
 ---
 
@@ -935,11 +935,314 @@ Este documento registra el progreso de implementación del proyecto architect si
 
 ---
 
+### ✅ F13 - run_command — Ejecución de Código (Completada: 2026-02-21)
+
+**Objetivo**: Añadir tool `run_command` al agente `build` para que pueda ejecutar tests, linters, compiladores y scripts, con cuatro capas de seguridad para prevenir ejecución destructiva.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 13.1 - `CommandsConfig` en `config/schema.py`
+- [x] 13.2 - `RunCommandArgs` en `tools/schemas.py`
+- [x] 13.3 - `RunCommandTool` en `tools/commands.py` (nuevo archivo)
+- [x] 13.4 - `register_command_tools()` en `tools/setup.py` + actualización de `register_all_tools()`
+- [x] 13.5 - Exports en `tools/__init__.py`
+- [x] 13.6 - Confirmación dinámica en `execution/engine.py` (`_should_confirm_command`)
+- [x] 13.7 - `run_command` añadido a `allowed_tools` del agente `build`
+- [x] 13.8 - Sección `run_command` añadida a `BUILD_PROMPT`
+- [x] 13.9 - Flags `--allow-commands` y `--no-commands` en CLI
+- [x] 13.10 - Versión bumpeada a 0.13.0 (4 sitios)
+- [x] 13.11 - Sección `commands:` en `config.example.yaml`
+- [x] 13.12 - Test script `scripts/test_phase13.py`
+
+#### Archivos Creados
+- `src/architect/tools/commands.py` — `RunCommandTool` con las 4 capas de seguridad
+
+#### Archivos Modificados
+- `src/architect/config/schema.py` — `CommandsConfig` + añadido a `AppConfig`
+- `src/architect/tools/schemas.py` — `RunCommandArgs`
+- `src/architect/tools/setup.py` — `register_command_tools()`, `register_all_tools()` actualizado
+- `src/architect/tools/__init__.py` — exports actualizados
+- `src/architect/execution/engine.py` — `_should_confirm_command()` + override dinámico
+- `src/architect/agents/registry.py` — `run_command` en `allowed_tools` de `build`
+- `src/architect/agents/prompts.py` — sección `run_command` en `BUILD_PROMPT`
+- `src/architect/cli.py` — `--allow-commands`, `--no-commands`, versión 0.13.0
+- `src/architect/__init__.py` — `__version__ = "0.13.0"`
+- `pyproject.toml` — `version = "0.13.0"`
+- `config.example.yaml` — sección `commands:` documentada
+- `scripts/test_phase13.py` — test manual sin LLM
+
+#### Componentes Implementados
+
+**`RunCommandTool`** (`src/architect/tools/commands.py`):
+
+- **Capa 1 — Blocklist** (`BLOCKED_PATTERNS`, 9+ regexes):
+  - `rm -rf /`, `rm -rf ~/` — eliminación del sistema/home
+  - `sudo`, `su` — escalada de privilegios
+  - `chmod 777` — permisos inseguros
+  - `curl|bash`, `wget|bash` — ejecución remota
+  - `dd of=/dev/`, `> /dev/sd` — escritura a dispositivos
+  - `mkfs` — formateo de discos
+  - Fork bomb (`:(){ :|:& };:`)
+  - `pkill -9 -f`, `killall -9` — matar procesos masivamente
+  - Extensible con `commands_config.blocked_patterns` (regexes adicionales del usuario)
+
+- **Capa 2 — Clasificación dinámica**:
+  - `SAFE_COMMANDS` (20+ comandos): `ls`, `cat`, `git status`, `git log`, `grep`, etc.
+  - `DEV_PREFIXES` (20+ prefijos): `pytest`, `mypy`, `ruff`, `make`, `cargo test`, etc.
+  - `classify_sensitivity(command)` → `'safe' | 'dev' | 'dangerous'`
+  - Extensible con `commands_config.safe_commands`
+
+- **Capa 3 — Timeouts + output limit**:
+  - `subprocess.run(..., timeout=timeout, stdin=subprocess.DEVNULL)` — headless, nunca espera input
+  - `_truncate(text, max_lines)`: preserva primera mitad + último cuarto del output
+  - stdout truncado a `max_output_lines` (default: 200 líneas)
+  - stderr truncado a `max_output_lines // 4` (default: 50 líneas)
+
+- **Capa 4 — Directory sandboxing**:
+  - `cwd` siempre validado con `validate_path(cwd, workspace_root)`
+  - Sin `cwd` → `workspace_root` automáticamente
+  - Path traversal en `cwd` bloqueado por `validate_path()`
+
+- **`allowed_only` mode** (Capa 2 extendida):
+  - Si `commands_config.allowed_only=True`: comandos `dangerous` rechazados en `execute()` sin confirmación previa
+  - Útil para CI/pipelines con whitelist estricto
+
+**`_should_confirm_command(command, tool)`** en `ExecutionEngine`:
+
+Matriz de confirmación dinámica para `run_command` (override del `tool.sensitive` estático):
+
+| Clasificación | yolo | confirm-sensitive | confirm-all |
+|---------------|------|-------------------|-------------|
+| `safe`        | No   | No                | Sí          |
+| `dev`         | No   | Sí                | Sí          |
+| `dangerous`   | Sí   | Sí                | Sí          |
+
+**`CommandsConfig`** (`src/architect/config/schema.py`):
+- `enabled: bool = True` — registrar o no la tool
+- `default_timeout: int = 30` — timeout por defecto (1-600s)
+- `max_output_lines: int = 200` — límite de líneas antes de truncar (10-5000)
+- `blocked_patterns: list[str] = []` — regexes extra a bloquear
+- `safe_commands: list[str] = []` — comandos extra considerados seguros
+- `allowed_only: bool = False` — modo whitelist estricto
+
+**CLI flags nuevos**:
+- `--allow-commands` — habilitar `run_command` (override de `commands.enabled`)
+- `--no-commands` — deshabilitar `run_command` (override de `commands.enabled`)
+
+**Integración en agente `build`**:
+- `run_command` añadido a `allowed_tools` del agente `build` en `registry.py`
+- `BUILD_PROMPT` actualizado con tabla de uso y flujo de verificación: editar → ejecutar → corregir
+
+#### Entregable
+✅ `architect run "ejecuta los tests y arregla los que fallen" -a build --mode confirm-sensitive --allow-commands` puede ejecutar `pytest`, interpretar resultados, editar código y re-ejecutar. Comandos peligrosos bloqueados automáticamente.
+
+---
+
+### ✅ F14 - Cost Tracking + Prompt Caching (Completada: 2026-02-21)
+
+**Objetivo**: Visibilidad completa del coste por step, budget enforcement, prompt caching y cache local de respuestas LLM.
+
+**Progreso**: 100%
+
+#### Tareas Completadas
+- [x] 14.1 - Módulo `costs/` completo: `PriceLoader`, `ModelPricing`, `CostTracker`, `StepCost`, `BudgetExceededError`
+- [x] 14.2 - `costs/default_prices.json` con precios actualizados de 10+ modelos
+- [x] 14.3 - `llm/cache.py`: `LocalLLMCache` con TTL y SHA-256 determinista
+- [x] 14.4 - `llm/adapter.py`: `_prepare_messages_with_caching()` + `cache_read_input_tokens` + integración local cache
+- [x] 14.5 - `config/schema.py`: `CostsConfig`, `LLMCacheConfig`, `LLMConfig.prompt_caching`
+- [x] 14.6 - `core/state.py`: campo `cost_tracker` + `to_output_dict()` incluye `costs`
+- [x] 14.7 - `core/loop.py`: registrar coste post-LLM + manejar `BudgetExceededError`
+- [x] 14.8 - `core/mixed_mode.py`: pasar `cost_tracker` a ambos `AgentLoop`
+- [x] 14.9 - `cli.py`: flags `--budget`, `--show-costs`, `--cache`, `--no-cache`, `--cache-clear`
+- [x] 14.10 - Versión bumped a `0.14.0` en 4 archivos
+- [x] 14.11 - `config.example.yaml`: secciones `costs:`, `llm_cache:`, `llm.prompt_caching`
+- [x] 14.12 - `scripts/test_phase14.py`: test manual sin LLM (6 suites de tests)
+
+#### Archivos Creados
+- `src/architect/costs/__init__.py` — exports del módulo
+- `src/architect/costs/prices.py` — `PriceLoader`, `ModelPricing`
+- `src/architect/costs/tracker.py` — `CostTracker`, `StepCost`, `BudgetExceededError`
+- `src/architect/costs/default_prices.json` — precios por millón de tokens para 10+ modelos
+- `src/architect/llm/cache.py` — `LocalLLMCache`
+- `scripts/test_phase14.py` — test manual completo
+
+#### Archivos Modificados
+- `src/architect/llm/adapter.py` — prompt caching headers, `cache_read_input_tokens`, local cache
+- `src/architect/llm/__init__.py` — exportar `LocalLLMCache`
+- `src/architect/config/schema.py` — `CostsConfig`, `LLMCacheConfig`, `LLMConfig.prompt_caching`
+- `src/architect/core/state.py` — campo `cost_tracker`, `to_output_dict()` incluye costes
+- `src/architect/core/loop.py` — `cost_tracker` param, `BudgetExceededError` handling
+- `src/architect/core/mixed_mode.py` — `cost_tracker` param y propagación
+- `src/architect/cli.py` — 5 flags nuevos, lógica de costes, versión 0.14.0
+- `config.example.yaml` — secciones `costs:`, `llm_cache:`, `llm.prompt_caching`
+
+#### Diseño Técnico
+
+**Cost Tracking** (`CostTracker`):
+- `record(step, model, usage, source)` — calcula coste con precios diferenciados para tokens cacheados
+- `source` ∈ `{"agent", "eval", "summary"}` — desglose por origen de la llamada
+- `BudgetExceededError` — lanzado si `total_cost_usd > budget_usd`
+- Warn threshold: log warning cuando se alcanza `warn_at_usd` (sin detener)
+- `summary()` → dict con totales y `by_source`
+- `format_summary_line()` → `"$0.0042 (12,450 in / 3,200 out / 500 cached)"`
+
+**Precios** (`PriceLoader`):
+- Match exacto → match por prefijo → fallback genérico (3.0/15.0 por millón)
+- `prices_file` opcional para precios custom en YAML
+- Precios embebidos: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `gemini-2.0-flash`, `deepseek-chat`, `ollama` (coste 0)
+
+**Prompt Caching** (`_prepare_messages_with_caching`):
+- Convierte `system.content: str` → `system.content: [{"type":"text","text":"...","cache_control":{"type":"ephemeral"}}]`
+- Compatible con Anthropic; ignorado silenciosamente en otros proveedores
+- Controlado por `LLMConfig.prompt_caching: bool = False`
+
+**Local LLM Cache** (`LocalLLMCache`):
+- Clave: SHA-256[:24] de JSON canónico `(messages, tools)`
+- Almacenamiento: un archivo `.json` por entrada en `~/.architect/cache/`
+- TTL: compara `time.time()` con `st_mtime` del archivo
+- Fallos silenciosos: `get()` retorna `None`, `set()` hace log warning
+
+**CLI Flags nuevos**:
+- `--budget FLOAT` — límite USD (override de `costs.budget_usd`)
+- `--show-costs` — mostrar resumen al final
+- `--cache` — activar LocalLLMCache
+- `--no-cache` — desactivar aunque esté en config
+- `--cache-clear` — limpiar cache antes de ejecutar
+
+#### Invariantes
+- `CostTracker.record()` nunca lanza excepto `BudgetExceededError`
+- `PriceLoader.get_prices()` nunca lanza (siempre retorna un `ModelPricing`)
+- `LocalLLMCache.get()` siempre retorna `None` si falla (no rompe el flujo)
+- `cost_tracker=None` es válido en toda la cadena (feature completamente opt-out)
+
+#### Entregable
+✅ v0.14.0 — Cost tracking completo con budget enforcement, prompt caching transparente para Anthropic/OpenAI, cache local para desarrollo, y 5 nuevos flags CLI.
+
+---
+
+### ✅ v3-core — Rediseño del Núcleo (Completada: 2026-02-21)
+
+**Objetivo**: Rediseñar el núcleo del agente para que sea más robusto, más observable y más inteligente. Seis mejoras coordinadas que elevan la calidad del sistema sin romper la API existente.
+
+**Plan de referencia**: `plan-v3-core.md`
+
+**Progreso**: 100%
+
+#### Mejoras Implementadas
+
+- [x] M1 - AgentLoop while True + StopReason + graceful close
+- [x] M2 - ContextManager.manage() + is_critically_full()
+- [x] M3 - Plan integrado en build, MixedMode eliminado como default
+- [x] M4 - PostEditHooks — verificación automática tras editar
+- [x] M5 - Log level HUMAN (25) — trazabilidad del agente sin ruido técnico
+- [x] M6 - Args Summarizer — resumen human-readable de argumentos de tools
+- [x] Docs — config.example.yaml corregido y actualizado, SEGUIMIENTO.md y CHANGELOG.md
+
+#### Archivos Creados
+- `src/architect/core/hooks.py` — `PostEditHooks`, `HookRunResult`
+- `src/architect/logging/levels.py` — constante `HUMAN = 25`
+- `src/architect/logging/human.py` — `HumanFormatter`, `HumanLogHandler`, `HumanLog`, `_summarize_args`
+
+#### Archivos Modificados Principales
+- `src/architect/core/state.py` — `StopReason` enum (7 valores) + campo `stop_reason` en `AgentState`
+- `src/architect/core/loop.py` — reescritura completa con `while True`, `_check_safety_nets()`, `_graceful_close()`
+- `src/architect/core/context.py` — métodos `manage()` e `is_critically_full()`
+- `src/architect/core/__init__.py` — exporta `StopReason`
+- `src/architect/agents/prompts.py` — `BUILD_PROMPT` con workflow integrado ANALIZAR→PLANIFICAR→EJECUTAR→VERIFICAR→CORREGIR
+- `src/architect/agents/registry.py` — plan yolo/20 pasos, build 50 pasos, resume 15, review 20
+- `src/architect/config/schema.py` — `HookConfig`, `HooksConfig`, `LoggingConfig.level` incluye "human"
+- `src/architect/execution/engine.py` — parámetro `hooks`, método `run_post_edit_hooks()`
+- `src/architect/logging/setup.py` — reescritura con tres pipelines independientes
+- `src/architect/logging/__init__.py` — exporta HUMAN, HumanLog, HumanLogHandler, _summarize_args
+- `src/architect/cli.py` — reescritura completa, agente `build` como default, v0.15.0
+- `src/architect/__init__.py` — versión 0.15.0
+- `pyproject.toml` — versión 0.15.0
+- `config.example.yaml` — corrección YAML (`agents: {}`, `mode: "off"`), sección `hooks:`, logging `human`
+
+#### Detalle por Mejora
+
+**M1 — AgentLoop `while True` + `StopReason` + graceful close**
+
+El loop anterior usaba `for step in range(max_steps)`, cortando bruscamente cuando se alcanzaba el límite. El nuevo loop es `while True` con safety nets que solicitan un cierre gracioso al LLM antes de parar:
+
+- `StopReason` enum: `LLM_DONE`, `MAX_STEPS`, `BUDGET_EXCEEDED`, `CONTEXT_FULL`, `TIMEOUT`, `USER_INTERRUPT`, `LLM_ERROR`
+- `_check_safety_nets(state, step)` → `StopReason | None`: comprueba señales de parada antes de cada llamada LLM
+- `_graceful_close(state, reason, tools_schema)`: hace una última llamada LLM sin tools con instrucción de resumen → el agente resume lo que hizo
+- `_CLOSE_INSTRUCTIONS`: dict con el texto de instrucción para cada motivo de parada
+- `timeout: int | None` en `AgentLoop.__init__`: watchdog de tiempo total transcurrido
+
+**M2 — `ContextManager.manage()` + `is_critically_full()`**
+
+Pipeline unificado de gestión de contexto llamado antes de cada LLM call:
+
+- `manage(messages, llm=None)` → `list[dict]`: aplica `maybe_compress()` + `enforce_window()` en orden
+- `is_critically_full(messages)` → `bool`: True si el contexto supera el 95% del límite máximo
+
+**M3 — Plan integrado en build, MixedMode eliminado como default**
+
+- `BUILD_PROMPT` ahora incluye un workflow de 5 fases: ANALIZAR→PLANIFICAR→EJECUTAR→VERIFICAR→CORREGIR
+- `architect run "..."` sin `--agent` usa directamente el agente `build` (antes usaba MixedModeRunner)
+- Agente `plan`: `confirm_mode` cambiado de "confirm-all" a "yolo" (solo lee archivos)
+- `max_steps` actualizados: plan→20, build→50 (watchdog, no driver), resume→15, review→20
+- `MixedModeRunner` se mantiene en el código pero ya no es el path default
+
+**M4 — PostEditHooks**
+
+Verificación automática tras operaciones de edición de archivos:
+
+- `PostEditHooks(hooks_config, workspace_root)`: ejecuta hooks configurados en YAML
+- `EDIT_TOOLS = frozenset({"edit_file", "write_file", "apply_patch"})`: las tools que disparan hooks
+- `run_for_tool(tool_name, args)` → `str | None`: ejecuta hooks cuyo patrón coincide con el archivo editado
+- `HookConfig`: `name`, `command` (con `{file}` como placeholder), `file_patterns`, `timeout=15`, `enabled=True`
+- El output del hook se añade al resultado de la tool para que el LLM pueda corregir errores automáticamente
+
+**M5 — Log level HUMAN (25)**
+
+Nuevo nivel entre INFO (20) y WARNING (30) para trazabilidad del agente:
+
+- `HUMAN = 25` en `logging/levels.py`, registrado con `logging.addLevelName()`
+- `HumanFormatter.format_event(event, **kw)`: match/case sobre ~12 tipos de eventos del agente
+- `HumanLogHandler(logging.Handler)`: filtra `record.levelno == HUMAN`, escribe a stderr
+- `HumanLog`: helper tipado con métodos `llm_call()`, `tool_call()`, `tool_result()`, `hook_complete()`, `agent_done()`, `safety_net()`, `closing()`, `loop_complete()`
+- **Tres pipelines de logging independientes**: JSON file (DEBUG+) + Human handler (solo HUMAN) + Console técnico (excluye HUMAN, controlado por -v)
+- Por defecto sin `-v`: el usuario solo ve los logs HUMAN (trazabilidad limpia)
+
+**M6 — Args Summarizer**
+
+`_summarize_args(tool_name, args)` en `logging/human.py`:
+
+- `read_file`/`delete_file`: muestra path
+- `write_file`: muestra path + número de líneas
+- `edit_file`: muestra path + (líneas_old→líneas_new)
+- `apply_patch`: muestra path + (+añadidas -eliminadas)
+- `search_code`/`grep`: muestra patrón + directorio
+- `list_files`/`find_files`: muestra path o patrón
+- `run_command`: muestra el comando (truncado a 60 chars)
+- Caso por defecto: primer valor del primer argumento
+
+#### Decisiones de Diseño
+
+**¿Por qué `while True` en lugar de `for step in range(max_steps)`?**
+
+El LLM debe controlar cuándo termina. Con `for-range`, el agente era cortado bruscamente al llegar al límite — el usuario no sabía qué se hizo. Con `while True` + safety nets + graceful close, el agente siempre resume su trabajo antes de parar, y el output es siempre legible.
+
+**¿Por qué eliminar MixedMode como default?**
+
+El `BUILD_PROMPT` ahora incluye la capacidad de planificar internamente. Tener dos agentes separados (plan→build) consumía más tokens y añadía latencia sin beneficio observable para la mayoría de tareas. El modo mixto sigue disponible con `-a plan` + pipeline manual.
+
+**¿Por qué un nivel HUMAN en lugar de usar INFO?**
+
+Para que el usuario pueda ver la trazabilidad del agente (qué herramienta ejecutó, qué paso está haciendo) sin ver el ruido técnico de INFO (configuración cargada, herramientas registradas, retries, etc.). HUMAN es visible por defecto; INFO solo con `-v`.
+
+#### Entregable
+✅ v0.15.0 — El agente siempre cierra graciosamente, gestiona su contexto de forma integrada, planifica internamente, verifica sus ediciones con hooks, y muestra trazabilidad limpia en el terminal.
+
+---
+
 ## Próximas Fases
 
-F12 completada. Siguiente según el plan:
-- F13: run_command — ejecución de código con seguridad por capas
-- F14: Cost tracking + prompt caching
+v3-core completada. El sistema está en v0.15.0 con arquitectura de núcleo rediseñada.
 
 ---
 

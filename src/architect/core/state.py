@@ -3,14 +3,36 @@ Estado del agente - Estructuras de datos inmutables para tracking.
 
 Define las estructuras de datos que representan el estado de ejecución
 del agente a lo largo de su ciclo de vida.
+
+v3: Añadido StopReason enum y campo stop_reason en AgentState.
 """
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..llm.adapter import LLMResponse
 from ..tools.base import ToolResult
+
+if TYPE_CHECKING:
+    from ..costs.tracker import CostTracker
+
+
+class StopReason(Enum):
+    """Razón por la que se detuvo el agente.
+
+    Distingue entre terminación natural (el LLM decidió acabar)
+    y terminación forzada por safety nets (watchdogs).
+    """
+
+    LLM_DONE = "llm_done"              # Natural: el LLM no pidió más tools
+    MAX_STEPS = "max_steps"            # Watchdog: límite de pasos alcanzado
+    BUDGET_EXCEEDED = "budget_exceeded"  # Watchdog: límite de coste superado
+    CONTEXT_FULL = "context_full"      # Watchdog: context window lleno
+    TIMEOUT = "timeout"                # Watchdog: tiempo total excedido
+    USER_INTERRUPT = "user_interrupt"  # El usuario hizo Ctrl+C / SIGTERM
+    LLM_ERROR = "llm_error"           # Error irrecuperable del LLM
 
 
 @dataclass(frozen=True)
@@ -81,9 +103,11 @@ class AgentState:
     messages: list[dict[str, Any]] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
     status: Literal["running", "success", "partial", "failed"] = "running"
+    stop_reason: StopReason | None = None
     final_output: str | None = None
     start_time: float = field(default_factory=time.time)
     model: str | None = None
+    cost_tracker: "CostTracker | None" = field(default=None)
 
     @property
     def current_step(self) -> int:
@@ -127,6 +151,7 @@ class AgentState:
         # Construir output dict
         output_dict: dict[str, Any] = {
             "status": self.status,
+            "stop_reason": self.stop_reason.value if self.stop_reason else None,
             "output": self.final_output,
             "steps": self.current_step,
             "tools_used": tools_used,
@@ -136,6 +161,10 @@ class AgentState:
         # Añadir modelo si está disponible
         if self.model:
             output_dict["model"] = self.model
+
+        # Añadir resumen de costes si está disponible
+        if self.cost_tracker is not None and self.cost_tracker.has_data():
+            output_dict["costs"] = self.cost_tracker.summary()
 
         return output_dict
 

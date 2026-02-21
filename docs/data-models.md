@@ -12,14 +12,15 @@ Todos usan Pydantic v2 con `extra = "forbid"` (claves desconocidas → error de 
 
 ```python
 class LLMConfig(BaseModel):
-    provider:    str   = "litellm"    # único proveedor soportado
-    mode:        str   = "direct"     # "direct" | "proxy"
-    model:       str   = "gpt-4o"     # cualquier modelo LiteLLM
-    api_base:    str | None = None    # URL base custom (LiteLLM Proxy, Ollama, etc.)
-    api_key_env: str   = "LITELLM_API_KEY"  # nombre de la env var con la API key
-    timeout:     int   = 60           # segundos por llamada al LLM
-    retries:     int   = 2            # reintentos ante errores transitorios
-    stream:      bool  = True         # streaming activo por defecto
+    provider:       str   = "litellm"    # único proveedor soportado
+    mode:           str   = "direct"     # "direct" | "proxy"
+    model:          str   = "gpt-4o"     # cualquier modelo LiteLLM
+    api_base:       str | None = None    # URL base custom (LiteLLM Proxy, Ollama, etc.)
+    api_key_env:    str   = "LITELLM_API_KEY"  # nombre de la env var con la API key
+    timeout:        int   = 60           # segundos por llamada al LLM
+    retries:        int   = 2            # reintentos ante errores transitorios
+    stream:         bool  = True         # streaming activo por defecto
+    prompt_caching: bool  = False        # F14: marcar system con cache_control (Anthropic/OpenAI)
 ```
 
 ### `AgentConfig`
@@ -29,14 +30,16 @@ class AgentConfig(BaseModel):
     system_prompt: str                        # inyectado como primer mensaje
     allowed_tools: list[str]  = []            # [] = todas las tools disponibles
     confirm_mode:  str        = "confirm-sensitive"  # "yolo"|"confirm-all"|"confirm-sensitive"
-    max_steps:     int        = 20            # máximo de iteraciones del loop
+    max_steps:     int        = 20            # Pydantic default=20; en DEFAULT_AGENTS varía:
+                                              #   plan=20, build=50, resume=15, review=20
 ```
 
 ### `LoggingConfig`
 
 ```python
 class LoggingConfig(BaseModel):
-    level:   str        = "info"   # "debug"|"info"|"warn"|"error"
+    # v3: "human" = nivel de trazabilidad del agente (HUMAN=25)
+    level:   str        = "human"  # "debug"|"info"|"human"|"warn"|"error"
     file:    Path|None  = None     # ruta al archivo .jsonl (opcional)
     verbose: int        = 0        # 0=warn, 1=info, 2=debug, 3+=all
 ```
@@ -91,6 +94,24 @@ Valores `0` desactivan el mecanismo correspondiente:
 - `summarize_after_steps=0` → sin compresión con LLM.
 - `max_context_tokens=0` → sin ventana deslizante (peligroso para tareas largas).
 
+### `HookConfig` (v3-M4)
+
+```python
+class HookConfig(BaseModel):
+    name:          str           # identificador del hook (ej: "python-lint")
+    command:       str           # comando shell a ejecutar; soporta {file} placeholder
+    file_patterns: list[str]    # patrones glob (ej: ["*.py", "*.ts"])
+    timeout:       int = 15     # ge=1, le=300 — segundos máximos
+    enabled:       bool = True  # si False, el hook se ignora
+```
+
+### `HooksConfig` (v3-M4)
+
+```python
+class HooksConfig(BaseModel):
+    post_edit: list[HookConfig] = []  # hooks ejecutados después de editar un archivo
+```
+
 ### `EvaluationConfig` (F12)
 
 ```python
@@ -104,6 +125,43 @@ class EvaluationConfig(BaseModel):
 - `mode="basic"`: una llamada LLM extra tras la ejecución. Si no pasa, estado → `"partial"`.
 - `mode="full"`: hasta `max_retries` ciclos de evaluación + corrección con nuevo prompt.
 
+### `CommandsConfig` (F13)
+
+```python
+class CommandsConfig(BaseModel):
+    enabled:          bool       = True    # si False, run_command no se registra
+    default_timeout:  int        = 30      # segundos por defecto (ge=1, le=600)
+    max_output_lines: int        = 200     # líneas antes de truncar (ge=10, le=5000)
+    blocked_patterns: list[str]  = []      # regexes extra a bloquear
+    safe_commands:    list[str]  = []      # comandos adicionales clasificados como 'safe'
+    allowed_only:     bool       = False   # si True, dangerous rechazados en execute()
+```
+
+Override desde CLI: `--allow-commands` (enabled=True) / `--no-commands` (enabled=False).
+
+### `CostsConfig` (F14)
+
+```python
+class CostsConfig(BaseModel):
+    enabled:      bool        = True   # si False, no se instancia CostTracker
+    prices_file:  Path | None = None   # precios custom; si None, usa default_prices.json
+    budget_usd:   float | None = None  # límite USD; BudgetExceededError si se supera
+    warn_at_usd:  float | None = None  # umbral de aviso (log warning, sin detener)
+```
+
+Override desde CLI: `--budget FLOAT` (equivale a `budget_usd`).
+
+### `LLMCacheConfig` (F14)
+
+```python
+class LLMCacheConfig(BaseModel):
+    enabled:   bool = False              # si True, activa LocalLLMCache
+    dir:       Path = Path("~/.architect/cache")  # directorio en disco
+    ttl_hours: int  = 24                 # ge=1, le=8760 — horas de validez
+```
+
+Override desde CLI: `--cache` (enabled=True), `--no-cache` (enabled=False), `--cache-clear` (limpia antes de ejecutar).
+
 ### `AppConfig` (raíz)
 
 ```python
@@ -116,6 +174,10 @@ class AppConfig(BaseModel):
     indexer:    IndexerConfig    = IndexerConfig()   # F10
     context:    ContextConfig    = ContextConfig()   # F11
     evaluation: EvaluationConfig = EvaluationConfig() # F12
+    commands:   CommandsConfig   = CommandsConfig()   # F13
+    costs:      CostsConfig      = CostsConfig()      # F14
+    llm_cache:  LLMCacheConfig   = LLMCacheConfig()   # F14
+    hooks:      HooksConfig      = HooksConfig()      # v3-M4
 ```
 
 ---
@@ -142,8 +204,11 @@ class LLMResponse(BaseModel):
     content:      str | None         # texto de respuesta (None si hay tool_calls)
     tool_calls:   list[ToolCall]     # lista de tool calls solicitadas ([] si ninguna)
     finish_reason: str               # "stop" | "tool_calls" | "length" | ...
-    usage:        dict | None        # {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
+    usage:        dict | None        # {"prompt_tokens": N, "completion_tokens": N,
+                                     #  "total_tokens": N, "cache_read_input_tokens": N}
 ```
+
+`cache_read_input_tokens` está disponible cuando el proveedor usa prompt caching (Anthropic). El `CostTracker` lo usa para calcular el coste reducido de tokens cacheados.
 
 El `finish_reason` más importante:
 - `"stop"` + `tool_calls=[]`: el agente terminó. `content` es la respuesta final.
@@ -163,6 +228,22 @@ class StreamChunk(BaseModel):
 ---
 
 ## Estado del agente (`core/state.py`)
+
+### `StopReason` (enum, v3)
+
+```python
+class StopReason(Enum):
+    """Razón por la que se detuvo el agente."""
+    LLM_DONE         = "llm_done"          # Natural: el LLM no pidió más tools
+    MAX_STEPS         = "max_steps"         # Watchdog: límite de pasos alcanzado
+    BUDGET_EXCEEDED   = "budget_exceeded"   # Watchdog: límite de coste superado
+    CONTEXT_FULL      = "context_full"      # Watchdog: context window lleno
+    TIMEOUT           = "timeout"           # Watchdog: tiempo total excedido
+    USER_INTERRUPT    = "user_interrupt"    # El usuario hizo Ctrl+C / SIGTERM
+    LLM_ERROR         = "llm_error"        # Error irrecuperable del LLM
+```
+
+Distingue terminacion natural (`LLM_DONE`) de paradas forzadas por safety nets. Se almacena en `AgentState.stop_reason` y se incluye en el output JSON.
 
 ### `ToolCallResult` (frozen dataclass)
 
@@ -202,9 +283,11 @@ class AgentState:
     messages:     list[dict]           # historial OpenAI (crece cada step)
     steps:        list[StepResult]     # historial de steps (append-only)
     status:       str = "running"      # "running" | "success" | "partial" | "failed"
+    stop_reason:  StopReason | None = None  # v3: razón de parada (None mientras running)
     final_output: str | None = None    # respuesta final cuando status != "running"
     start_time:   float = field(...)
     model:        str | None = None    # modelo usado (para output)
+    cost_tracker: CostTracker | None = None   # F14: tracker de costes (inyectado por CLI)
 
     # Propiedades computadas
     current_step:     int    # len(steps)
@@ -213,17 +296,172 @@ class AgentState:
 
     def to_output_dict(self) -> dict:
         # Serialización para --json
-        return {
+        result = {
             "status":           self.status,
+            "stop_reason":      self.stop_reason.value if self.stop_reason else None,
             "output":           self.final_output or "",
             "steps":            len(self.steps),
             "tools_used":       [...],  # lista de {name, args parciales, success}
             "duration_seconds": time.time() - self.start_time,
             "model":            self.model,
         }
+        # F14: incluir costes si hay datos
+        if self.cost_tracker and self.cost_tracker.has_data():
+            result["costs"] = self.cost_tracker.summary()
+        return result
 ```
 
-El campo `status` puede ser modificado externamente por el `SelfEvaluator` (F12): si la evaluación falla en modo `basic`, el evaluador cambia `state.status = "partial"`.
+El campo `status` puede ser modificado externamente por el `SelfEvaluator` (F12) o por `BudgetExceededError` (F14).
+
+---
+
+## Módulo de costes (`costs/`) — F14
+
+### `ModelPricing` (dataclass)
+
+```python
+@dataclass
+class ModelPricing:
+    input_per_million:        float          # USD por millón de tokens de input
+    output_per_million:       float          # USD por millón de tokens de output
+    cached_input_per_million: float | None   # USD/M para tokens cacheados (None = usar input_per_million)
+```
+
+### `PriceLoader`
+
+Carga precios desde `costs/default_prices.json` (o un archivo custom vía `CostsConfig.prices_file`).
+
+```python
+class PriceLoader:
+    def __init__(self, custom_prices_file: Path | None = None): ...
+
+    def get_prices(self, model: str) -> ModelPricing:
+        # 1. Match exacto (ej: "gpt-4o" → prices["gpt-4o"])
+        # 2. Match por prefijo (ej: "claude-sonnet-4-6-20250514" → prices["claude-sonnet-4-6"])
+        # 3. Fallback genérico: input=3.0, output=15.0, cached=None
+        # NUNCA lanza excepciones
+```
+
+Modelos embebidos en `default_prices.json`: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`, `gemini/gemini-2.0-flash`, `deepseek/deepseek-chat`, `ollama` (coste 0).
+
+### `StepCost` (dataclass)
+
+```python
+@dataclass
+class StepCost:
+    step:          int    # número de step del agente
+    model:         str    # modelo usado (ej: "gpt-4o")
+    input_tokens:  int    # tokens de input totales (incluye cached)
+    output_tokens: int    # tokens de output
+    cached_tokens: int    # tokens servidos desde caché del proveedor
+    cost_usd:      float  # coste en USD del step
+    source:        str    # "agent" | "eval" | "summary"
+```
+
+### `CostTracker`
+
+```python
+class CostTracker:
+    def __init__(
+        self,
+        price_loader: PriceLoader,
+        budget_usd:   float | None = None,   # límite; BudgetExceededError si se supera
+        warn_at_usd:  float | None = None,   # umbral de aviso (log warning, sin excepción)
+    ): ...
+
+    def record(self, step: int, model: str, usage: dict, source: str = "agent") -> None:
+        # Extrae prompt_tokens, completion_tokens, cache_read_input_tokens
+        # Calcula coste diferenciado: cached_tokens × cached_rate + no_cached × input_rate + output × output_rate
+        # Lanza BudgetExceededError si total_cost_usd > budget_usd
+        # NUNCA lanza otras excepciones
+
+    # Propiedades de agregación
+    total_input_tokens:  int    # suma de todos los input_tokens
+    total_output_tokens: int    # suma de todos los output_tokens
+    total_cached_tokens: int    # suma de todos los cached_tokens
+    total_cost_usd:      float  # coste total en USD
+    step_count:          int    # número de steps registrados
+
+    def has_data(self) -> bool: ...     # True si step_count > 0
+    def summary(self) -> dict: ...      # totales + desglose by_source
+    def format_summary_line(self) -> str:  # "$0.0042 (12,450 in / 3,200 out / 500 cached)"
+```
+
+`summary()` retorna:
+```python
+{
+    "total_input_tokens":  12450,
+    "total_output_tokens": 3200,
+    "total_cached_tokens": 500,
+    "total_tokens":        15650,
+    "total_cost_usd":      0.004213,
+    "by_source":           {"agent": 0.003800, "eval": 0.000413},
+}
+```
+
+### `BudgetExceededError`
+
+Lanzada por `CostTracker.record()` cuando `total_cost_usd > budget_usd`. El `AgentLoop` la captura, pone `state.status = "partial"` y termina el loop.
+
+```python
+class BudgetExceededError(Exception):
+    pass
+```
+
+---
+
+## Post-Edit Hooks (`core/hooks.py`) -- v3-M4
+
+### `HookRunResult` (dataclass, v3-M4)
+
+Resultado de la ejecución de un hook post-edit individual.
+
+```python
+@dataclass
+class HookRunResult:
+    hook_name:  str    # nombre del hook (ej: "python-lint")
+    success:    bool   # True si exit_code == 0
+    output:     str    # stdout + stderr combinados (truncado a 1000 chars)
+    exit_code:  int    # código de salida del proceso
+```
+
+`PostEditHooks` ejecuta los hooks configurados en `HooksConfig.post_edit` despues de cada operacion de edicion (`edit_file`, `write_file`, `apply_patch`). Los resultados se concatenan y se devuelven al LLM como parte del tool result para que pueda auto-corregir errores de lint o typecheck.
+
+---
+
+## Cache local LLM (`llm/cache.py`) — F14
+
+### `LocalLLMCache`
+
+```python
+class LocalLLMCache:
+    def __init__(self, cache_dir: Path, ttl_hours: int = 24): ...
+
+    def get(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None,
+    ) -> LLMResponse | None:
+        # Retorna LLMResponse si hay hit válido (no expirado)
+        # Retorna None en miss, expiración o error — NUNCA lanza
+
+    def set(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None,
+        response: LLMResponse,
+    ) -> None:
+        # Guarda response en disco — falla silenciosamente en error
+
+    def clear(self) -> int: ...   # elimina todos los .json; retorna count
+    def stats(self) -> dict: ...  # {entries, expired, total_size_bytes, dir}
+
+    def _make_key(self, messages, tools) -> str:
+        # SHA-256[:24] de json.dumps({"messages":..., "tools":...}, sort_keys=True)
+        # Determinista independientemente del orden de claves
+```
+
+Un archivo `.json` por entrada en `cache_dir`. TTL basado en `mtime` del archivo. El `LLMAdapter` lo consulta antes de llamar a LiteLLM y guarda la respuesta si hay miss.
 
 ---
 
@@ -306,6 +544,16 @@ class EditFileArgs(BaseModel):
 class ApplyPatchArgs(BaseModel):
     path:  str             # archivo a modificar
     patch: str             # unified diff (formato --- +++ @@ ...)
+```
+
+### Tool de ejecución de comandos (F13)
+
+```python
+class RunCommandArgs(BaseModel):
+    command: str                     # comando a ejecutar (shell string)
+    cwd:     str | None = None       # directorio de trabajo (relativo al workspace)
+    timeout: int = 30                # segundos (ge=1, le=600)
+    env:     dict[str, str] | None = None  # variables de entorno adicionales
 ```
 
 ### Tools de búsqueda (F10)
@@ -393,9 +641,13 @@ Exception
 ├── AgentNotFoundError              agents/registry.py
 │   # Nombre de agente no encontrado en DEFAULT_AGENTS ni en YAML
 │
-└── StepTimeoutError(TimeoutError)  core/timeout.py
-    # Step del agente excedió el tiempo máximo configurado
-    # .seconds: int — tiempo en segundos que se superó
+├── StepTimeoutError(TimeoutError)  core/timeout.py
+│   # Step del agente excedió el tiempo máximo configurado
+│   # .seconds: int — tiempo en segundos que se superó
+│
+└── BudgetExceededError             costs/tracker.py
+    # Coste total de la sesión superó el budget_usd configurado
+    # Lanzada por CostTracker.record() → capturada por AgentLoop → state.status="partial"
 ```
 
 Estas excepciones son para señalización interna — la mayoría se captura en `ExecutionEngine` o en `AgentLoop` y se convierte en un `ToolResult(success=False)` o en un cambio de status del agente, respectivamente. **Ninguna debería propagarse hasta el usuario final.**

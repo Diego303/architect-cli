@@ -8,10 +8,10 @@ Definidos en `agents/registry.py` como `DEFAULT_AGENTS: dict[str, AgentConfig]`.
 
 | Agente | Tools disponibles | confirm_mode | max_steps | Propósito |
 |--------|-------------------|--------------|-----------|-----------|
-| `plan` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `confirm-all` | 10 | Analiza la tarea y genera un plan estructurado. Solo lectura. |
-| `build` | todas las tools (filesystem + edición + búsqueda) | `confirm-sensitive` | 20 | Ejecuta tareas: crea y modifica archivos con herramientas completas. |
+| `plan` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 | Analiza la tarea y genera un plan estructurado. Solo lectura. (v3: yolo porque plan no modifica archivos) |
+| `build` | todas las tools (filesystem + edición + búsqueda + `run_command`) | `confirm-sensitive` | 50 | Ejecuta tareas: crea y modifica archivos con herramientas completas. (v3: safety net, no driver del loop) |
 | `resume` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 10 | Lee y resume información. Solo lectura, sin confirmaciones. |
-| `review` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 | Revisa código y da feedback. Solo lectura, sin confirmaciones. |
+| `review` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 | Revisa código y da feedback. Solo lectura, sin confirmaciones. |
 
 Las tools de búsqueda (`search_code`, `grep`, `find_files`) están disponibles para todos los agentes desde F10. El agente `build` tiene acceso adicional a `edit_file` y `apply_patch` para edición incremental.
 
@@ -112,7 +112,7 @@ agents:
 ### Single-agent (`-a nombre`)
 
 ```
-AgentLoop(llm, engine, agent_config, ctx, shutdown, step_timeout, context_manager)
+AgentLoop(llm, engine, agent_config, ctx, shutdown, step_timeout, context_manager, cost_tracker, timeout)
   └─ run(prompt, stream, on_stream_chunk)
 ```
 
@@ -123,11 +123,11 @@ El agente especificado ejecuta el prompt directamente. El `engine` usa el `confi
 El modo por defecto. Ejecuta dos agentes en secuencia.
 
 ```
-MixedModeRunner(llm, plan_engine, plan_config, build_engine, build_config,
-                ctx, shutdown, step_timeout, context_manager)
+MixedModeRunner(llm, engine, plan_config, build_config, context_builder,
+                shutdown, step_timeout, context_manager, cost_tracker)
   └─ run(prompt, stream, on_stream_chunk)
        │
-       ├─ FASE 1: plan (sin streaming, confirm-all)
+       ├─ FASE 1: plan (sin streaming, yolo)
        │     plan_loop.run(prompt, stream=False)
        │     → plan_state.final_output = "## Pasos\n1. Leer main.py\n2. ..."
        │
@@ -150,11 +150,9 @@ MixedModeRunner(llm, plan_engine, plan_config, build_engine, build_config,
 
 El plan enriquece el contexto del build agent. El build agent no parte de cero — ya sabe qué hacer y en qué orden.
 
-**Nota importante**: En modo mixto se crean **dos `ExecutionEngine` distintos**:
-- `plan_engine` con `confirm_mode="confirm-all"` y tools solo-lectura + búsqueda.
-- `build_engine` con `confirm_mode="confirm-sensitive"` y todas las tools.
+**Nota importante**: En modo mixto se crean **dos `AgentLoop` distintos** pero comparten el mismo `ExecutionEngine`. Cada loop usa su propia `AgentConfig` (plan o build), lo que determina las tools disponibles y el confirm_mode.
 
-El `ContextManager` se **comparte** entre ambas fases para mantener una contabilidad coherente del contexto. El `SelfEvaluator` se aplica sobre el resultado final del `build_loop`.
+El `ContextManager` se **comparte** entre ambas fases para mantener una contabilidad coherente del contexto. El `CostTracker` se comparte entre ambas fases para que el presupuesto sea global. El `SelfEvaluator` se aplica sobre el resultado final del `build_loop`.
 
 ---
 
@@ -185,6 +183,7 @@ Agente build (+ todo lo anterior):
   ✓ edit_file       — edición incremental (str-replace)
   ✓ apply_patch     — aplicar unified diff
   ✓ delete_file     — eliminar (requiere allow_delete=true)
+  ✓ run_command     — ejecutar comandos del sistema (F13)
 
 Agentes custom: definidos explícitamente en allowed_tools
 ```
@@ -198,14 +197,14 @@ El subcomando `architect agents` muestra todos los agentes disponibles:
 ```bash
 $ architect agents
 Agentes disponibles:
-  plan    [confirm-all]       Analiza y planifica sin ejecutar
+  plan    [yolo]              Analiza y planifica sin ejecutar
   build   [confirm-sensitive] Crea y modifica archivos del workspace
   resume  [yolo]              Lee y resume información del proyecto
   review  [yolo]              Revisa código y genera feedback
 
 $ architect agents -c config.yaml
 Agentes disponibles:
-  plan    [confirm-all]       Analiza y planifica sin ejecutar
+  plan    [yolo]              Analiza y planifica sin ejecutar
   build * [confirm-all]       Crea y modifica archivos del workspace  ← override
   resume  [yolo]              Lee y resume información del proyecto
   review  [yolo]              Revisa código y genera feedback

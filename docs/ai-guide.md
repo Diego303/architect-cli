@@ -81,6 +81,28 @@ Cuando hagas un bump de versión, actualiza los 4:
 
 ### 6. El ContextManager nunca lanza excepciones
 
+### 7. `CostTracker.record()` y `PriceLoader.get_prices()` nunca lanzan (salvo `BudgetExceededError`)
+
+```python
+# ✓ CORRECTO — CostTracker
+def record(self, step, model, usage, source="agent") -> None:
+    # ... calcula coste ...
+    if self._budget_usd and self.total_cost_usd > self._budget_usd:
+        raise BudgetExceededError(...)  # ← única excepción permitida
+
+# PriceLoader siempre retorna un ModelPricing (fallback genérico si modelo desconocido)
+# LocalLLMCache.get() siempre retorna None si falla (no rompe el adapter)
+# LocalLLMCache.set() falla silenciosamente
+```
+
+### 8. `run_command` no usa `tool.sensitive` para confirmar
+
+La herramienta `run_command` tiene `sensitive=True` como atributo base, pero `ExecutionEngine` **no usa ese atributo** para esta tool. En su lugar llama a `_should_confirm_command()` que consulta `tool.classify_sensitivity(command)` dinámicamente. Si añades nueva lógica de confirmación, asegúrate de mantener este bypass intacto.
+
+### 9. Los hooks post-edit nunca lanzan excepciones
+
+`PostEditHooks.run_for_tool()` y `run_for_file()` capturan todas las excepciones internamente. `subprocess.TimeoutExpired` retorna un `HookRunResult` formateado con el error de timeout. Otras excepciones logean un warning y retornan `None`. El resultado del hook (si existe) se concatena al `ToolResult` para que el LLM pueda auto-corregir.
+
 `maybe_compress()` falla silenciosamente si el LLM no está disponible. `enforce_window()` y `truncate_tool_result()` son operaciones puramente de strings. Ninguna de las tres debe propagar excepciones al loop.
 
 ```python
@@ -297,6 +319,20 @@ except Exception as e:
 | Descubrimiento MCP | `mcp/discovery.py` |
 | Cliente HTTP MCP | `mcp/client.py` |
 | Adaptador MCP | `mcp/adapter.py` |
+| Ejecución de comandos (F13) | `tools/commands.py` → `RunCommandTool` |
+| Clasificación de comandos (F13) | `tools/commands.py` → `classify_sensitivity()` |
+| Confirmación dinámica run_command | `execution/engine.py` → `_should_confirm_command()` |
+| Precios de modelos (F14) | `costs/prices.py` → `PriceLoader`, `costs/default_prices.json` |
+| Tracking de costes (F14) | `costs/tracker.py` → `CostTracker` |
+| Budget enforcement (F14) | `costs/tracker.py` → `BudgetExceededError` |
+| Cache local LLM (F14) | `llm/cache.py` → `LocalLLMCache` |
+| Prompt caching headers (F14) | `llm/adapter.py` → `_prepare_messages_with_caching()` |
+| Post-edit hooks (v3-M4) | `core/hooks.py` → `PostEditHooks`, `config/schema.py` → `HookConfig` |
+| Human logging (v3-M5) | `logging/human.py` → `HumanLog`, `HumanFormatter`, `HumanLogHandler` |
+| Nivel HUMAN (25) | `logging/levels.py` |
+| Human log integration en loop | `core/loop.py` → `self.hlog = HumanLog(self.log)` |
+| Hook execution in engine | `execution/engine.py` → `run_post_edit_hooks()` |
+| StopReason enum | `core/state.py` → `StopReason` |
 
 ---
 
@@ -373,3 +409,31 @@ Archivos muy grandes (datasets, binarios, etc.) se omiten del índice pero sigue
 ### Orden de mensajes en `enforce_window`
 
 El Nivel 3 elimina pares `messages[2:4]` (el assistant + tool más antiguos después del user inicial). Nunca elimina `messages[0]` (system) ni `messages[1]` (user original). Si hay menos de 4 mensajes, no se elimina nada. Los pares se eliminan de 2 en 2 para mantener la coherencia del formato OpenAI.
+
+### `run_command` y stdin
+
+`RunCommandTool.execute()` pasa `stdin=subprocess.DEVNULL` explícitamente. Los comandos que requieren input interactivo (ej: `git commit` sin `-m`, `vim`, `nano`) fallarán. El agente debe usar flags no-interactivos en sus comandos.
+
+### Prompt caching y proveedores no-Anthropic
+
+`_prepare_messages_with_caching()` añade `cache_control` al system message. Si el proveedor no soporta este campo (ej: `ollama`, proveedores locales), LiteLLM simplemente lo ignorará al serializar la request — no produce errores. Solo actúa con `LLMConfig.prompt_caching=True`.
+
+### `LocalLLMCache` y cambios de configuración
+
+El cache es determinista por `(messages, tools)`. Si cambias el system prompt pero usas el mismo prompt de usuario, la clave es diferente (el system prompt es parte de `messages[0]`). Sin embargo, si cambias la versión del modelo en config pero los mensajes son iguales, el cache retorna la respuesta antigua (que fue generada con el modelo previo). En desarrollo esto es intencional; en producción, usar `--no-cache`.
+
+### `BudgetExceededError` y el estado del agente
+
+Cuando se lanza `BudgetExceededError`, el loop pone `state.status = "partial"` y sale. El `CostTracker` **ya registró** el step que causó el exceso. El output JSON incluye `costs` con el total acumulado incluyendo el step que excedió el presupuesto.
+
+### PostEditHooks nunca rompen el loop
+
+Los hooks siempre retornan `None` o un string, nunca lanzan excepciones. Si un hook supera el timeout (`subprocess.TimeoutExpired`) o falla por cualquier otra razon, se logea un warning y se retorna un mensaje de error formateado. Ese mensaje se inyecta como parte del resultado del tool para que el LLM lo vea y pueda auto-corregir. El loop del agente nunca se interrumpe por un hook fallido.
+
+### HumanLog va por pipeline separado
+
+Los eventos con nivel HUMAN (25) se enrutan exclusivamente al `HumanLogHandler` en stderr, NO al handler de consola tecnico. El handler de consola excluye explicitamente los eventos HUMAN. Esto significa que `-v` (INFO) NO muestra los human logs -- los human logs se muestran siempre a menos que se use `--quiet` o `--json`.
+
+### `_graceful_close()` hace una ultima llamada al LLM
+
+Cuando un watchdog se dispara (max_steps, budget, timeout, context_full), el loop llama a `_graceful_close()` que inyecta un mensaje `[SISTEMA]` y hace una ultima llamada al LLM SIN tools para obtener un resumen de lo hecho hasta ese punto. La excepcion es `USER_INTERRUPT` (Ctrl+C), que corta inmediatamente sin llamada extra. Si la llamada final al LLM falla, se usa un mensaje mecanico como output.

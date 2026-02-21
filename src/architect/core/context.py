@@ -154,6 +154,9 @@ class ContextManager:
     ) -> str:
         """Usa el LLM para resumir una secuencia de mensajes.
 
+        Si la llamada al LLM falla, genera un resumen mecánico como fallback
+        (lista de tools ejecutadas y archivos involucrados).
+
         Args:
             messages: Mensajes del diálogo a resumir
             llm: LLMAdapter para la llamada de resumen
@@ -162,20 +165,26 @@ class ContextManager:
             Texto de resumen (~200 palabras)
         """
         formatted = self._format_steps_for_summary(messages)
-        summary_prompt = [
-            {
-                "role": "system",
-                "content": (
-                    "Resume las siguientes acciones del agente en un párrafo conciso. "
-                    "Incluye: qué archivos se leyeron o modificaron, qué se intentó, "
-                    "qué funcionó y qué falló. Máximo 200 palabras. "
-                    "Solo el párrafo de resumen, sin explicaciones adicionales."
-                ),
-            },
-            {"role": "user", "content": formatted},
-        ]
-        response = llm.completion(summary_prompt, tools=None)
-        return response.content or "(sin resumen)"
+
+        try:
+            summary_prompt = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Resume las siguientes acciones del agente en un párrafo conciso. "
+                        "Incluye: qué archivos se leyeron o modificaron, qué se intentó, "
+                        "qué funcionó y qué falló. Máximo 200 palabras. "
+                        "Solo el párrafo de resumen, sin explicaciones adicionales."
+                    ),
+                },
+                {"role": "user", "content": formatted},
+            ]
+            response = llm.completion(summary_prompt, tools=None)
+            return response.content or formatted
+        except Exception as e:
+            self.log.warning("context.summarize_llm_failed", error=str(e))
+            # Fallback mecánico: usar el texto formateado directamente
+            return f"[Resumen mecánico — LLM no disponible]\n{formatted}"
 
     def _format_steps_for_summary(self, messages: list[dict[str, Any]]) -> str:
         """Convierte mensajes en texto legible para resumir."""
@@ -206,6 +215,68 @@ class ContextManager:
             for m in messages
             if m.get("role") == "assistant" and m.get("tool_calls")
         )
+
+    # ── Pipeline unificado (v3-M2) ─────────────────────────────────────────
+
+    def manage(
+        self, messages: list[dict[str, Any]], llm: LLMAdapter | None = None
+    ) -> list[dict[str, Any]]:
+        """Pipeline unificado de gestión de contexto.
+
+        Se llama antes de cada llamada al LLM. Aplica en orden:
+        1. Comprimir pasos antiguos (Nivel 2) si el contexto supera el 75%
+        2. Hard limit de tokens totales (Nivel 3)
+
+        El Nivel 1 (truncado de tool results) se aplica en ContextBuilder
+        al añadir cada tool result, no en este pipeline.
+
+        Args:
+            messages: Lista de mensajes actual
+            llm: LLMAdapter para generar resúmenes (puede ser None)
+
+        Returns:
+            Lista de mensajes gestionada (posiblemente comprimida o truncada)
+        """
+        # Solo comprimir si el contexto supera el 75% del máximo
+        if llm and self._is_above_threshold(messages, 0.75):
+            messages = self.maybe_compress(messages, llm)
+        messages = self.enforce_window(messages)
+        return messages
+
+    def _is_above_threshold(
+        self, messages: list[dict[str, Any]], threshold: float
+    ) -> bool:
+        """True si el contexto estimado supera el porcentaje dado del máximo.
+
+        Args:
+            messages: Lista de mensajes
+            threshold: Fracción del máximo (ej: 0.75 = 75%)
+
+        Returns:
+            True si supera el umbral, o True si max_context_tokens == 0
+            (sin límite configurado → confiar en summarize_after_steps)
+        """
+        if self.config.max_context_tokens == 0:
+            return True  # Sin límite de tokens → confiar en summarize_after_steps
+        limit = int(self.config.max_context_tokens * threshold)
+        return self._estimate_tokens(messages) > limit
+
+    def is_critically_full(self, messages: list[dict[str, Any]]) -> bool:
+        """True si el contexto está al 95%+ del máximo incluso después de comprimir.
+
+        Se usa como safety net en el loop: si retorna True, el agente
+        debe cerrar aunque no haya terminado.
+
+        Args:
+            messages: Lista de mensajes actual
+
+        Returns:
+            True si el contexto está críticamente lleno
+        """
+        if self.config.max_context_tokens == 0:
+            return False
+        limit_95 = int(self.config.max_context_tokens * 0.95)
+        return self._estimate_tokens(messages) > limit_95
 
     # ── Nivel 3: Ventana deslizante (hard limit) ───────────────────────────
 
@@ -259,6 +330,8 @@ class ContextManager:
         """Estima el número de tokens en una lista de mensajes.
 
         Aproximación: ~4 caracteres por token (válida para inglés y código).
+        Extrae solo los campos de contenido relevantes en vez de serializar
+        el dict completo (que sobreestima por las claves JSON y metadatos).
 
         Args:
             messages: Lista de mensajes
@@ -266,7 +339,20 @@ class ContextManager:
         Returns:
             Estimación de tokens
         """
-        total_chars = sum(len(str(m)) for m in messages)
+        total_chars = 0
+        for m in messages:
+            # Contenido principal del mensaje
+            content = m.get("content")
+            if content:
+                total_chars += len(str(content))
+            # Tool calls: contar nombre y argumentos
+            for tc in m.get("tool_calls", []):
+                if isinstance(tc, dict):
+                    func = tc.get("function", {})
+                    total_chars += len(str(func.get("name", "")))
+                    total_chars += len(str(func.get("arguments", "")))
+            # Overhead por mensaje (~4 tokens de metadatos por mensaje)
+            total_chars += 16
         return total_chars // 4
 
 

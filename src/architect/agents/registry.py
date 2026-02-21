@@ -16,8 +16,9 @@ DEFAULT_AGENTS: dict[str, AgentConfig] = {
     "plan": AgentConfig(
         system_prompt=DEFAULT_PROMPTS["plan"],
         allowed_tools=["read_file", "list_files", "search_code", "grep", "find_files"],
-        confirm_mode="confirm-all",
-        max_steps=10,
+        # v3: yolo porque plan no modifica archivos, no necesita confirmación
+        confirm_mode="yolo",
+        max_steps=20,
     ),
     "build": AgentConfig(
         system_prompt=DEFAULT_PROMPTS["build"],
@@ -31,21 +32,24 @@ DEFAULT_AGENTS: dict[str, AgentConfig] = {
             "search_code",
             "grep",
             "find_files",
+            "run_command",
         ],
         confirm_mode="confirm-sensitive",
-        max_steps=25,
+        # v3: 50 porque ahora es un watchdog, no el driver del loop.
+        # El LLM para cuando quiere; 50 es un safety net generoso.
+        max_steps=50,
     ),
     "resume": AgentConfig(
         system_prompt=DEFAULT_PROMPTS["resume"],
         allowed_tools=["read_file", "list_files", "search_code", "grep", "find_files"],
         confirm_mode="yolo",
-        max_steps=10,
+        max_steps=15,
     ),
     "review": AgentConfig(
         system_prompt=DEFAULT_PROMPTS["review"],
         allowed_tools=["read_file", "list_files", "search_code", "grep", "find_files"],
         confirm_mode="yolo",
-        max_steps=15,
+        max_steps=20,
     ),
 }
 

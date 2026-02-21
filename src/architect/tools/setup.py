@@ -6,7 +6,8 @@ Funciones de conveniencia para registrar las tools estándar del sistema.
 
 from pathlib import Path
 
-from ..config.schema import WorkspaceConfig
+from ..config.schema import CommandsConfig, WorkspaceConfig
+from .commands import RunCommandTool
 from .filesystem import DeleteFileTool, EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
 from .patch import ApplyPatchTool
 from .registry import ToolRegistry
@@ -71,18 +72,46 @@ def register_search_tools(
     registry.register(FindFilesTool(workspace_root))
 
 
-def register_all_tools(
+def register_command_tools(
     registry: ToolRegistry,
     workspace_config: WorkspaceConfig,
+    commands_config: CommandsConfig,
 ) -> None:
-    """Registra todas las tools disponibles (filesystem + búsqueda).
+    """Registra la tool run_command si está habilitada (F13).
 
-    Función de conveniencia que combina register_filesystem_tools
-    y register_search_tools.
+    La tool solo se registra si ``commands_config.enabled`` es True.
+    Si no está habilitada, el agente recibirá un error claro cuando
+    intente llamarla ("tool no encontrada").
 
     Args:
         registry: ToolRegistry donde registrar las tools
         workspace_config: Configuración del workspace
+        commands_config: Configuración de la tool run_command
+    """
+    if not commands_config.enabled:
+        return
+
+    workspace_root = Path(workspace_config.root).resolve()
+    registry.register(RunCommandTool(workspace_root, commands_config))
+
+
+def register_all_tools(
+    registry: ToolRegistry,
+    workspace_config: WorkspaceConfig,
+    commands_config: CommandsConfig | None = None,
+) -> None:
+    """Registra todas las tools disponibles (filesystem + búsqueda + comandos).
+
+    Función de conveniencia que combina register_filesystem_tools,
+    register_search_tools y register_command_tools.
+
+    Args:
+        registry: ToolRegistry donde registrar las tools
+        workspace_config: Configuración del workspace
+        commands_config: Configuración de run_command (F13). Si es None, usa defaults.
     """
     register_filesystem_tools(registry, workspace_config)
     register_search_tools(registry, workspace_config)
+    if commands_config is None:
+        commands_config = CommandsConfig()
+    register_command_tools(registry, workspace_config, commands_config)

@@ -1,7 +1,8 @@
 """
 CLI principal de architect usando Click.
 
-Define todos los comandos y opciones disponibles para el usuario.
+v3: Sin agente explícito → usa 'build' directamente (no más MixedModeRunner por defecto).
+    Añadido soporte para PostEditHooks, human logging, banner y separador de resultado.
 """
 
 import json
@@ -15,14 +16,22 @@ from .agents import AgentNotFoundError, get_agent, list_available_agents
 from .config.loader import load_config
 from .core import AgentLoop, ContextBuilder, ContextManager, MixedModeRunner, SelfEvaluator
 from .core.shutdown import GracefulShutdown
+from .costs import CostTracker, PriceLoader
 from .execution import ExecutionEngine
 from .indexer import IndexCache, RepoIndex, RepoIndexer
-from .llm import LLMAdapter
+from .llm import LLMAdapter, LocalLLMCache
 from .logging import configure_logging
 from .mcp import MCPDiscovery
 from .tools import ToolRegistry, register_all_tools
 
-# Códigos de salida (según Plan_Implementacion.md §6.3)
+# Importación opcional de hooks (v3-M4)
+try:
+    from .core.hooks import PostEditHooks
+    _HOOKS_AVAILABLE = True
+except ImportError:
+    _HOOKS_AVAILABLE = False
+
+# Códigos de salida
 EXIT_SUCCESS = 0
 EXIT_FAILED = 1
 EXIT_PARTIAL = 2
@@ -31,9 +40,27 @@ EXIT_AUTH_ERROR = 4
 EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
+# Versión actual
+_VERSION = "0.15.0"
+
+
+def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
+    """Imprime el banner de inicio (v3-M5)."""
+    if not quiet:
+        width = 50
+        label = f" architect · {agent_name} · {model} "
+        dashes = "─" * max(0, width - len(label))
+        click.echo(f"\n─── {label}{dashes}\n", err=True)
+
+
+def _print_result_separator(quiet: bool) -> None:
+    """Imprime el separador antes del resultado (v3-M5)."""
+    if not quiet:
+        click.echo(f"\n─── Resultado {'─' * 40}\n", err=True)
+
 
 @click.group()
-@click.version_option(version="0.12.0", prog_name="architect")
+@click.version_option(version=_VERSION, prog_name="architect")
 def main() -> None:
     """architect - Herramienta CLI headless y agentica para orquestar agentes de IA.
 
@@ -55,7 +82,7 @@ def main() -> None:
     "-a",
     "--agent",
     default=None,
-    help="Agente a utilizar (plan, build, resume, review, o custom)",
+    help="Agente a utilizar (build, plan, resume, review, o custom). Default: build",
 )
 @click.option(
     "-m",
@@ -76,7 +103,7 @@ def main() -> None:
 )
 @click.option(
     "--model",
-    help="Modelo LLM a usar (ej: gpt-4o, claude-3-sonnet)",
+    help="Modelo LLM a usar (ej: gpt-4o, claude-sonnet-4-6)",
 )
 @click.option(
     "--api-base",
@@ -109,7 +136,7 @@ def main() -> None:
 )
 @click.option(
     "--log-level",
-    type=click.Choice(["debug", "info", "warn", "error"]),
+    type=click.Choice(["debug", "info", "human", "warn", "error"]),
     help="Nivel de logging explícito",
 )
 @click.option(
@@ -120,12 +147,13 @@ def main() -> None:
 @click.option(
     "--max-steps",
     type=int,
-    help="Número máximo de pasos del agente",
+    help="Número máximo de pasos del agente (watchdog)",
 )
 @click.option(
     "--timeout",
     type=int,
-    help="Timeout en segundos para llamadas LLM",
+    default=None,
+    help="Timeout total en segundos (watchdog de tiempo total)",
 )
 @click.option(
     "--json",
@@ -145,23 +173,78 @@ def main() -> None:
     default=None,
     help="Modo de auto-evaluación: off|basic|full (default: config YAML)",
 )
+@click.option(
+    "--allow-commands",
+    "allow_commands",
+    is_flag=True,
+    default=False,
+    help="Habilitar run_command tool (override de commands.enabled en config)",
+)
+@click.option(
+    "--no-commands",
+    "no_commands",
+    is_flag=True,
+    default=False,
+    help="Deshabilitar run_command tool completamente",
+)
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    help="Límite de gasto en USD por ejecución",
+)
+@click.option(
+    "--show-costs",
+    "show_costs",
+    is_flag=True,
+    default=False,
+    help="Mostrar resumen de costes al terminar",
+)
+@click.option(
+    "--cache",
+    "use_local_cache",
+    is_flag=True,
+    default=False,
+    help="Activar cache local de LLM para desarrollo",
+)
+@click.option(
+    "--no-cache",
+    "disable_cache",
+    is_flag=True,
+    default=False,
+    help="Desactivar cache local de LLM aunque esté habilitado en config",
+)
+@click.option(
+    "--cache-clear",
+    "cache_clear",
+    is_flag=True,
+    default=False,
+    help="Limpiar cache local de LLM antes de ejecutar",
+)
 def run(prompt: str, **kwargs) -> None:  # type: ignore
     """Ejecuta una tarea usando un agente de IA.
 
     PROMPT: Descripción de la tarea a realizar
 
+    Por defecto usa el agente 'build' (planifica + ejecuta en un solo loop).
+    Usa -a para seleccionar un agente diferente.
+
     Ejemplos:
 
         \b
-        # Análisis seguro (solo lectura)
+        # Tarea general (agente build por defecto)
+        $ architect run "añade validación de email a user.py"
+
+        \b
+        # Análisis sin modificaciones
         $ architect run "analiza este proyecto" -a review
 
         \b
-        # Construcción con confirmación
-        $ architect run "refactoriza main.py" -a build
+        # Planificación solo (sin ejecutar)
+        $ architect run "¿cómo refactorizaría main.py?" -a plan
 
         \b
-        # Ejecución automática total
+        # Ejecución automática total sin confirmaciones
         $ architect run "genera scaffolding" --mode yolo
 
         \b
@@ -173,79 +256,75 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         $ architect run "resume el proyecto" --quiet --json | jq .
 
         \b
-        # Auto-evaluación básica (una llamada extra al LLM)
-        $ architect run "refactoriza main.py" --self-eval basic
-
-        \b
-        # Auto-evaluación completa con reintentos automáticos
-        $ architect run "genera tests para utils.py" --self-eval full
+        # Con límite de coste y resumen de costes
+        $ architect run "refactoriza todo" --budget 0.50 --show-costs
     """
     try:
-        # Instalar GracefulShutdown para SIGINT + SIGTERM antes de cualquier otra cosa
+        # Instalar GracefulShutdown para SIGINT + SIGTERM
         shutdown = GracefulShutdown()
-        # Cargar configuración primero (necesaria para logging)
+
+        # Cargar configuración
         config = load_config(
             config_path=kwargs.get("config"),
             cli_args=kwargs,
         )
 
-        # Configurar logging completo
+        # Configurar logging
         configure_logging(
             config.logging,
             json_output=kwargs.get("json_output", False),
             quiet=kwargs.get("quiet", False),
         )
 
-        # Determinar si usar streaming
-        # Streaming activo por defecto, desactivado con --no-stream, --json o --quiet
+        # v3-M3: Sin agente → usar 'build' directamente (no MixedModeRunner)
+        agent_name = kwargs.get("agent") or "build"
+
+        # Modo streaming
         use_stream = (
             not kwargs.get("no_stream", False)
             and not kwargs.get("json_output", False)
             and config.llm.stream
         )
 
-        # Callback de streaming: escribe a stderr para no romper pipes
-        # Se desactiva con --quiet o --json
         on_stream_chunk: Callable[[str], None] | None = None
         if use_stream and not kwargs.get("quiet", False):
             def on_stream_chunk(chunk: str) -> None:  # type: ignore[misc]
                 sys.stderr.write(chunk)
                 sys.stderr.flush()
 
-        # Determinar agente a usar
-        agent_name = kwargs.get("agent")
-        use_mixed_mode = agent_name is None  # Sin agente = modo mixto
+        # Aplicar CLI overrides para commands
+        if kwargs.get("allow_commands"):
+            config.commands.enabled = True
+        if kwargs.get("no_commands"):
+            config.commands.enabled = False
 
-        # Crear tool registry y registrar tools (filesystem + búsqueda)
+        # Crear tool registry
         registry = ToolRegistry()
-        register_all_tools(registry, config.workspace)
+        register_all_tools(registry, config.workspace, config.commands)
 
-        # Descubrir y registrar tools MCP si está habilitado
+        # Descubrir tools MCP
         if not kwargs.get("disable_mcp") and config.mcp.servers:
             if not kwargs.get("quiet"):
                 click.echo(
-                    f"🔌 Descubriendo tools MCP de {len(config.mcp.servers)} servidor(es)...",
+                    f"Descubriendo tools MCP de {len(config.mcp.servers)} servidor(es)...",
                     err=True,
                 )
-
             discovery = MCPDiscovery()
             mcp_stats = discovery.discover_and_register(config.mcp.servers, registry)
 
-            if not kwargs.get("quiet"):
+            if not kwargs.get("quiet") and kwargs.get("verbose", 0) >= 1:
                 if mcp_stats["servers_success"] > 0:
                     click.echo(
-                        f"   ✓ {mcp_stats['tools_registered']} tools MCP registradas "
-                        f"desde {mcp_stats['servers_success']} servidor(es)",
+                        f"  {mcp_stats['tools_registered']} tools MCP registradas",
                         err=True,
                     )
                 if mcp_stats["servers_failed"] > 0:
                     click.echo(
-                        f"   ⚠️  {mcp_stats['servers_failed']} servidor(es) no disponible(s)",
+                        f"  {mcp_stats['servers_failed']} servidor(es) no disponible(s)",
                         err=True,
                     )
-                click.echo(err=True)
 
-        # Construir índice del repositorio (F10)
+        # Construir índice del repositorio
         repo_index: RepoIndex | None = None
         if config.indexer.enabled:
             workspace_root = Path(config.workspace.root).resolve()
@@ -255,145 +334,120 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                 exclude_dirs=config.indexer.exclude_dirs,
                 exclude_patterns=config.indexer.exclude_patterns,
             )
-
-            # Intentar cache si está habilitado
             cache = IndexCache() if config.indexer.use_cache else None
             if cache:
                 repo_index = cache.get(workspace_root)
-
             if repo_index is None:
                 repo_index = indexer.build_index()
                 if cache:
                     cache.set(workspace_root, repo_index)
 
-            if not kwargs.get("quiet") and kwargs.get("verbose", 0) >= 1:
-                click.echo(
-                    f"🗂️  Índice: {repo_index.total_files} archivos, "
-                    f"{repo_index.total_lines:,} líneas "
-                    f"({repo_index.build_time_ms:.0f}ms)",
-                    err=True,
-                )
+        # Crear PostEditHooks (v3-M4)
+        post_edit_hooks: "PostEditHooks | None" = None
+        if _HOOKS_AVAILABLE and hasattr(config, "hooks") and config.hooks.post_edit:
+            post_edit_hooks = PostEditHooks(
+                hooks=config.hooks.post_edit,
+                workspace_root=Path(config.workspace.root).resolve(),
+            )
+
+        # Determinar si usar cache local de LLM
+        llm_cache_enabled = config.llm_cache.enabled
+        if kwargs.get("use_local_cache"):
+            llm_cache_enabled = True
+        if kwargs.get("disable_cache"):
+            llm_cache_enabled = False
+
+        local_cache: LocalLLMCache | None = None
+        if llm_cache_enabled:
+            local_cache = LocalLLMCache(
+                cache_dir=config.llm_cache.dir,
+                ttl_hours=config.llm_cache.ttl_hours,
+            )
+            if kwargs.get("cache_clear"):
+                cleared = local_cache.clear()
+                if not kwargs.get("quiet"):
+                    click.echo(f"Cache limpiado: {cleared} entradas eliminadas", err=True)
+
+        # Crear cost tracker
+        cost_tracker: CostTracker | None = None
+        if config.costs.enabled:
+            price_loader = PriceLoader(custom_prices_file=config.costs.prices_file)
+            budget_usd = kwargs.get("budget") or config.costs.budget_usd
+            cost_tracker = CostTracker(
+                price_loader=price_loader,
+                budget_usd=budget_usd,
+                warn_at_usd=config.costs.warn_at_usd,
+            )
 
         # Crear LLM adapter
-        llm = LLMAdapter(config.llm)
+        llm = LLMAdapter(config.llm, local_cache=local_cache)
 
-        # Crear context manager para pruning del contexto (F11)
+        # Crear context manager y context builder
         context_mgr = ContextManager(config.context)
-
-        # Crear context builder (con índice del repositorio si está disponible)
         ctx = ContextBuilder(repo_index=repo_index, context_manager=context_mgr)
 
-        # CLI overrides para configuración de agentes
+        # Resolver agente con overrides CLI
         cli_overrides = {
             "mode": kwargs.get("mode"),
             "max_steps": kwargs.get("max_steps"),
         }
 
-        # Ejecutar según modo
-        if use_mixed_mode:
-            # Modo mixto: plan → build
-            try:
-                plan_config = get_agent("plan", config.agents, cli_overrides)
-                build_config = get_agent("build", config.agents, cli_overrides)
-            except AgentNotFoundError as e:
-                click.echo(f"❌ Error: {e}", err=True)
-                sys.exit(EXIT_FAILED)
+        try:
+            agent_config = get_agent(agent_name, config.agents, cli_overrides)
+        except AgentNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            available = list_available_agents(config.agents)
+            click.echo(f"Agentes disponibles: {', '.join(available)}", err=True)
+            sys.exit(EXIT_FAILED)
 
-            # Crear execution engines para ambos agentes
-            plan_engine = ExecutionEngine(registry, config, confirm_mode="confirm-all")
-            build_engine = ExecutionEngine(
-                registry, config, confirm_mode=build_config.confirm_mode
-            )
+        # Crear execution engine con hooks (v3-M4)
+        engine = ExecutionEngine(
+            registry,
+            config,
+            confirm_mode=agent_config.confirm_mode,
+            hooks=post_edit_hooks,
+        )
 
-            # Configurar dry-run si está habilitado
+        # Configurar dry-run
+        if kwargs.get("dry_run"):
+            engine.set_dry_run(True)
+
+        # v3-M5: Banner de inicio
+        _print_banner(agent_name, config.llm.model, kwargs.get("quiet", False))
+
+        if not kwargs.get("quiet") and kwargs.get("verbose", 0) >= 1:
+            click.echo(f"Workspace: {config.workspace.root}", err=True)
+            click.echo(f"Modo: {agent_config.confirm_mode}", err=True)
+            click.echo(f"Streaming: {'sí' if use_stream else 'no'}", err=True)
             if kwargs.get("dry_run"):
-                plan_engine.set_dry_run(True)
-                build_engine.set_dry_run(True)
-                if not kwargs.get("quiet"):
-                    click.echo(
-                        "🔍 Modo DRY-RUN activado (no se ejecutarán cambios reales)\n",
-                        err=True,
-                    )
+                click.echo("DRY-RUN activado (no se ejecutarán cambios reales)", err=True)
+            click.echo(err=True)
 
-            # Crear mixed mode runner (con shutdown, timeout y context manager)
-            runner = MixedModeRunner(
-                llm, build_engine, plan_config, build_config, ctx,
-                shutdown=shutdown,
-                step_timeout=kwargs.get("timeout") or 0,
-                context_manager=context_mgr,
-            )
+        # Crear agent loop (v3-M1: while True + timeout total)
+        loop = AgentLoop(
+            llm,
+            engine,
+            agent_config,
+            ctx,
+            shutdown=shutdown,
+            step_timeout=0,  # Sin SIGALRM por step (el timeout total lo controla `timeout`)
+            context_manager=context_mgr,
+            cost_tracker=cost_tracker,
+            timeout=kwargs.get("timeout"),  # v3: total elapsed time watchdog
+        )
 
-            # Mostrar info inicial si no es quiet
-            if not kwargs.get("quiet"):
-                click.echo(f"🏗️  architect v0.12.0", err=True)
-                click.echo(f"📝 Prompt: {prompt}", err=True)
-                click.echo(f"🤖 Modelo: {config.llm.model}", err=True)
-                click.echo(f"📁 Workspace: {config.workspace.root}", err=True)
-                click.echo(f"🔀 Modo: mixto (plan → build)", err=True)
-                click.echo(f"⚙️  Confirmación: {build_config.confirm_mode}", err=True)
-                click.echo(f"📡 Streaming: {'sí' if use_stream else 'no'}", err=True)
-                click.echo(err=True)
+        # Ejecutar
+        state = loop.run(prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
 
-            # Ejecutar flujo plan → build (con streaming en fase build)
-            state = runner.run(prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
+        # run_fn para evaluate_full
+        def run_fn(correction_prompt: str):  # type: ignore[misc]
+            return loop.run(correction_prompt, stream=False)
 
-            # run_fn para evaluate_full: re-ejecuta sin streaming
-            def run_fn(correction_prompt: str):  # type: ignore[misc]
-                return runner.run(correction_prompt, stream=False)
-
-        else:
-            # Modo single agent
-            try:
-                agent_config = get_agent(agent_name, config.agents, cli_overrides)
-            except AgentNotFoundError as e:
-                click.echo(f"❌ Error: {e}", err=True)
-                available = list_available_agents(config.agents)
-                click.echo(f"\nAgentes disponibles: {', '.join(available)}", err=True)
-                sys.exit(EXIT_FAILED)
-
-            # Crear execution engine
-            engine = ExecutionEngine(registry, config, confirm_mode=agent_config.confirm_mode)
-
-            # Configurar dry-run si está habilitado
-            if kwargs.get("dry_run"):
-                engine.set_dry_run(True)
-                if not kwargs.get("quiet"):
-                    click.echo(
-                        "🔍 Modo DRY-RUN activado (no se ejecutarán cambios reales)\n",
-                        err=True,
-                    )
-
-            # Crear agent loop (con shutdown, timeout y context manager)
-            loop = AgentLoop(
-                llm, engine, agent_config, ctx,
-                shutdown=shutdown,
-                step_timeout=kwargs.get("timeout") or 0,
-                context_manager=context_mgr,
-            )
-
-            # Mostrar info inicial si no es quiet
-            if not kwargs.get("quiet"):
-                click.echo(f"🏗️  architect v0.12.0", err=True)
-                click.echo(f"📝 Prompt: {prompt}", err=True)
-                click.echo(f"🤖 Modelo: {config.llm.model}", err=True)
-                click.echo(f"📁 Workspace: {config.workspace.root}", err=True)
-                click.echo(f"🎭 Agente: {agent_name}", err=True)
-                click.echo(f"⚙️  Modo: {agent_config.confirm_mode}", err=True)
-                click.echo(f"📡 Streaming: {'sí' if use_stream else 'no'}", err=True)
-                click.echo(err=True)
-
-            # Ejecutar agent loop (con streaming si está activo)
-            state = loop.run(prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
-
-            # run_fn para evaluate_full: re-ejecuta sin streaming
-            def run_fn(correction_prompt: str):  # type: ignore[misc]
-                return loop.run(correction_prompt, stream=False)
-
-        # Self-evaluation (F12) — evalúa el resultado si está configurado
+        # Self-evaluation
         self_eval_mode = kwargs.get("self_eval") or config.evaluation.mode
         if self_eval_mode != "off" and state.status == "success":
             if not kwargs.get("quiet"):
-                click.echo("\n🔍 Evaluando resultado...", err=True)
+                click.echo("Evaluando resultado...", err=True)
 
             evaluator = SelfEvaluator(
                 llm,
@@ -410,7 +464,7 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                 if not passed:
                     state.status = "partial"
                 if not kwargs.get("quiet"):
-                    icon = "✓" if passed else "⚠️ "
+                    icon = "✓" if passed else "⚠"
                     click.echo(
                         f"{icon} Evaluación: {'completado' if passed else 'incompleto'} "
                         f"({eval_result.confidence:.0%} confianza)",
@@ -425,39 +479,44 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                 state = evaluator.evaluate_full(prompt, state, run_fn)
                 if not kwargs.get("quiet"):
                     click.echo(
-                        f"✓ Evaluación full completada (estado: {state.status})",
+                        f"Evaluación full completada (estado: {state.status})",
                         err=True,
                     )
 
-        # Mostrar resultado
+        # Mostrar resumen de costes
+        show_costs = kwargs.get("show_costs") or kwargs.get("verbose", 0) >= 1
+        if show_costs and not kwargs.get("quiet") and cost_tracker and cost_tracker.has_data():
+            click.echo(f"\nCoste: {cost_tracker.format_summary_line()}", err=True)
+
+        # v3-M5: Separador de resultado
+        _print_result_separator(kwargs.get("quiet", False))
+
+        # Output
         if kwargs.get("json_output"):
             output = state.to_output_dict()
-            # JSON va a stdout (compatible con pipes)
             click.echo(json.dumps(output, indent=2))
         else:
-            # Si hubo streaming, añadir newline final
             if use_stream and on_stream_chunk is not None:
                 sys.stderr.write("\n")
                 sys.stderr.flush()
 
-            if not kwargs.get("quiet"):
-                click.echo(err=True)
-                click.echo("=" * 70, err=True)
-                click.echo("RESULTADO", err=True)
-                click.echo("=" * 70, err=True)
-                click.echo(err=True)
-
-            # El resultado final siempre va a stdout
             if state.final_output:
                 click.echo(state.final_output)
 
             if not kwargs.get("quiet"):
-                click.echo(err=True)
-                click.echo(f"Estado: {state.status}", err=True)
-                click.echo(f"Steps: {state.current_step}", err=True)
-                click.echo(f"Tool calls: {state.total_tool_calls}", err=True)
+                stop_info = (
+                    f" ({state.stop_reason.value})"
+                    if state.stop_reason
+                    else ""
+                )
+                click.echo(
+                    f"\nEstado: {state.status}{stop_info} | "
+                    f"Steps: {state.current_step} | "
+                    f"Tool calls: {state.total_tool_calls}",
+                    err=True,
+                )
 
-        # Código de salida: si hubo shutdown → 130, si no → según status
+        # Código de salida
         if shutdown.should_stop:
             sys.exit(EXIT_INTERRUPTED)
 
@@ -469,24 +528,21 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         sys.exit(exit_code)
 
     except KeyboardInterrupt:
-        # Fallback si GracefulShutdown no captura (ej: durante la carga de config)
-        click.echo("\n⚠️  Interrumpido.", err=True)
+        click.echo("\nInterrumpido.", err=True)
         sys.exit(EXIT_INTERRUPTED)
     except FileNotFoundError as e:
-        click.echo(f"❌ Error de configuración: {e}", err=True)
+        click.echo(f"Error de configuración: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
     except Exception as e:
-        # Detectar errores de autenticación LLM
         error_str = str(e).lower()
         if any(kw in error_str for kw in ("authenticationerror", "auth", "api key", "unauthorized", "401")):
-            click.echo(f"❌ Error de autenticación: {e}", err=True)
+            click.echo(f"Error de autenticación: {e}", err=True)
             sys.exit(EXIT_AUTH_ERROR)
-        # Detectar timeouts
         elif any(kw in error_str for kw in ("timeout", "timed out", "readtimeout")):
-            click.echo(f"❌ Timeout: {e}", err=True)
+            click.echo(f"Timeout: {e}", err=True)
             sys.exit(EXIT_TIMEOUT)
         else:
-            click.echo(f"❌ Error inesperado: {e}", err=True)
+            click.echo(f"Error inesperado: {e}", err=True)
             if kwargs.get("verbose", 0) > 1:
                 import traceback
                 traceback.print_exc()
@@ -501,21 +557,18 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
     help="Path al archivo de configuración a validar",
 )
 def validate_config(config: Path | None) -> None:
-    """Valida un archivo de configuración YAML.
-
-    Útil para verificar sintaxis y valores antes de ejecutar.
-    """
+    """Valida un archivo de configuración YAML."""
     try:
         app_config = load_config(config_path=config)
-        click.echo("✓ Configuración válida")
+        click.echo("Configuración válida")
         click.echo(f"  Modelo: {app_config.llm.model}")
         click.echo(f"  Agentes definidos: {len(app_config.agents)}")
         click.echo(f"  Servidores MCP: {len(app_config.mcp.servers)}")
     except FileNotFoundError as e:
-        click.echo(f"❌ Error: {e}", err=True)
+        click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
     except Exception as e:
-        click.echo(f"❌ Configuración inválida: {e}", err=True)
+        click.echo(f"Configuración inválida: {e}", err=True)
         sys.exit(EXIT_FAILED)
 
 
@@ -527,12 +580,8 @@ def validate_config(config: Path | None) -> None:
     help="Path al archivo de configuración YAML",
 )
 def agents(config: Path | None) -> None:
-    """Lista los agentes disponibles y su configuración.
-
-    Muestra los agentes por defecto y los definidos en el archivo de
-    configuración. Útil para saber qué agentes se pueden usar con -a.
-    """
-    from .agents import DEFAULT_AGENTS, list_available_agents, resolve_agents_from_yaml
+    """Lista los agentes disponibles y su configuración."""
+    from .agents import DEFAULT_AGENTS, list_available_agents
 
     try:
         app_config = load_config(config_path=config)
@@ -543,19 +592,17 @@ def agents(config: Path | None) -> None:
 
     click.echo("Agentes disponibles:\n")
 
-    # Agentes por defecto
     click.echo("  Agentes por defecto:")
     default_descriptions = {
-        "plan":   "Analiza y planifica tareas (solo lectura, confirm-all)",
-        "build":  "Crea y modifica archivos (confirm-sensitive)",
-        "resume": "Lee y resume información (solo lectura, yolo)",
-        "review": "Revisión de código (solo lectura, yolo)",
+        "build":  "Crea y modifica archivos — planifica + ejecuta en un solo loop (confirm-sensitive)",
+        "plan":   "Analiza y planifica tareas sin ejecutar (yolo, solo lectura)",
+        "resume": "Lee y resume información (yolo, solo lectura)",
+        "review": "Revisión de código (yolo, solo lectura)",
     }
     for name, desc in default_descriptions.items():
         marker = " *" if name in yaml_agents else ""
         click.echo(f"    {name:<12} {desc}{marker}")
 
-    # Agentes custom desde YAML
     custom = {k: v for k, v in yaml_agents.items() if k not in DEFAULT_AGENTS}
     if custom:
         click.echo("\n  Agentes custom (desde config):")
@@ -563,7 +610,6 @@ def agents(config: Path | None) -> None:
             tools = ", ".join(agent_cfg.allowed_tools) if agent_cfg.allowed_tools else "todas"
             click.echo(f"    {name:<12} tools=[{tools}], mode={agent_cfg.confirm_mode}")
 
-    # Overrides en YAML de defaults
     overrides = {k: v for k, v in yaml_agents.items() if k in DEFAULT_AGENTS}
     if overrides:
         click.echo("\n  Defaults con override en config (marcados con *):")
@@ -571,6 +617,7 @@ def agents(config: Path | None) -> None:
             click.echo(f"    {name}")
 
     click.echo(f"\n  Uso: architect run \"<tarea>\" -a <nombre-agente>")
+    click.echo(f"  Sin -a → usa 'build' por defecto")
 
 
 if __name__ == "__main__":

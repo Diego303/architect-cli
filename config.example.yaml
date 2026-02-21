@@ -1,6 +1,6 @@
 # ==============================================================================
 # architect - Archivo de configuración de ejemplo
-# Versión: 0.8.0
+# Versión: 0.15.0
 #
 # Copia este archivo a config.yaml y ajusta según tus necesidades.
 #
@@ -57,6 +57,11 @@ llm:
   # Desactivar con: architect run "..." --no-stream
   stream: true
 
+  # Marcar el system prompt con cache_control para que el proveedor lo cachee.
+  # Reduce el coste 50-90% en llamadas repetidas (Anthropic, OpenAI compatible).
+  # En proveedores que no soportan caching, el campo se ignora sin error.
+  prompt_caching: false
+
 
 # ==============================================================================
 # Agentes - Configuración de agentes (por defecto y custom)
@@ -67,7 +72,8 @@ llm:
 #   2. Definir agentes completamente nuevos
 #
 # Lista todos los agentes disponibles con: architect agents -c config.yaml
-agents:
+agents: {}
+  # Descomenta los bloques de abajo para personalizar o crear agentes:
 
   # ── Ejemplo: sobrescribir el agente "build" para ser más estricto ──────────
   # build:
@@ -139,13 +145,18 @@ agents:
 # Logging - Configuración del sistema de logs
 # ==============================================================================
 logging:
-  # Nivel base de logging: debug | info | warn | error
-  level: info
+  # Nivel base de logging: human | debug | info | warn | error
+  # human (default) → Solo trazabilidad del agente (pasos, tools, resultado).
+  #   El usuario ve qué hace el agente sin ruido técnico de INFO/DEBUG.
+  # info → Operaciones del sistema, config, registros de tools.
+  # debug → Args completos, respuestas LLM, timing interno.
+  level: human
 
-  # Nivel de verbose para la consola (stderr).
-  # 0 → Solo errores y resultado final (útil para scripts)
-  # 1 → Steps del agente y tool calls (recomendado para uso interactivo)
-  # 2 → Argumentos de tools y respuestas del LLM
+  # Nivel de verbose para el console handler técnico (stderr).
+  # Solo tiene efecto para logs técnicos (INFO/DEBUG), no para logs HUMAN.
+  # 0 → Solo warnings y errores técnicos (default — el usuario ve logs HUMAN)
+  # 1 → Operaciones del sistema (INFO)
+  # 2 → Args completos y respuestas LLM (DEBUG)
   # 3 → Todo: HTTP, payloads completos, timing interno
   #
   # Override con: architect run "..." -v/-vv/-vvv
@@ -303,8 +314,8 @@ context:
 #
 # Override desde CLI: architect run "..." --self-eval basic|full
 evaluation:
-  # Modo de evaluación: off | basic | full
-  mode: off
+  # Modo de evaluación: "off" | basic | full
+  mode: "off"
 
   # Número máximo de reintentos en modo "full" (rango: 1-5).
   # Cada reintento lanza una nueva ejecución completa del agente.
@@ -314,3 +325,150 @@ evaluation:
   # Si el LLM evalúa confianza < threshold, se reintenta (solo en modo "full").
   # 0.8 = requiere 80% de confianza para aceptar el resultado.
   confidence_threshold: 0.8
+
+
+# ==============================================================================
+# Commands - Ejecución de comandos del sistema (F13)
+# ==============================================================================
+# Habilita la tool run_command para que el agente pueda ejecutar comandos:
+# tests (pytest, npm test), linters (ruff, eslint), compiladores (make, tsc),
+# scripts, y comandos de consulta (git status, ls, etc.).
+#
+# Cuatro capas de seguridad integradas:
+#   1. Blocklist: rm -rf /, sudo, curl|bash, etc. — bloqueados siempre
+#   2. Clasificación: safe/dev/dangerous → política de confirmación dinámica
+#   3. Timeouts + output limit: sin procesos colgados ni contextos saturados
+#   4. Directory sandboxing: cwd siempre dentro del workspace
+#
+# Habilitación desde CLI:
+#   --allow-commands   → Habilitar (override de enabled)
+#   --no-commands      → Deshabilitar (override de enabled)
+commands:
+  # Si false, run_command no se registra y el agente no puede ejecutar comandos.
+  # Habilitar con: architect run "..." --allow-commands
+  enabled: true
+
+  # Timeout por defecto en segundos (usado si el agente no especifica uno).
+  # Rango: 1-600 segundos.
+  default_timeout: 30
+
+  # Número máximo de líneas de stdout/stderr antes de truncar.
+  # Evita que outputs de comandos verbosos saturen el context window del LLM.
+  max_output_lines: 200
+
+  # Patrones regex adicionales a bloquear (además de los built-in).
+  # Los built-in ya bloquean: rm -rf /, sudo, chmod 777, curl|bash, etc.
+  blocked_patterns: []
+  # blocked_patterns:
+  #   - "docker rm"           # Bloquear eliminación de contenedores
+  #   - "git push --force"    # Bloquear force push
+
+  # Comandos adicionales considerados seguros (sin confirmación en confirm-sensitive).
+  # Se suman a los built-in: ls, cat, git status, git log, python --version, etc.
+  safe_commands: []
+  # safe_commands:
+  #   - "my-lint-script.sh"
+  #   - "pnpm test:watch"
+
+  # Si true, solo se permiten comandos clasificados como safe o dev.
+  # Los comandos desconocidos son rechazados en execute() (no solo en confirmación).
+  # Útil para CI/pipelines donde quieres whitelist estricto.
+  allowed_only: false
+
+
+# ==============================================================================
+# Costs - Seguimiento de costes de llamadas al LLM (F14)
+# ==============================================================================
+# Registra el coste de cada llamada al LLM en USD, con desglose por fuente
+# (agent/eval/summary) y soporte para presupuesto máximo por ejecución.
+#
+# El coste total se incluye en el JSON output (--json) y se muestra en consola
+# con --show-costs o -v.
+#
+# Override desde CLI:
+#   --budget 0.5       → Detener si se superan $0.50
+#   --show-costs       → Mostrar resumen de costes al terminar
+costs:
+  # Si false, no se registran costes (deshabilita toda la sección).
+  enabled: true
+
+  # Path a un archivo JSON con precios custom (mismo formato que default_prices.json).
+  # Si no se especifica, se usan los precios embebidos del paquete.
+  # prices_file: my_prices.json
+
+  # Límite máximo de gasto en USD por ejecución.
+  # Si el coste acumulado supera este valor, el agente se detiene con status "partial".
+  # None = sin límite (default).
+  # budget_usd: 1.0
+
+  # Umbral de aviso en USD. Cuando el gasto alcanza este valor se emite
+  # un log warning (sin detener la ejecución). None = sin aviso.
+  # warn_at_usd: 0.5
+
+
+# ==============================================================================
+# LLM Cache - Cache local de respuestas LLM para desarrollo (F14)
+# ==============================================================================
+# Cache determinista en disco: guarda respuestas completas del LLM para evitar
+# llamadas repetidas cuando los mensajes son idénticos.
+#
+# ATENCIÓN: Solo para desarrollo. No usar en producción.
+#
+# Override desde CLI:
+#   --cache           → Activar cache local
+#   --no-cache        → Desactivar aunque esté habilitado en config
+#   --cache-clear     → Limpiar cache antes de ejecutar
+llm_cache:
+  # Si false, el cache no se usa (default — seguro para producción).
+  # Activar con: architect run "..." --cache
+  enabled: false
+
+  # Directorio donde guardar las entradas de cache.
+  dir: ~/.architect/cache
+
+  # Horas de validez de cada entrada. Entradas más antiguas se ignoran.
+  # Rango: 1-8760 (1 hora a 1 año).
+  ttl_hours: 24
+
+
+# ==============================================================================
+# Hooks - Post-edit hooks (verificación automática tras editar)
+# ==============================================================================
+# Los hooks se ejecutan automáticamente después de que el agente edite, cree
+# o parchee un archivo (edit_file, write_file, apply_patch).
+# Permiten verificar que los cambios son correctos: lint, typecheck, tests.
+#
+# El output del hook se devuelve al agente como parte del resultado de la tool,
+# para que pueda corregir errores automáticamente.
+#
+# Cada hook puede filtrar por patrón de archivo (file_patterns glob).
+# Si file_patterns está vacío, el hook se ejecuta para cualquier archivo.
+hooks:
+  post_edit: []
+
+  # ── Ejemplo: ruff en archivos Python ────────────────────────────────────────
+  # post_edit:
+  #   - name: ruff
+  #     command: ruff check --fix {file}
+  #     file_patterns:
+  #       - "*.py"
+  #     timeout: 15
+  #     enabled: true
+
+  # ── Ejemplo: typecheck con mypy ─────────────────────────────────────────────
+  #   - name: mypy
+  #     command: mypy {file} --ignore-missing-imports
+  #     file_patterns:
+  #       - "*.py"
+  #     timeout: 30
+  #     enabled: true
+
+  # ── Ejemplo: eslint en archivos JS/TS ───────────────────────────────────────
+  #   - name: eslint
+  #     command: npx eslint --fix {file}
+  #     file_patterns:
+  #       - "*.js"
+  #       - "*.ts"
+  #       - "*.tsx"
+  #     timeout: 20
+  #     enabled: true

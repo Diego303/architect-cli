@@ -95,6 +95,12 @@ architect run PROMPT [opciones]
 | `--quiet` | Modo silencioso (solo resultado final en stdout) |
 | `--max-steps N` | Límite máximo de pasos del agente |
 
+**Opciones de evaluación**:
+
+| Opción | Descripción |
+|--------|-------------|
+| `--self-eval off\|basic\|full` | Auto-evaluación del resultado: `off` (sin coste extra), `basic` (una llamada extra, marca como `partial` si falla), `full` (reintenta con prompt de corrección hasta `max_retries` veces) |
+
 **Opciones MCP**:
 
 | Opción | Descripción |
@@ -130,10 +136,10 @@ Un agente define el **rol**, las **tools disponibles** y el **nivel de confirmac
 
 | Agente | Descripción | Tools | Confirmación |
 |--------|-------------|-------|-------------|
-| `plan` | Analiza y genera un plan detallado | `read_file`, `list_files` | `confirm-all` |
-| `build` | Crea y modifica archivos | todas | `confirm-sensitive` |
-| `resume` | Lee y resume información | `read_file`, `list_files` | `yolo` |
-| `review` | Revisión de código y mejoras | `read_file`, `list_files` | `yolo` |
+| `plan` | Analiza y genera un plan detallado | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `confirm-all` |
+| `build` | Crea y modifica archivos | todas (`edit_file`, `apply_patch`, `write_file`, `delete_file`, búsqueda y lectura) | `confirm-sensitive` |
+| `resume` | Lee y resume información | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` |
+| `review` | Revisión de código y mejoras | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` |
 
 **Modo mixto** (sin `-a`): ejecuta `plan → build` automáticamente. El plan generado se inyecta como contexto al agente build.
 
@@ -388,31 +394,45 @@ architect run PROMPT
     │
     ├── load_config()          YAML + env vars + CLI flags
     ├── configure_logging()    stderr dual-pipeline (consola + JSON)
-    ├── ToolRegistry           tools locales + MCP remotas
+    ├── ToolRegistry           tools locales (fs, edición, búsqueda) + MCP remotas
+    ├── RepoIndexer            árbol del workspace → inyectado en system prompt
     ├── LLMAdapter             LiteLLM con retries selectivos
+    ├── ContextManager         pruning del context window (3 niveles)
     │
-    └── AgentLoop (o MixedModeRunner)
-            │
-            ├── [check shutdown]    SIGINT/SIGTERM graceful
-            ├── [StepTimeout]       SIGALRM por step
-            ├── llm.completion()    → streaming chunks a stderr
-            ├── engine.execute()    → validar → confirmar → ejecutar
-            └── ctx.append_results() → siguiente iteración
+    ├── AgentLoop (o MixedModeRunner)
+    │       │
+    │       ├── [check shutdown]      SIGINT/SIGTERM graceful
+    │       ├── [StepTimeout]         SIGALRM por step
+    │       ├── llm.completion()      → streaming chunks a stderr
+    │       ├── engine.execute()      → paralelo si posible → confirmar → ejecutar
+    │       ├── ctx.append_results()  → siguiente iteración
+    │       └── context_mgr.prune()   → truncar/resumir/ventana deslizante
+    │
+    └── SelfEvaluator (opcional, --self-eval basic|full)
+            └── evaluate_basic() / evaluate_full() con reintentos
 ```
 
 **Decisiones de diseño**:
-- Sync-first (predecible, debuggable)
-- Sin LangChain/LangGraph (el loop es simple, ~150 líneas)
-- Pydantic como fuente de verdad para schemas y validación
+- Sync-first (predecible, debuggable; el loop principal es ~400 líneas sin magia)
+- Sin LangChain/LangGraph (el loop es directo y controlado)
+- Pydantic v2 como fuente de verdad para schemas y validación
 - Errores de tools devueltos al LLM como resultado (no rompen el loop)
 - stdout limpio para pipes, todo lo demás a stderr
+- Context pruning en 3 niveles para tareas largas sin explotar el context window
 
 ---
 
-## Extensiones futuras
+## Funcionalidades avanzadas (v0.9–v0.12)
 
-- Persistencia de estado (reanudar ejecuciones parciales)
-- Multi-agente (agentes que delegan en otros)
-- Plugin system (tools desde paquetes Python externos)
-- Prompt caching para desarrollo
-- Métricas: tokens usados, coste estimado, duración por step
+| Versión | Funcionalidad |
+|---------|---------------|
+| v0.9.0 | **Edición incremental**: `edit_file` (str-replace exacto) y `apply_patch` (unified diff) — el agente modifica archivos sin reescribirlos completos |
+| v0.10.0 | **Indexer + búsqueda**: árbol del repo en el system prompt, `search_code` (regex), `grep` (literal), `find_files` (glob) |
+| v0.11.0 | **Context management**: truncado de tool results largos, compresión de pasos antiguos con LLM, hard limit de tokens, parallel tool calls |
+| v0.12.0 | **Self-evaluation**: `--self-eval basic` evalúa el resultado, `--self-eval full` reintenta con prompt de corrección automáticamente |
+
+## Extensiones futuras (F13–F14)
+
+- `run_command` — ejecución de comandos (tests, linters, compilación) con seguridad por capas
+- Cost tracking — visibilidad del coste por step y presupuesto configurable (`--budget`)
+- Prompt caching — ahorro de tokens en llamadas repetidas al proveedor LLM

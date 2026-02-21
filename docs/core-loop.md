@@ -1,118 +1,267 @@
 # El loop de agente (core/loop.py)
 
-El `AgentLoop` es el corazón del sistema. Itera entre llamadas al LLM y ejecuciones de herramientas hasta que el agente termina, alcanza el límite de pasos, es interrumpido o expira el timeout. El `ContextManager` controla el tamaño del contexto en cada iteración.
+El `AgentLoop` es el corazón del sistema. Usa un bucle `while True` — el LLM decide cuándo terminar (deja de pedir tools). Los safety nets (max_steps, budget, timeout, context) son watchdogs que piden un cierre limpio al LLM en lugar de cortar abruptamente.
 
 ---
 
-## Pseudocódigo completo
+## Pseudocódigo completo (v3)
 
 ```python
 def run(prompt, stream=False, on_stream_chunk=None):
     # Inicialización
     messages = ctx.build_initial(agent_config, prompt)
-    # messages = [
-    #   {"role": "system", "content": agent_config.system_prompt + árbol_del_repo},
-    #   {"role": "user",   "content": prompt}
-    # ]
-
     tools_schema = registry.get_schemas(agent_config.allowed_tools or None)
     state = AgentState(messages=messages, model=llm.config.model, ...)
+    step = 0
 
-    for step_num in range(agent_config.max_steps):
+    while True:
 
-        # ── 0. SHUTDOWN CHECK ────────────────────────────────────────
-        if shutdown and shutdown.should_stop:
-            state.status = "partial"
-            state.final_output = "Ejecución interrumpida por señal de shutdown."
-            break
+        # ── SAFETY NETS (antes de cada llamada al LLM) ──────────
+        stop_reason = _check_safety_nets(state, step)
+        if stop_reason is not None:
+            return _graceful_close(state, stop_reason, tools_schema)
 
-        # ── 1. LLAMADA AL LLM ────────────────────────────────────────
+        # ── CONTEXT MANAGEMENT ──────────────────────────────────
+        if context_manager:
+            messages = context_manager.manage(messages, llm)
+            # manage() aplica:
+            #   1. Compresión con LLM (si contexto > 75% del máximo)
+            #   2. Ventana deslizante hard limit
+
+        # ── LLAMADA AL LLM ──────────────────────────────────────
+        hlog.llm_call(step, messages_count=len(messages))
+
         try:
             with StepTimeout(step_timeout):
                 if stream:
                     response = None
-                    for item in llm.completion_stream(messages, tools_schema):
-                        if isinstance(item, StreamChunk):
+                    for chunk_or_response in llm.completion_stream(messages, tools_schema):
+                        if isinstance(chunk_or_response, StreamChunk):
                             if on_stream_chunk:
-                                on_stream_chunk(item.data)  # → stderr
+                                on_stream_chunk(chunk_or_response.data)  # → stderr
                         else:
-                            response = item  # LLMResponse final
+                            response = chunk_or_response  # LLMResponse final
+
                 else:
                     response = llm.completion(messages, tools_schema)
 
-        except StepTimeoutError as e:
-            state.status = "partial"
-            state.final_output = f"Step {step_num+1} excedió timeout de {e.seconds}s"
-            break
+        except StepTimeoutError:
+            hlog.step_timeout(step_timeout)
+            return _graceful_close(state, StopReason.TIMEOUT, tools_schema)
 
         except Exception as e:
+            hlog.llm_error(str(e))
             state.status = "failed"
-            state.final_output = f"Error del LLM: {e}"
-            break
+            state.stop_reason = StopReason.LLM_ERROR
+            state.final_output = f"Error irrecuperable del LLM: {e}"
+            return state
 
-        # ── 2. ¿TERMINÓ EL AGENTE? ───────────────────────────────────
-        if response.finish_reason == "stop" and not response.tool_calls:
-            state.final_output = response.content or ""
+        # ── REGISTRAR COSTE ─────────────────────────────────────
+        if cost_tracker and response.usage:
+            try:
+                cost_tracker.record(step=step, model=..., usage=response.usage)
+            except BudgetExceededError:
+                return _graceful_close(state, StopReason.BUDGET_EXCEEDED, tools_schema)
+
+        step += 1
+
+        # ── EL LLM DECIDIÓ TERMINAR (no pidió tools) ───────────
+        if not response.tool_calls:
+            hlog.agent_done(step)
+            state.final_output = response.content
             state.status = "success"
+            state.stop_reason = StopReason.LLM_DONE
             break
 
-        # ── 3. EJECUTAR TOOL CALLS ───────────────────────────────────
-        if response.tool_calls:
-            # Paralelo o secuencial según _should_parallelize()
-            tool_results = _execute_tool_calls_batch(response.tool_calls, step_num)
+        # ── EL LLM PIDIÓ TOOLS → EJECUTAR ──────────────────────
+        tool_results = _execute_tool_calls_batch(response.tool_calls, step)
+        messages = ctx.append_tool_results(messages, response.tool_calls, tool_results)
+        state.steps.append(StepResult(step, response, tool_results))
 
-            messages = ctx.append_tool_results(messages, response.tool_calls, tool_results)
-            state.steps.append(StepResult(step_num + 1, response, tool_results))
+    # ── Log final ───────────────────────────────────────────────
+    hlog.loop_complete(status=state.status, stop_reason=...,
+                       total_steps=state.current_step,
+                       total_tool_calls=state.total_tool_calls)
+    return state
+```
 
-            # ── 3b. CONTEXT PRUNING (F11) ─────────────────────────────
-            if context_manager:
-                messages = context_manager.maybe_compress(messages, llm)   # Nivel 2
-                messages = context_manager.enforce_window(messages)          # Nivel 3
+### Diferencia clave con v1
 
-            # → continúa al siguiente step
+```
+ANTES (v1):                         AHORA (v3):
 
-        # ── 4. SIN TOOL CALLS Y SIN STOP ─────────────────────────────
-        elif response.finish_reason == "length":
-            messages = ctx.append_assistant_message(messages, response.content or "")
-            messages = ctx.append_user_message(messages, "Continúa desde donde te quedaste.")
-        else:
-            state.status = "partial"
-            state.final_output = response.content or ""
-            break
+for i in range(max_steps):          while True:
+    response = llm(...)                 if watchdog_triggered:
+    if done: break                          graceful_close()  ← LLM resume
+    execute_tools()                         break
+else:                                   response = llm(...)
+    status = "partial"  ← frío          if no tool_calls:
+                                            done!  ← LLM decidió
+                                            break
+                                        execute_tools()
+```
 
-    else:
-        # El for llegó a max_steps sin break
+El `for-range` hace que `max_steps` sea la estructura. El `while True` hace que **la decisión del LLM** sea la estructura y `max_steps` sea un guardia.
+
+---
+
+## StopReason — por qué se detuvo el agente
+
+```python
+class StopReason(Enum):
+    LLM_DONE = "llm_done"              # El LLM decidió que terminó (natural)
+    MAX_STEPS = "max_steps"            # Watchdog: límite de pasos
+    BUDGET_EXCEEDED = "budget_exceeded" # Watchdog: límite de coste
+    CONTEXT_FULL = "context_full"      # Watchdog: context window lleno
+    TIMEOUT = "timeout"                # Watchdog: tiempo total excedido
+    USER_INTERRUPT = "user_interrupt"   # El usuario hizo Ctrl+C
+    LLM_ERROR = "llm_error"           # Error irrecuperable del LLM
+```
+
+`StopReason` se guarda en `AgentState.stop_reason` y se incluye en el JSON output.
+
+---
+
+## Safety nets (`_check_safety_nets`)
+
+Comprueban condiciones antes de cada iteración. Si alguna salta, devuelven un `StopReason` y el loop hace `_graceful_close()`.
+
+```python
+def _check_safety_nets(state, step) -> StopReason | None:
+    # 1. User interrupt (Ctrl+C / SIGTERM) — más urgente
+    if shutdown and shutdown.should_stop:
+        return StopReason.USER_INTERRUPT
+
+    # 2. Max steps — watchdog de pasos
+    if step >= agent_config.max_steps:
+        return StopReason.MAX_STEPS
+
+    # 3. Timeout total — watchdog de tiempo
+    if timeout and (time.time() - start_time) > timeout:
+        return StopReason.TIMEOUT
+
+    # 4. Context window críticamente lleno (>95%)
+    if context_manager and context_manager.is_critically_full(messages):
+        return StopReason.CONTEXT_FULL
+
+    return None  # Todo bien, continuar
+```
+
+Cada safety net emite un log HUMAN via `hlog.safety_net()`.
+
+---
+
+## Cierre limpio (`_graceful_close`)
+
+Cuando un safety net salta, no corta abruptamente. Le da al LLM una última oportunidad de resumir qué hizo y qué queda pendiente.
+
+```python
+def _graceful_close(state, reason, tools_schema) -> AgentState:
+    hlog.closing(reason.value, len(state.steps))
+
+    # USER_INTERRUPT: corte inmediato, sin llamar al LLM
+    if reason == StopReason.USER_INTERRUPT:
         state.status = "partial"
-        state.final_output = f"Se alcanzó el límite de {agent_config.max_steps} pasos..."
+        state.final_output = "Interrumpido por el usuario."
+        return state
 
+    # Para todos los demás: pedir resumen al LLM
+    instruction = _CLOSE_INSTRUCTIONS[reason]
+    state.messages.append({"role": "user", "content": f"[SISTEMA] {instruction}"})
+
+    try:
+        # Última llamada SIN tools — solo texto de cierre
+        response = llm.completion(messages=state.messages, tools=None)
+        state.final_output = response.content
+    except Exception:
+        state.final_output = f"El agente se detuvo ({reason.value})."
+
+    state.status = "partial"
+    state.stop_reason = reason
+    hlog.loop_complete(status="partial", ...)
     return state
 ```
 
 ---
 
-## Parallel tool calls (F11)
+## Post-edit hooks (v3-M4)
+
+Después de que el agente edita un archivo (`edit_file`, `write_file`, `apply_patch`), se ejecutan automáticamente hooks configurados (lint, typecheck, tests). El resultado vuelve al LLM como parte del tool result.
+
+```python
+def _execute_single_tool(tc, step) -> ToolCallResult:
+    hlog.tool_call(tc.name, tc.arguments)
+
+    result = engine.execute_tool_call(tc.name, tc.arguments)
+
+    # v3-M4: Ejecutar hooks post-edit si aplican
+    hook_output = engine.run_post_edit_hooks(tc.name, tc.arguments)
+
+    if hook_output and result.success:
+        # Añadir output de hooks al resultado del tool
+        combined_output = result.output + "\n\n" + hook_output
+        result = ToolResult(success=result.success, output=combined_output)
+        hlog.hook_complete(tc.name)
+
+    hlog.tool_result(tc.name, result.success, result.error)
+    return ToolCallResult(tool_name=tc.name, args=tc.arguments, result=result)
+```
+
+Ejemplo de output con hooks:
+```
+  tool edit_file → src/main.py (3→5 líneas)
+    OK
+    [hooks ejecutados]
+```
+
+Si un hook falla, el LLM ve el error y puede auto-corregir:
+```
+[Hook python-lint: FALLÓ (exit 1)]
+src/main.py:45: E302 expected 2 blank lines, found 1
+```
+
+### Configuración de hooks
+
+```yaml
+hooks:
+  post_edit:
+    - name: python-lint
+      command: "ruff check {file} --no-fix"
+      file_patterns: ["*.py"]
+      timeout: 10
+
+    - name: python-typecheck
+      command: "mypy {file}"
+      file_patterns: ["*.py"]
+      timeout: 15
+      enabled: false
+```
+
+El placeholder `{file}` se sustituye por el path del archivo editado. La variable de entorno `ARCHITECT_EDITED_FILE` también está disponible.
+
+---
+
+## Parallel tool calls
 
 Cuando el LLM solicita varias tool calls en un mismo step, el loop puede ejecutarlas en paralelo.
 
 ### Lógica de decisión (`_should_parallelize`)
 
 ```python
-def _should_parallelize(self, tool_calls: list[ToolCall]) -> bool:
+def _should_parallelize(tool_calls) -> bool:
     # Desactivado si el config lo dice
-    if self.context_manager and not self.context_manager.config.parallel_tools:
+    if context_manager and not context_manager.config.parallel_tools:
         return False
 
     # confirm-all: siempre secuencial (interacción con el usuario)
-    if self.agent_config.confirm_mode == "confirm-all":
+    if agent_config.confirm_mode == "confirm-all":
         return False
 
     # confirm-sensitive: secuencial si alguna tool es sensible
-    if self.agent_config.confirm_mode == "confirm-sensitive":
+    if agent_config.confirm_mode == "confirm-sensitive":
         for tc in tool_calls:
-            if self.engine.registry.has_tool(tc.name):
-                tool = self.engine.registry.get(tc.name)
-                if tool.sensitive:
-                    return False
+            if registry.get(tc.name).sensitive:
+                return False
 
     # yolo o confirm-sensitive sin tools sensibles → paralelo
     return True
@@ -121,194 +270,194 @@ def _should_parallelize(self, tool_calls: list[ToolCall]) -> bool:
 ### Implementación paralela
 
 ```python
-def _execute_tool_calls_batch(self, tool_calls, step_num):
-    if len(tool_calls) <= 1 or not self._should_parallelize(tool_calls):
-        # Ejecución secuencial
-        return [self._execute_single_tool(tc, step_num) for tc in tool_calls]
+def _execute_tool_calls_batch(tool_calls, step):
+    if len(tool_calls) <= 1 or not _should_parallelize(tool_calls):
+        return [_execute_single_tool(tc, step) for tc in tool_calls]
 
     # Ejecución paralela con ThreadPoolExecutor
     results = [None] * len(tool_calls)
     with ThreadPoolExecutor(max_workers=min(len(tool_calls), 4)) as pool:
         futures = {
-            pool.submit(self._execute_single_tool, tc, step_num): i
+            pool.submit(_execute_single_tool, tc, step): i
             for i, tc in enumerate(tool_calls)
         }
         for future in as_completed(futures):
-            idx = futures[future]
-            results[idx] = future.result()
+            results[futures[future]] = future.result()
     return results
 ```
 
-El patrón `futures = {future: idx}` garantiza que los resultados se colocan en la posición correcta aunque los futures completen en diferente orden. El LLM siempre recibe los resultados en el orden en que solicitó las tool calls.
-
-**Thread safety**: structlog es thread-safe. `engine.execute_tool_call()` nunca lanza excepciones. Cada tool call opera sobre un archivo diferente habitualmente, pero incluso si hubiera colisiones, el resultado sería un error controlado devuelto al LLM.
+El patrón `{future: idx}` garantiza orden correcto independientemente del orden de completación.
 
 ---
 
-## ContextManager — gestión del context window (F11)
+## ContextManager — gestión del context window
 
-El `ContextManager` actúa en tres niveles progresivos para evitar que el contexto del LLM se llene en tareas largas.
+El `ContextManager` actúa en tres niveles progresivos para evitar que el contexto se llene en tareas largas.
+
+### Pipeline unificado (`manage`)
+
+```python
+def manage(messages, llm=None) -> list[dict]:
+    # Solo comprimir si el contexto supera el 75% del máximo
+    if llm and _is_above_threshold(messages, 0.75):
+        messages = maybe_compress(messages, llm)
+    messages = enforce_window(messages)
+    return messages
+```
+
+El threshold del 75% evita compresiones innecesarias en tareas cortas. Si `max_context_tokens=0` (sin límite), se confía en `summarize_after_steps`.
 
 ### Nivel 1 — Truncado de tool results (`truncate_tool_result`)
 
 Se aplica en `ContextBuilder._format_tool_result()` antes de añadir cada tool result al historial.
 
-```python
-def truncate_tool_result(self, content: str) -> str:
-    max_chars = self.config.max_tool_result_tokens * 4  # ~4 chars/token
-    if len(content) <= max_chars:
-        return content
-
-    lines = content.split("\n")
-    head = lines[:40]    # primeras 40 líneas (inicio del archivo)
-    tail = lines[-20:]   # últimas 20 líneas (final del archivo)
-    omitted = len(lines) - 60
-    marker = f"\n[... {omitted} líneas omitidas ...]\n"
-    return "\n".join(head) + marker + "\n".join(tail)
-```
-
 - `max_tool_result_tokens=0` desactiva el truncado.
-- Un `read_file` de 500 líneas → el agente recibe las primeras 40 + las últimas 20.
-- El marcador indica cuánto se omitió para que el LLM sepa que hay contenido intermedio.
+- Preserva primeras 40 líneas + últimas 20 líneas + marcador de omisión.
 
 ### Nivel 2 — Compresión con LLM (`maybe_compress`)
 
-Se aplica en el loop **después** de cada step con tool calls.
+Se activa cuando el número de intercambios supera `summarize_after_steps` Y el contexto está >75% lleno.
 
 ```python
-def maybe_compress(self, messages: list[dict], llm: LLMAdapter) -> list[dict]:
-    tool_exchanges = self._count_tool_exchanges(messages)
-    if tool_exchanges <= self.config.summarize_after_steps:
+def maybe_compress(messages, llm) -> list[dict]:
+    tool_exchanges = _count_tool_exchanges(messages)
+    if tool_exchanges <= config.summarize_after_steps:
         return messages  # sin cambios
 
-    # Separar mensajes en "antiguos" y "recientes"
-    keep_count = self.config.keep_recent_steps * 3  # ~3 mensajes por step
-    dialog = messages[2:]  # excluir system y user iniciales
     old_msgs = dialog[:-keep_count]
     recent_msgs = dialog[-keep_count:]
 
-    # Resumir los pasos antiguos con el LLM (~200 palabras)
-    summary = self._summarize_steps(old_msgs, llm)
+    # Resumir con el LLM; fallback mecánico si falla
+    summary = _summarize_steps(old_msgs, llm)
 
-    # Resultado: [system, user, summary_assistant, *recent_steps]
-    return [
-        messages[0],   # system
-        messages[1],   # user original
-        {"role": "assistant", "content": f"[Resumen de pasos anteriores]\n{summary}"},
-        *recent_msgs,
-    ]
+    return [system_msg, user_msg, summary_msg, *recent_msgs]
 ```
 
-- `summarize_after_steps=0` desactiva la compresión.
-- Si el LLM falla al resumir, los mensajes originales se retornan sin cambios (fallo silencioso).
-- `_count_tool_exchanges()` cuenta mensajes assistant con `tool_calls` no vacíos.
+Si el LLM falla al resumir (red, auth, etc.), se genera un resumen mecánico (lista de tools y archivos) como fallback.
 
 ### Nivel 3 — Ventana deslizante (`enforce_window`)
 
-Se aplica en el loop **después** de `maybe_compress`.
+Hard limit que elimina pares de mensajes antiguos hasta que el total estimado cabe.
+
+- `max_context_tokens=0` desactiva el límite.
+- Siempre preserva `messages[0]` (system) y `messages[1]` (user original).
+
+### `is_critically_full` — safety net del contexto
 
 ```python
-def enforce_window(self, messages: list[dict]) -> list[dict]:
-    if self.config.max_context_tokens == 0:
-        return messages
-
-    while (len(messages) > 4 and
-           self._estimate_tokens(messages) > self.config.max_context_tokens):
-        # Eliminar el par de mensajes más antiguo (después de system+user)
-        messages = [messages[0], messages[1]] + messages[4:]
-        # (se eliminan los mensajes [2] y [3]: el assistant+tool más antiguo)
-
-    return messages
+def is_critically_full(messages) -> bool:
+    # True si el contexto está al 95%+ del máximo
+    return _estimate_tokens(messages) > int(max_context_tokens * 0.95)
 ```
 
-- `max_context_tokens=0` desactiva el límite hard.
-- Siempre preserva `messages[0]` (system) y `messages[1]` (user original).
-- `_estimate_tokens()` = `len(str(messages)) // 4` (aproximación ~4 chars/token).
-- Valores recomendados: `gpt-4o` / `gpt-4o-mini` → 80000, `claude-sonnet-4-6` → 150000.
+Usado como safety net en el loop: si retorna True después de comprimir, el agente debe cerrar.
+
+### Estimación de tokens (`_estimate_tokens`)
+
+```python
+def _estimate_tokens(messages) -> int:
+    total_chars = 0
+    for m in messages:
+        if m.get("content"):
+            total_chars += len(str(m["content"]))
+        for tc in m.get("tool_calls", []):
+            total_chars += len(str(tc["function"]["name"]))
+            total_chars += len(str(tc["function"]["arguments"]))
+        total_chars += 16  # overhead por mensaje
+    return total_chars // 4
+```
+
+Extrae solo los campos de contenido relevantes (no serializa el dict completo) para evitar sobreestimaciones.
+
+---
+
+## Human logging (v3-M5+M6)
+
+El sistema de logging tiene 3 pipelines:
+
+1. **JSON file** (si configurado) — Todo, estructurado
+2. **HumanLogHandler** (stderr) — Solo eventos de trazabilidad del agente (nivel HUMAN=25)
+3. **Console técnico** (stderr) — Debug/info controlado por `-v`, excluyendo HUMAN
+
+### Nivel HUMAN
+
+```python
+# logging/levels.py
+HUMAN = 25  # entre INFO (20) y WARNING (30)
+```
+
+### HumanLog — helper tipado
+
+El `AgentLoop` usa `self.hlog = HumanLog(logger)` para emitir eventos HUMAN:
+
+```python
+hlog.llm_call(step, messages_count)      # "Paso N → LLM (M mensajes)"
+hlog.tool_call(name, args)               # "  tool read_file → src/main.py"
+hlog.tool_result(name, success, error)   # "    OK" o "    ERROR: ..."
+hlog.hook_complete(name)                 # "    [hooks ejecutados]"
+hlog.agent_done(step)                    # "✓ Completado (N pasos)"
+hlog.safety_net(reason, **kw)            # "⚠  Límite de pasos alcanzado..."
+hlog.closing(reason, steps)              # "→ Cerrando (reason, N pasos)"
+hlog.loop_complete(status, stop_reason, total_steps, total_tool_calls)
+hlog.llm_error(error)                    # "✗ Error del LLM: ..."
+hlog.step_timeout(seconds)              # "⚠  Step timeout (Ns)..."
+```
+
+### Formato visual de ejemplo
+
+```
+Paso 1 → LLM (3 mensajes)
+  tool read_file → src/main.py
+    OK
+  tool read_file → src/config.py
+    OK
+
+Paso 2 → LLM (7 mensajes)
+  tool edit_file → src/main.py (3→5 líneas)
+    OK
+    [hooks ejecutados]
+
+Paso 3 → LLM (10 mensajes)
+
+✓ Completado (3 pasos)
+  (3 pasos, 3 tool calls)
+```
+
+### Args summarizer (M6)
+
+`_summarize_args(tool_name, args)` produce resúmenes legibles por tool:
+
+| Tool | Ejemplo de resumen |
+|------|-------------------|
+| `read_file` | `src/main.py` |
+| `write_file` | `src/main.py (42 líneas)` |
+| `edit_file` | `src/main.py (3→5 líneas)` |
+| `apply_patch` | `src/main.py (+5 -3)` |
+| `search_code` | `"validate_path" en src/` |
+| `grep` | `"import jwt" en src/` |
+| `run_command` | `pytest tests/ -x` |
+| MCP tools | primer argumento truncado a 60 chars |
 
 ---
 
 ## SelfEvaluator — auto-evaluación del resultado (F12)
 
-El `SelfEvaluator` se invoca desde la CLI **después** de que el agente completa su ejecución.
-
-### Integración en el flujo
-
-```python
-# En cli.py, después de state = runner.run(prompt, ...) o loop.run(prompt, ...)
-
-self_eval_mode = kwargs.get("self_eval") or config.evaluation.mode
-
-if self_eval_mode != "off" and state.status == "success":
-    evaluator = SelfEvaluator(
-        llm,
-        max_retries=config.evaluation.max_retries,
-        confidence_threshold=config.evaluation.confidence_threshold,
-    )
-
-    if self_eval_mode == "basic":
-        eval_result = evaluator.evaluate_basic(prompt, state)
-        passed = (eval_result.completed
-                  and eval_result.confidence >= config.evaluation.confidence_threshold)
-        if not passed:
-            state.status = "partial"  # modifica el estado
-
-    elif self_eval_mode == "full":
-        state = evaluator.evaluate_full(prompt, state, run_fn)
-        # run_fn = lambda p: runner.run(p, stream=False)  — sin streaming para reintentos
-```
+Se invoca desde la CLI **después** de que el agente completa su ejecución. Solo evalúa estados `"success"`.
 
 ### `evaluate_basic` — una evaluación
 
-```python
-def evaluate_basic(self, original_prompt: str, state: AgentState) -> EvalResult:
-    eval_messages = [
-        {"role": "system", "content": self._EVAL_SYSTEM_PROMPT},
-        {"role": "user", "content": (
-            f"**Tarea original:**\n{original_prompt}\n\n"
-            f"**Resultado del agente:**\n{state.final_output[:500]}\n\n"
-            f"**Acciones ejecutadas:**\n{self._summarize_steps(state)}\n\n"
-            f"¿La tarea se completó correctamente?"
-        )},
-    ]
-    response = self.llm.completion(eval_messages, tools=None)  # sin tools, solo texto
-    return self._parse_eval(response.content)
-```
-
-El system prompt obliga al LLM evaluador a responder **solo en JSON**:
-```json
-{"completed": true, "confidence": 0.92, "issues": [], "suggestion": ""}
-```
+El LLM evalúa el resultado y responde en JSON: `{"completed": true, "confidence": 0.92, "issues": [], "suggestion": ""}`. Si no pasa, `state.status = "partial"`.
 
 ### `evaluate_full` — evaluación + reintentos
 
-```python
-def evaluate_full(self, original_prompt, state, run_fn) -> AgentState:
-    for attempt in range(self.max_retries):
-        eval_result = self.evaluate_basic(original_prompt, state)
+Hasta `max_retries` ciclos de `evaluate_basic()` + `run_fn(correction_prompt)`. Retorna el mejor estado.
 
-        if eval_result.completed and eval_result.confidence >= self.confidence_threshold:
-            return state  # éxito temprano
-
-        correction_prompt = self._build_correction_prompt(original_prompt, eval_result)
-        try:
-            state = run_fn(correction_prompt)
-        except Exception:
-            break  # fallo silencioso — retorna el último estado disponible
-
-    return state  # retorna el último estado aunque no haya pasado
-```
-
-### Parseo de respuesta JSON (`_parse_eval`)
+### Parseo de respuesta JSON
 
 Tres estrategias en orden:
-1. `json.loads(content)` directo — caso ideal.
-2. Regex `r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'` — LLM envolvió en bloque de código.
-3. Regex `r'\{[\s\S]*?\}'` — extrae el primer `{...}` del texto.
-
-Si todas fallan → `EvalResult(completed=False, confidence=0.0, issues=["No se pudo parsear..."])`.
-
-La `confidence` siempre se clampea a `[0.0, 1.0]` independientemente de lo que devuelva el LLM.
+1. `json.loads(content)` directo.
+2. Regex para bloque de código JSON.
+3. Regex para primer `{...}`.
 
 ---
 
@@ -316,51 +465,50 @@ La `confidence` siempre se clampea a `[0.0, 1.0]` independientemente de lo que d
 
 ```
 AgentState
-├── messages: list[dict]      ← historial OpenAI, crece cada step
-│                                (puede ser podado por ContextManager)
-├── steps: list[StepResult]   ← resultados inmutables de cada step
-├── status: str               ← "running" | "success" | "partial" | "failed"
-├── final_output: str | None  ← respuesta final del agente
-├── start_time: float         ← para calcular duration_seconds
-└── model: str | None         ← modelo usado (para --json output)
+├── messages: list[dict]           ← historial OpenAI (gestionado por ContextManager)
+├── steps: list[StepResult]        ← resultados inmutables de cada step
+├── status: str                    ← "running" | "success" | "partial" | "failed"
+├── stop_reason: StopReason | None ← por qué se detuvo
+├── final_output: str | None       ← respuesta final del agente
+├── start_time: float              ← para calcular duration_seconds
+├── model: str | None              ← modelo usado
+└── cost_tracker: CostTracker | None ← F14: tracker de costes
 ```
 
-Transiciones de estado:
+Transiciones de estado (v3):
 
 ```
-              tool_calls
-"running" ──────────────────────────→ "running" (siguiente step)
+                  tool_calls
+"running" ──────────────────────→ "running" (siguiente step)
     │
-    │  finish_reason="stop" AND no tool_calls
-    ├──────────────────────────────→ "success"
-    │                                   │
-    │                                   │ SelfEvaluator (básico, falla)
-    │                                   ├──────────────→ "partial"
-    │                                   │
-    │                                   │ SelfEvaluator (full, itera)
-    │                                   └──────────────→ "success" | "partial" | "failed"
+    │  no tool_calls (LLM decidió terminar)
+    ├──────────────────────────→ "success" (StopReason.LLM_DONE)
+    │                               │
+    │                               │ SelfEvaluator (básico, falla)
+    │                               └──────────→ "partial"
     │
-    │  max_steps alcanzado
-    ├──────────────────────────────→ "partial"
+    │  safety net: MAX_STEPS
+    ├──────────────────────────→ _graceful_close → "partial"
+    │                            (LLM resume qué hizo)
     │
-    │  StepTimeoutError
-    ├──────────────────────────────→ "partial"
+    │  safety net: BUDGET_EXCEEDED
+    ├──────────────────────────→ _graceful_close → "partial"
     │
-    │  shutdown.should_stop
-    ├──────────────────────────────→ "partial"
+    │  safety net: TIMEOUT / CONTEXT_FULL
+    ├──────────────────────────→ _graceful_close → "partial"
     │
-    │  finish_reason != "stop" AND no tool_calls AND != "length"
-    ├──────────────────────────────→ "partial"
+    │  safety net: USER_INTERRUPT
+    ├──────────────────────────→ "partial" (corte inmediato, sin LLM)
     │
     │  LLM Exception
-    └──────────────────────────────→ "failed"
+    └──────────────────────────→ "failed" (StopReason.LLM_ERROR)
 ```
 
 ---
 
 ## Acumulación de mensajes (ContextBuilder)
 
-Cada step añade mensajes a la lista. El historial completo (o la versión podada) se envía al LLM en cada llamada.
+Cada step añade mensajes. El historial (o la versión comprimida) se envía al LLM en cada llamada.
 
 ```
 Paso 0 (inicial):
@@ -369,21 +517,15 @@ messages = [
   {"role": "user",      "content": "refactoriza main.py"}
 ]
 
-Después de tool calls en step 1 (con truncado Nivel 1 en el tool result):
+Después de tool calls en step 1 (con truncado Nivel 1):
 messages = [
   {"role": "system",    "content": "..."},
   {"role": "user",      "content": "refactoriza main.py"},
-  {"role": "assistant", "content": null,
-   "tool_calls": [
-     {"id": "call_abc", "type": "function",
-      "function": {"name": "read_file", "arguments": "{\"path\":\"main.py\"}"}}
-   ]
-  },
-  {"role": "tool", "tool_call_id": "call_abc",
-   "content": "def foo():\n    pass\n...\n[... 120 líneas omitidas ...]\n...fin del archivo"}
+  {"role": "assistant", "tool_calls": [...]},
+  {"role": "tool",      "content": "def foo():\n    pass\n...\n[... 120 líneas omitidas ...]\n..."}
 ]
 
-Después de 9+ steps (con compresión Nivel 2):
+Después de 9+ steps (con compresión Nivel 2, si contexto > 75%):
 messages = [
   {"role": "system",    "content": "..."},
   {"role": "user",      "content": "refactoriza main.py"},
@@ -392,33 +534,18 @@ messages = [
 ]
 ```
 
-El `ContextBuilder` también inyecta el árbol del repositorio (`RepoIndex.format_tree()`) al final del system prompt cuando hay un `RepoIndex` disponible.
-
 ---
 
 ## Streaming
 
 Cuando `stream=True`:
-
 1. `llm.completion_stream(messages, tools)` devuelve un generator.
-2. Cada `StreamChunk` tiene `type="content"` y `data=str` con el texto parcial.
-3. El loop llama a `on_stream_chunk(chunk.data)` — normalmente esto escribe a `stderr`.
-4. El último item del generator es un `LLMResponse` completo (con `tool_calls` si los hay).
-5. Los chunks de tool calls **no** se envían al callback — se acumulan internamente y se devuelven en el `LLMResponse` final.
+2. Cada `StreamChunk` tiene `type="content"` y `data=str`.
+3. El loop llama a `on_stream_chunk(chunk.data)` — escribe a `stderr`.
+4. El último item es un `LLMResponse` completo (con `tool_calls` si los hay).
+5. Los chunks de tool calls **no** se envían al callback.
 
-```
-generator yields:
-  StreamChunk("content", "He")
-  StreamChunk("content", " analizado")
-  StreamChunk("content", " main.py")
-  LLMResponse(content="He analizado main.py", tool_calls=[], finish_reason="stop")
-```
-
-El streaming se desactiva automáticamente en:
-- Fase plan del modo mixto (es rápido, el output importa menos).
-- `--json` o `--quiet` (no hay terminal interactiva que se beneficie).
-- `--no-stream` explícito.
-- Reintentos de `evaluate_full` (el callback ya no tiene sentido en la corrección).
+El streaming se desactiva automáticamente en: fase plan del modo mixto, `--json`, `--quiet`, `--no-stream`, reintentos de `evaluate_full`.
 
 ---
 
@@ -433,10 +560,7 @@ GracefulShutdown
 └── should_stop: property → _interrupted
 ```
 
-El loop comprueba `shutdown.should_stop` **al inicio de cada iteración**, no dentro de la llamada al LLM. Esto significa:
-- Si el usuario pulsa Ctrl+C mientras el LLM está respondiendo, el step actual termina.
-- En el siguiente step, el loop detecta `should_stop=True` y sale limpiamente.
-- El agente retorna `status="partial"` (no "failed").
+El loop comprueba `shutdown.should_stop` en `_check_safety_nets()` al inicio de cada iteración. Si True, `_graceful_close()` corta inmediatamente (USER_INTERRUPT no llama al LLM).
 
 ---
 
@@ -445,13 +569,10 @@ El loop comprueba `shutdown.should_stop` **al inicio de cada iteración**, no de
 ```python
 with StepTimeout(60):          # 60 segundos
     response = llm.completion(...)
-# Si tarda > 60s: SIGALRM → StepTimeoutError → status="partial"
-# Si termina antes: signal.alarm(0) cancela la alarma
+# Si tarda > 60s: SIGALRM → StepTimeoutError → _graceful_close(TIMEOUT)
 ```
 
-- Sólo activo en Linux/macOS (usa `SIGALRM`).
-- En Windows: no-op transparente (sin timeout garantizado).
-- Restaura el handler anterior al salir — compatible con nesting.
+- Solo activo en Linux/macOS (usa `SIGALRM`). En Windows: no-op.
 - `step_timeout` viene del flag `--timeout` de CLI.
 
 ---
@@ -465,9 +586,11 @@ AgentLoop(
     agent_config:    AgentConfig,
     ctx:             ContextBuilder,
     shutdown:        GracefulShutdown | None = None,
-    step_timeout:    int = 0,               # 0 = sin timeout
-    context_manager: ContextManager | None = None,  # F11: pruning de contexto
+    step_timeout:    int = 0,                        # 0 = sin timeout
+    context_manager: ContextManager | None = None,
+    cost_tracker:    CostTracker | None = None,      # F14: tracking de costes
+    timeout:         int | None = None,              # timeout total de ejecución
 )
 ```
 
-El loop no crea sus dependencias — las recibe como parámetros (inyección de dependencias). Esto facilita testing y composición (MixedModeRunner reutiliza el mismo `llm`, `context_manager` y `shutdown` en ambas fases).
+El loop no crea sus dependencias — las recibe como parámetros (inyección de dependencias). Internamente crea `self.hlog = HumanLog(logger)` para emitir logs de trazabilidad.
