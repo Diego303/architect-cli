@@ -21,12 +21,15 @@ Guía práctica de uso real: desde el caso más simple hasta configuraciones ava
 13. [Indexer y herramientas de búsqueda (F10)](#13-indexer-y-herramientas-de-búsqueda-f10)
 14. [Gestión del context window (F11)](#14-gestión-del-context-window-f11)
 15. [Auto-evaluación --self-eval (F12)](#15-auto-evaluación---self-eval-f12)
-16. [Uso en scripts y pipes](#16-uso-en-scripts-y-pipes)
-17. [CI/CD: GitHub Actions, GitLab, cron](#17-cicd-github-actions-gitlab-cron)
-18. [Multi-proyecto: workspace y config por proyecto](#18-multi-proyecto-workspace-y-config-por-proyecto)
-19. [Agentes custom en YAML](#19-agentes-custom-en-yaml)
-20. [Comandos auxiliares](#20-comandos-auxiliares)
-21. [Referencia rápida de flags](#21-referencia-rápida-de-flags)
+16. [Ejecución de comandos --allow-commands (F13)](#16-ejecución-de-comandos---allow-commands-f13)
+17. [Seguimiento de costes --show-costs (F14)](#17-seguimiento-de-costes---show-costs-f14)
+18. [Post-edit hooks (v3-M4)](#18-post-edit-hooks-v3-m4)
+19. [Uso en scripts y pipes](#19-uso-en-scripts-y-pipes)
+20. [CI/CD: GitHub Actions, GitLab, cron](#20-cicd-github-actions-gitlab-cron)
+21. [Multi-proyecto: workspace y config por proyecto](#21-multi-proyecto-workspace-y-config-por-proyecto)
+22. [Agentes custom en YAML](#22-agentes-custom-en-yaml)
+23. [Comandos auxiliares](#23-comandos-auxiliares)
+24. [Referencia rápida de flags](#24-referencia-rápida-de-flags)
 
 ---
 
@@ -39,7 +42,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.12.0
+architect --version   # architect, version 0.15.0
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -834,7 +837,232 @@ esac
 
 ---
 
-## 16. Uso en scripts y pipes
+## 16. Ejecución de comandos `--allow-commands` (F13)
+
+A partir de v0.13.0, el agente `build` puede ejecutar comandos del sistema: tests, linters, compiladores y scripts.
+
+### Habilitar la tool `run_command`
+
+```bash
+# Habilitado por defecto si commands.enabled: true en config
+# Habilitar con flag (override de config)
+architect run "ejecuta los tests y corrije los errores" -a build --allow-commands --mode yolo
+
+# Deshabilitar aunque esté en config
+architect run "PROMPT" -a build --no-commands
+```
+
+### Qué puede ejecutar el agente
+
+El `BUILD_PROMPT` instruye al agente a usar `run_command` para verificar su propio trabajo:
+
+```bash
+# El agente ejecuta esto internamente tras modificar código:
+# run_command(command="pytest tests/ -x", timeout=60)
+# run_command(command="mypy src/", timeout=30)
+# run_command(command="ruff check .", timeout=15)
+```
+
+### Clasificación de sensibilidad
+
+| Tipo | Ejemplos | Confirmación en `confirm-sensitive` | Confirmación en `yolo` |
+|------|----------|-------------------------------------|------------------------|
+| `safe` | `ls`, `cat`, `git status`, `git log`, `grep`, `python --version` | No | No |
+| `dev` | `pytest`, `mypy`, `ruff`, `make`, `npm run test`, `cargo build` | **Sí** | No |
+| `dangerous` | Cualquier otro comando no reconocido | **Sí** | **Sí** |
+
+```bash
+# Con --mode yolo: pytest, mypy, ruff se ejecutan sin confirmación
+# Con --mode confirm-sensitive: solo comandos 'dev' y 'dangerous' piden confirmación
+architect run "crea tests y verifica que pasan" -a build --allow-commands --mode yolo
+```
+
+### Seguridad integrada
+
+La tool siempre bloquea: `rm -rf /`, `rm -rf ~`, `sudo`, `chmod 777`, `curl|bash`, `dd of=/dev/`, `mkfs` y otros comandos destructivos, independientemente del modo de confirmación.
+
+```bash
+# Bloqueado siempre (BlockedCommandError):
+# run_command("sudo apt-get install ...")    → bloqueado
+# run_command("rm -rf /tmp/proyecto")       → ¡ATENCIÓN! rm -rf sin / no está bloqueado → 'dangerous'
+# run_command("curl -s url | bash")         → bloqueado
+```
+
+### Configurar en YAML
+
+```yaml
+commands:
+  enabled: true
+  default_timeout: 60       # timeout por defecto en segundos
+  max_output_lines: 200     # límite de líneas de output
+  safe_commands:
+    - "my-custom-lint.sh"   # comandos adicionales clasificados como 'safe'
+  blocked_patterns:
+    - "git push"            # bloquear operaciones git destructivas
+  allowed_only: false       # si true, solo safe/dev permitidos en execute()
+```
+
+### Flujo típico del agente con run_command
+
+```
+1. edit_file(path="src/auth.py", ...)           → modifica el archivo
+2. run_command(command="mypy src/auth.py")      → verifica tipos
+3. run_command(command="pytest tests/test_auth.py -x")  → ejecuta tests
+4. (si hay errores) → lee el output, corrige, repite
+```
+
+---
+
+## 17. Seguimiento de costes `--show-costs` (F14)
+
+A partir de v0.14.0, architect registra el coste de cada llamada al LLM y puede detener la ejecución si se supera un presupuesto.
+
+### Ver el coste de una ejecución
+
+```bash
+# Mostrar resumen al terminar
+architect run "PROMPT" -a build --show-costs
+
+# También se activa con -v (verbose)
+architect run "PROMPT" -a build -v
+
+# Output de ejemplo:
+# 💰 Coste: $0.0042 (12,450 in / 3,200 out / 500 cached)
+```
+
+### Presupuesto máximo
+
+```bash
+# Detener si se superan $0.50
+architect run "tarea larga" -a build --mode yolo --budget 0.50
+
+# Si se supera el presupuesto:
+# Estado: partial
+# Output: "Presupuesto excedido: $0.5023 > $0.5000 USD"
+# Exit code: 2
+```
+
+### El coste en el JSON output
+
+```bash
+architect run "PROMPT" --quiet --json | jq .costs
+# {
+#   "total_input_tokens": 12450,
+#   "total_output_tokens": 3200,
+#   "total_cached_tokens": 500,
+#   "total_tokens": 15650,
+#   "total_cost_usd": 0.004213,
+#   "by_source": {
+#     "agent": 0.003800,
+#     "eval": 0.000413
+#   }
+# }
+```
+
+### Prompt caching — ahorro de tokens
+
+```yaml
+# config.yaml
+llm:
+  model: claude-sonnet-4-6
+  api_key_env: ANTHROPIC_API_KEY
+  prompt_caching: true   # ahorra 50-90% en el system prompt en llamadas repetidas
+```
+
+Con `prompt_caching: true`, el system prompt (incluyendo el árbol del indexer) se cachea automáticamente en el proveedor. Los `cached_tokens` aparecen en el resumen de costes y se cobran a precio reducido.
+
+### Cache local de LLM para desarrollo
+
+```bash
+# Activar cache local (evita llamadas repetidas al LLM con los mismos mensajes)
+architect run "PROMPT" -a build --cache
+
+# Limpiar cache antes de ejecutar
+architect run "PROMPT" -a build --cache --cache-clear
+
+# Desactivar aunque esté en config.yaml
+architect run "PROMPT" --no-cache
+```
+
+```yaml
+# config.yaml — habilitar para todo el equipo de desarrollo
+llm_cache:
+  enabled: true         # false en producción
+  dir: ~/.architect/cache
+  ttl_hours: 24         # entradas válidas por 24 horas
+```
+
+**ATENCIÓN**: el cache local es solo para desarrollo. Retorna respuestas anteriores exactas — si el contexto real ha cambiado, la respuesta puede estar obsoleta.
+
+### Configurar presupuesto en YAML
+
+```yaml
+costs:
+  enabled: true
+  budget_usd: 2.0      # máximo $2 por ejecución
+  warn_at_usd: 1.0     # aviso (sin detener) al alcanzar $1
+  # prices_file: custom_prices.json  # precios custom si usas un proxy
+```
+
+### Interpretar costes en CI
+
+```bash
+architect run "PROMPT" --mode yolo --quiet --json --budget 1.0 \
+  | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+costs = data.get('costs', {})
+print(f\"Status: {data['status']}\")
+print(f\"Coste: \${costs.get('total_cost_usd', 0):.4f}\")
+print(f\"Tokens: {costs.get('total_tokens', 0):,}\")
+"
+```
+
+---
+
+## 18. Post-edit hooks (v3-M4)
+
+A partir de v0.15.0, architect puede ejecutar hooks automaticamente cuando el agente edita archivos. Los resultados vuelven al LLM para que pueda auto-corregir errores.
+
+### Configurar hooks en YAML
+
+```yaml
+hooks:
+  post_edit:
+    - name: python-lint
+      command: "ruff check {file} --no-fix"
+      file_patterns: ["*.py"]
+      timeout: 15
+    - name: python-typecheck
+      command: "mypy {file} --no-error-summary"
+      file_patterns: ["*.py"]
+      timeout: 30
+```
+
+### Como funciona
+
+1. El agente llama a `edit_file`, `write_file` o `apply_patch`
+2. La tool se ejecuta normalmente
+3. Si el archivo coincide con `file_patterns`, se ejecutan los hooks configurados
+4. El output de los hooks se anade al resultado del tool
+5. El LLM lee el output y puede auto-corregir errores
+
+### Ejemplo de flujo con hooks
+
+El agente edita `src/main.py`:
+- edit_file ejecuta el cambio -- OK
+- Hook python-lint ejecuta `ruff check src/main.py` -- 1 error
+- El LLM ve: "[Hook python-lint: FALLO (exit 1)] src/main.py:15:5: F841..."
+- El LLM corrige el error automaticamente con otro edit_file
+
+### Variables de entorno
+
+- `{file}` en el comando se reemplaza con el path del archivo editado
+- `ARCHITECT_EDITED_FILE` env var contiene el path del archivo
+
+---
+
+## 19. Uso en scripts y pipes
 
 ### Capturar resultado en variable
 
@@ -913,7 +1141,7 @@ print(data['output'])
 
 ---
 
-## 17. CI/CD: GitHub Actions, GitLab, cron
+## 20. CI/CD: GitHub Actions, GitLab, cron
 
 ### GitHub Actions
 
@@ -1068,7 +1296,7 @@ echo "[$(date)] Review completado: status=$STATUS log=$LOG_FILE"
 
 ---
 
-## 18. Multi-proyecto: workspace y config por proyecto
+## 21. Multi-proyecto: workspace y config por proyecto
 
 ### Workspace explícito con `-w`
 
@@ -1134,7 +1362,7 @@ architect run "migra auth.py a Python 3" -a migrator -c architect.yaml
 
 ---
 
-## 19. Agentes custom en YAML
+## 22. Agentes custom en YAML
 
 ### Definir y usar un agente custom completo
 
@@ -1220,7 +1448,7 @@ agents:
 
 ---
 
-## 20. Comandos auxiliares
+## 23. Comandos auxiliares
 
 ### `architect agents` — listar agentes disponibles
 
@@ -1256,7 +1484,7 @@ architect validate-config -c config.example.yaml
 
 ---
 
-## 21. Referencia rápida de flags
+## 24. Referencia rápida de flags
 
 ### `architect run PROMPT [OPTIONS]`
 
@@ -1292,6 +1520,17 @@ MCP
 
 Auto-evaluación (F12)
   --self-eval MODE          off | basic | full (default: usa config YAML)
+
+Ejecución de comandos (F13)
+  --allow-commands          Habilitar run_command (sobreescribe config YAML)
+  --no-commands             Deshabilitar run_command (sobreescribe config YAML)
+
+Costes y caché (F14)
+  --budget FLOAT            Límite de gasto en USD (detiene si se supera)
+  --show-costs              Mostrar resumen de costes al final (también con -v)
+  --cache                   Activar cache local de respuestas LLM
+  --no-cache                Desactivar cache local de respuestas LLM
+  --cache-clear             Limpiar cache local antes de ejecutar
 ```
 
 ### Combinaciones más comunes
@@ -1324,4 +1563,13 @@ architect run "PROMPT" -a build -w /ruta/proyecto -c /ruta/proyecto/architect.ya
 # Pipeline completo: ejecutar, evaluar, capturar JSON
 architect run "PROMPT" --mode yolo --self-eval basic --quiet --json \
   | jq '{status, steps, output: .output[:200]}'
+
+# Con comandos habilitados y presupuesto limitado
+architect run "PROMPT" -a build --allow-commands --budget 0.5 --show-costs
+
+# Desarrollo con cache local (evita llamadas repetidas al LLM)
+architect run "PROMPT" -a build --cache --show-costs
+
+# CI con presupuesto estricto y output JSON (incluye costs en el JSON)
+architect run "PROMPT" --mode yolo --allow-commands --budget 1.0 --quiet --json
 ```

@@ -48,6 +48,11 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--log-level LEVEL` | `logging.level` |
 | `--log-file PATH` | `logging.file` |
 | `--self-eval MODE` | `evaluation.mode` (off/basic/full) |
+| `--allow-commands` | `commands.enabled = True` |
+| `--no-commands` | `commands.enabled = False` |
+| `--budget FLOAT` | `costs.budget_usd` |
+| `--cache` | `llm_cache.enabled = True` |
+| `--no-cache` | `llm_cache.enabled = False` |
 
 ---
 
@@ -69,6 +74,7 @@ llm:
   timeout: 60              # segundos por llamada al LLM
   retries: 2               # reintentos en errores transitorios (no auth)
   stream: true             # streaming por defecto; desactivado con --no-stream/--json/--quiet
+  prompt_caching: false    # marca system prompt con cache_control → ahorro 50-90% en Anthropic/OpenAI
 
 # ==============================================================================
 # Agentes (custom o overrides de defaults)
@@ -95,8 +101,9 @@ agents:
 # Logging
 # ==============================================================================
 logging:
-  level: info              # "debug" | "info" | "warn" | "error"
-  verbose: 0               # 0=warn, 1=info, 2=debug, 3+=all (equiv. -v, -vv, -vvv)
+  level: human             # "debug" | "info" | "human" | "warn" | "error"
+                           # v3: "human" muestra la trazabilidad del agente
+  verbose: 0               # 0=solo human logs, 1=info, 2=debug, 3+=all
   # file: logs/architect.jsonl   # JSON Lines; DEBUG completo siempre
 
 # ==============================================================================
@@ -166,6 +173,60 @@ evaluation:
                            # Override desde CLI: --self-eval basic|full
   max_retries: 2           # reintentos en modo "full" (rango: 1-5)
   confidence_threshold: 0.8  # umbral de confianza para aceptar resultado (0.0-1.0)
+
+# ==============================================================================
+# Commands — ejecución de comandos del sistema (F13)
+# ==============================================================================
+commands:
+  enabled: true            # false = no registrar run_command; --allow-commands/--no-commands
+  default_timeout: 30      # segundos por defecto (1-600)
+  max_output_lines: 200    # líneas de stdout/stderr antes de truncar (10-5000)
+  blocked_patterns: []     # regexes extra a bloquear (además de los built-in)
+  # blocked_patterns:
+  #   - "git push --force"
+  #   - "docker rm"
+  safe_commands: []        # comandos adicionales clasificados como 'safe'
+  allowed_only: false      # si true, solo safe/dev; dangerous rechazados en execute()
+
+# ==============================================================================
+# Costs — seguimiento de costes de llamadas al LLM (F14)
+# ==============================================================================
+costs:
+  enabled: true            # false = sin tracking de costes
+  # prices_file: my_prices.json  # precios custom (mismo formato que default_prices.json)
+  # budget_usd: 1.0        # detener si se superan $1.00; Override: --budget 1.0
+  # warn_at_usd: 0.5       # log warning al alcanzar $0.50
+
+# ==============================================================================
+# LLM Cache — cache local de respuestas LLM para desarrollo (F14)
+# ==============================================================================
+llm_cache:
+  enabled: false           # true = activar; Override: --cache / --no-cache
+  dir: ~/.architect/cache  # directorio donde guardar las entradas
+  ttl_hours: 24            # validez de cada entrada (1-8760 horas)
+
+# ==============================================================================
+# Hooks — verificacion automatica post-edicion (v3-M4)
+# ==============================================================================
+hooks:
+  post_edit:
+    # Cada hook se ejecuta cuando el agente edita un archivo que coincide con file_patterns
+    - name: python-lint
+      command: "ruff check {file} --no-fix"   # {file} se reemplaza con el path editado
+      file_patterns: ["*.py"]                   # patrones glob
+      timeout: 15                               # segundos (1-300, default: 15)
+      enabled: true                             # false = ignorar este hook
+
+    - name: python-typecheck
+      command: "mypy {file} --no-error-summary"
+      file_patterns: ["*.py"]
+      timeout: 30
+
+    # Hook para TypeScript
+    # - name: ts-lint
+    #   command: "eslint {file} --no-color"
+    #   file_patterns: ["*.ts", "*.tsx"]
+    #   timeout: 15
 ```
 
 ---
@@ -302,6 +363,59 @@ context:
   keep_recent_steps: 3
   max_context_tokens: 60000      # más conservador
   parallel_tools: true
+```
+
+### Con ejecución de comandos (F13) y costes (F14)
+
+```yaml
+llm:
+  model: claude-sonnet-4-6
+  api_key_env: ANTHROPIC_API_KEY
+  prompt_caching: true     # ahorra tokens en llamadas repetidas al mismo system prompt
+
+commands:
+  enabled: true
+  default_timeout: 60
+  max_output_lines: 200
+  safe_commands:
+    - "pnpm test"
+    - "cargo check"
+
+costs:
+  enabled: true
+  budget_usd: 2.0          # máximo $2 por ejecución
+  warn_at_usd: 1.0         # aviso al alcanzar $1
+
+# Cache local para desarrollo: evita llamadas repetidas al LLM
+llm_cache:
+  enabled: false           # activar con --cache en CLI durante desarrollo
+  ttl_hours: 24
+```
+
+```bash
+# Con cache local activo y presupuesto desde CLI
+architect run "PROMPT" -a build --cache --budget 1.5 --show-costs
+```
+
+### Con hooks post-edit (v3-M4)
+
+```yaml
+hooks:
+  post_edit:
+    - name: python-lint
+      command: "ruff check {file} --no-fix"
+      file_patterns: ["*.py"]
+      timeout: 15
+    - name: python-typecheck
+      command: "mypy {file} --no-error-summary"
+      file_patterns: ["*.py"]
+      timeout: 30
+```
+
+```bash
+# Los hooks se ejecutan automaticamente — el LLM ve el output de lint/typecheck
+# y puede auto-corregir errores
+architect run "refactoriza utils.py" -a build --mode yolo -c config.yaml
 ```
 
 ### Config completa con self-eval

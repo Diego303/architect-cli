@@ -1,46 +1,74 @@
 """
 Agent Loop - Ciclo principal de ejecución del agente.
 
-Este es el corazón del sistema. Orquesta la interacción entre
-el LLM y las tools, gestionando el flujo completo de ejecución.
+v3: Rediseñado con while True — el LLM decide cuándo parar.
+Los safety nets (max_steps, budget, timeout, context) son watchdogs
+que, al dispararse, piden un cierre limpio al LLM en lugar de cortar.
 
-Incluye:
-- Timeout por step (StepTimeout) para evitar bloqueos indefinidos
-- Comprobación de shutdown antes de cada iteración (GracefulShutdown)
-- Manejo robusto de errores que no rompe el loop
-- Parallel tool calls (F11): ejecución concurrente de tools independientes
-- Context pruning (F11): compresión de mensajes cuando el contexto crece
+Invariantes:
+- El LLM termina cuando no solicita más tool calls (StopReason.LLM_DONE)
+- Los watchdogs inyectan instrucción de cierre → última llamada al LLM
+- USER_INTERRUPT es el único caso que NO llama al LLM (corte inmediato)
 """
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Callable
 
 import structlog
 
 from ..config.schema import AgentConfig
+from ..costs.tracker import BudgetExceededError
 from ..execution.engine import ExecutionEngine
 from ..llm.adapter import LLMAdapter, StreamChunk
+from ..logging.human import HumanLog
 from .context import ContextBuilder, ContextManager
 from .shutdown import GracefulShutdown
-from .state import AgentState, StepResult, ToolCallResult
+from .state import AgentState, StepResult, StopReason, ToolCallResult
 from .timeout import StepTimeout, StepTimeoutError
 
 if TYPE_CHECKING:
+    from ..costs.tracker import CostTracker
     from ..llm.adapter import ToolCall
 
 logger = structlog.get_logger()
 
+# Instrucciones de cierre para cada watchdog
+_CLOSE_INSTRUCTIONS: dict[StopReason, str] = {
+    StopReason.MAX_STEPS: (
+        "Has alcanzado el límite máximo de pasos permitidos. "
+        "Responde con un resumen de lo que completaste, qué queda pendiente "
+        "y sugerencias para continuar en otra sesión."
+    ),
+    StopReason.BUDGET_EXCEEDED: (
+        "Se ha alcanzado el presupuesto máximo de coste. "
+        "Resume brevemente lo que completaste y qué falta por hacer."
+    ),
+    StopReason.CONTEXT_FULL: (
+        "El contexto de conversación está lleno. "
+        "Resume brevemente lo que completaste y qué falta por hacer."
+    ),
+    StopReason.TIMEOUT: (
+        "Se agotó el tiempo asignado para esta ejecución. "
+        "Resume brevemente lo que completaste y qué falta por hacer."
+    ),
+}
+
 
 class AgentLoop:
-    """Loop principal del agente.
+    """Loop principal del agente (v3: while True).
 
-    Orquesta el ciclo completo:
-    1. Comprobar si hay señal de shutdown — salir limpiamente si la hay
-    2. Enviar mensajes al LLM (con timeout por step)
-    3. Recibir respuesta (texto o tool calls)
-    4. Ejecutar tool calls si las hay (con timeout)
-    5. Enviar resultados de vuelta al LLM
-    6. Repetir hasta que el agente termine o se alcance max_steps
+    El LLM trabaja hasta que decide que terminó (no pide más tools).
+    Los safety nets son watchdogs que comprueban condiciones antes de
+    cada llamada al LLM. Si se disparan, piden un cierre limpio.
+
+    Flujo por iteración:
+    1. Comprobar safety nets → si saltan, _graceful_close() y terminar
+    2. Gestionar contexto (comprimir si es necesario)
+    3. Llamar al LLM
+    4. Si no hay tool_calls → el LLM terminó, salir (LLM_DONE)
+    5. Ejecutar tool calls + hooks post-edit
+    6. Añadir resultados al contexto y repetir
     """
 
     def __init__(
@@ -52,6 +80,8 @@ class AgentLoop:
         shutdown: GracefulShutdown | None = None,
         step_timeout: int = 0,
         context_manager: ContextManager | None = None,
+        cost_tracker: "CostTracker | None" = None,
+        timeout: int | None = None,
     ):
         """Inicializa el agent loop.
 
@@ -60,10 +90,11 @@ class AgentLoop:
             engine: ExecutionEngine configurado
             agent_config: Configuración del agente
             context_builder: ContextBuilder para mensajes
-            shutdown: GracefulShutdown para detectar interrupciones (opcional)
-            step_timeout: Segundos máximos por step. 0 = sin timeout.
-            context_manager: ContextManager para pruning del contexto (F11).
-                             Si es None, no se aplica pruning.
+            shutdown: GracefulShutdown para detectar interrupciones
+            step_timeout: Segundos máximos por step individual (SIGALRM). 0 = sin límite.
+            context_manager: ContextManager para pruning del contexto
+            cost_tracker: CostTracker para registrar costes
+            timeout: Segundos máximos totales de ejecución. None = sin límite.
         """
         self.llm = llm
         self.engine = engine
@@ -72,7 +103,11 @@ class AgentLoop:
         self.shutdown = shutdown
         self.step_timeout = step_timeout
         self.context_manager = context_manager
+        self.cost_tracker = cost_tracker
+        self.timeout = timeout
+        self._start_time: float = 0.0
         self.log = logger.bind(component="agent_loop")
+        self.hlog = HumanLog(self.log)
 
     def run(
         self,
@@ -85,15 +120,18 @@ class AgentLoop:
         Args:
             prompt: Prompt inicial del usuario
             stream: Si True, usa streaming del LLM
-            on_stream_chunk: Callback opcional para chunks (recibe el texto del chunk)
+            on_stream_chunk: Callback opcional para chunks de streaming
 
         Returns:
             AgentState final con el resultado de la ejecución
         """
+        self._start_time = time.time()
+
         # Inicializar estado
         state = AgentState()
         state.messages = self.ctx.build_initial(self.agent_config, prompt)
         state.model = self.llm.config.model
+        state.cost_tracker = self.cost_tracker
 
         # Obtener schemas de tools permitidas
         tools_schema = self.engine.registry.get_schemas(
@@ -105,31 +143,32 @@ class AgentLoop:
             prompt=prompt[:100] + "..." if len(prompt) > 100 else prompt,
             max_steps=self.agent_config.max_steps,
             allowed_tools=self.agent_config.allowed_tools or "all",
+            timeout=self.timeout,
         )
 
-        # Loop principal
-        for step in range(self.agent_config.max_steps):
+        step = 0
 
-            # 0. Comprobar señal de shutdown antes de cada step
-            if self.shutdown and self.shutdown.should_stop:
-                self.log.warning(
-                    "agent.shutdown_requested",
-                    step=step,
-                )
-                state.status = "partial"
-                state.final_output = (
-                    state.final_output
-                    or "Ejecución interrumpida por señal de shutdown."
-                )
-                break
+        # ── Loop principal: el LLM decide cuándo terminar ────────────────
+        while True:
 
+            # ── SAFETY NETS (antes de cada llamada al LLM) ────────────────
+            stop_reason = self._check_safety_nets(state, step)
+            if stop_reason is not None:
+                return self._graceful_close(state, stop_reason, tools_schema)
+
+            # ── CONTEXT MANAGEMENT ────────────────────────────────────────
+            if self.context_manager:
+                state.messages = self.context_manager.manage(
+                    state.messages, self.llm
+                )
+
+            # ── LLAMADA AL LLM ────────────────────────────────────────────
             self.log.info("agent.step.start", step=step)
+            self.hlog.llm_call(step, messages_count=len(state.messages))
 
-            # 1. Llamar al LLM envuelto en StepTimeout
             try:
                 with StepTimeout(self.step_timeout):
                     if stream:
-                        # Modo streaming
                         response = None
                         for chunk_or_response in self.llm.completion_stream(
                             messages=state.messages,
@@ -149,144 +188,214 @@ class AgentLoop:
                             tools=tools_schema if tools_schema else None,
                         )
 
-            except StepTimeoutError as e:
-                self.log.error(
-                    "agent.step_timeout",
-                    step=step,
-                    seconds=self.step_timeout,
-                )
-                state.status = "partial"
-                state.final_output = (
-                    f"Step {step} excedió el tiempo máximo de {self.step_timeout}s. "
-                    f"El agente completó {state.total_tool_calls} tool calls antes del timeout."
-                )
-                break
+            except StepTimeoutError:
+                self.log.error("agent.step_timeout", step=step, seconds=self.step_timeout)
+                self.hlog.step_timeout(self.step_timeout)
+                # Tratar timeout de step como timeout total
+                return self._graceful_close(state, StopReason.TIMEOUT, tools_schema)
 
             except Exception as e:
                 self.log.error("agent.llm_error", error=str(e), step=step)
+                self.hlog.llm_error(str(e))
                 state.status = "failed"
-                state.final_output = f"Error al comunicarse con el LLM: {e}"
-                break
+                state.stop_reason = StopReason.LLM_ERROR
+                state.final_output = f"Error irrecuperable del LLM: {e}"
+                return state
 
-            # 2. Verificar si el LLM terminó con una respuesta final
-            if response.finish_reason == "stop" and not response.tool_calls:
-                state.final_output = response.content
-                state.status = "success"
+            # ── REGISTRAR COSTE ───────────────────────────────────────────
+            if self.cost_tracker and response.usage:
+                try:
+                    self.cost_tracker.record(
+                        step=step,
+                        model=self.llm.config.model,
+                        usage=response.usage,
+                        source="agent",
+                    )
+                except BudgetExceededError as e:
+                    self.log.error("agent.budget_exceeded", step=step, error=str(e))
+                    # El presupuesto se superó en este step — cierre limpio
+                    return self._graceful_close(state, StopReason.BUDGET_EXCEEDED, tools_schema)
+
+            step += 1
+
+            # ── EL LLM DECIDIÓ TERMINAR (no pidió tools) ──────────────────
+            if not response.tool_calls:
                 self.log.info(
                     "agent.complete",
                     step=step,
-                    output_preview=response.content[:100] + "..."
-                    if response.content and len(response.content) > 100
-                    else response.content,
+                    reason="llm_decided",
+                    output_preview=(
+                        response.content[:100] + "..."
+                        if response.content and len(response.content) > 100
+                        else response.content
+                    ),
                 )
+                self.hlog.agent_done(step)
+                state.final_output = response.content
+                state.status = "success"
+                state.stop_reason = StopReason.LLM_DONE
                 break
 
-            # 3. Si hay tool calls, ejecutarlas
-            if response.tool_calls:
-                self.log.info(
-                    "agent.tool_calls_received",
-                    step=step,
-                    count=len(response.tool_calls),
-                    tools=[tc.name for tc in response.tool_calls],
-                )
-
-                # Ejecutar tool calls (paralelo o secuencial según configuración)
-                tool_results = self._execute_tool_calls_batch(
-                    response.tool_calls, step
-                )
-
-                # 4. Actualizar mensajes con tool results
-                state.messages = self.ctx.append_tool_results(
-                    state.messages, response.tool_calls, tool_results
-                )
-
-                # F11: Comprimir contexto si hay demasiados pasos (Nivel 2)
-                if self.context_manager:
-                    state.messages = self.context_manager.maybe_compress(
-                        state.messages, self.llm
-                    )
-                    # Nivel 3: Hard limit de tokens
-                    state.messages = self.context_manager.enforce_window(
-                        state.messages
-                    )
-
-                # 5. Registrar step
-                state.steps.append(StepResult(
-                    step_number=step,
-                    llm_response=response,
-                    tool_calls_made=tool_results,
-                ))
-
-            else:
-                # El LLM respondió sin tool calls y sin finish_reason="stop"
-                self.log.warning(
-                    "agent.unexpected_response",
-                    step=step,
-                    finish_reason=response.finish_reason,
-                    has_content=response.content is not None,
-                )
-
-                state.steps.append(StepResult(
-                    step_number=step,
-                    llm_response=response,
-                    tool_calls_made=[],
-                ))
-
-                if response.finish_reason == "length":
-                    # Token limit alcanzado → intentar continuar
-                    self.log.info("agent.token_limit", step=step)
-                    continue
-                else:
-                    state.status = "partial"
-                    state.final_output = (
-                        response.content or "El agente no produjo una respuesta clara."
-                    )
-                    break
-
-        else:
-            # Se agotaron todos los pasos
-            self.log.warning(
-                "agent.max_steps_reached",
-                max_steps=self.agent_config.max_steps,
-            )
-            state.status = "partial"
-            state.final_output = (
-                f"Se alcanzó el límite de {self.agent_config.max_steps} pasos. "
-                f"El agente ejecutó {state.total_tool_calls} tool calls pero no terminó completamente."
+            # ── EL LLM PIDIÓ TOOLS → EJECUTAR ────────────────────────────
+            self.log.info(
+                "agent.tool_calls_received",
+                step=step,
+                count=len(response.tool_calls),
+                tools=[tc.name for tc in response.tool_calls],
             )
 
-        # Log final
+            # Ejecutar tool calls (paralelo o secuencial)
+            tool_results = self._execute_tool_calls_batch(response.tool_calls, step)
+
+            # Actualizar mensajes con tool results
+            state.messages = self.ctx.append_tool_results(
+                state.messages, response.tool_calls, tool_results
+            )
+
+            # Registrar step
+            state.steps.append(StepResult(
+                step_number=step,
+                llm_response=response,
+                tool_calls_made=tool_results,
+            ))
+
+        # ── Log final ─────────────────────────────────────────────────────
         self.log.info(
             "agent.loop.complete",
             status=state.status,
+            stop_reason=state.stop_reason.value if state.stop_reason else None,
+            total_steps=state.current_step,
+            total_tool_calls=state.total_tool_calls,
+        )
+        self.hlog.loop_complete(
+            status=state.status,
+            stop_reason=state.stop_reason.value if state.stop_reason else None,
             total_steps=state.current_step,
             total_tool_calls=state.total_tool_calls,
         )
 
         return state
 
+    # ── SAFETY NETS ───────────────────────────────────────────────────────
+
+    def _check_safety_nets(
+        self, state: AgentState, step: int
+    ) -> StopReason | None:
+        """Comprueba todas las condiciones de seguridad antes de cada step.
+
+        Retorna None si todo está bien, o el StopReason si hay que parar.
+        El orden importa: USER_INTERRUPT primero (más urgente).
+        """
+        # 1. User interrupt (Ctrl+C / SIGTERM) — corte inmediato
+        if self.shutdown and self.shutdown.should_stop:
+            self.log.warning("safety.user_interrupt", step=step)
+            self.hlog.safety_net("user_interrupt", step=step)
+            return StopReason.USER_INTERRUPT
+
+        # 2. Max steps — watchdog de pasos
+        if step >= self.agent_config.max_steps:
+            self.log.warning(
+                "safety.max_steps",
+                step=step,
+                max_steps=self.agent_config.max_steps,
+            )
+            self.hlog.safety_net("max_steps", step=step, max_steps=self.agent_config.max_steps)
+            return StopReason.MAX_STEPS
+
+        # 3. Timeout total — watchdog de tiempo
+        if self.timeout and (time.time() - self._start_time) > self.timeout:
+            self.log.warning("safety.timeout", elapsed=time.time() - self._start_time)
+            self.hlog.safety_net("timeout")
+            return StopReason.TIMEOUT
+
+        # 4. Context window críticamente lleno (incluso después de comprimir)
+        if self.context_manager and self.context_manager.is_critically_full(state.messages):
+            self.log.warning("safety.context_full", step=step)
+            self.hlog.safety_net("context_full", step=step)
+            return StopReason.CONTEXT_FULL
+
+        return None
+
+    # ── CIERRE LIMPIO ────────────────────────────────────────────────────
+
+    def _graceful_close(
+        self,
+        state: AgentState,
+        reason: StopReason,
+        tools_schema: list | None,
+    ) -> AgentState:
+        """Cierre limpio cuando salta un watchdog.
+
+        En lugar de cortar abruptamente, le da al LLM una última oportunidad
+        de resumir qué hizo y qué queda pendiente.
+        USER_INTERRUPT es la excepción: no se llama al LLM.
+        """
+        self.log.info("agent.closing", reason=reason.value, steps=len(state.steps))
+        self.hlog.closing(reason.value, len(state.steps))
+
+        state.stop_reason = reason
+
+        # USER_INTERRUPT: corte inmediato, sin llamar al LLM
+        if reason == StopReason.USER_INTERRUPT:
+            state.status = "partial"
+            state.final_output = (
+                f"Interrumpido por el usuario. "
+                f"Pasos completados: {state.current_step}."
+            )
+            return state
+
+        # Para todos los demás watchdogs: pedir resumen al LLM
+        instruction = _CLOSE_INSTRUCTIONS.get(reason)
+        if instruction:
+            state.messages.append({
+                "role": "user",
+                "content": f"[SISTEMA] {instruction}",
+            })
+
+            try:
+                # Última llamada SIN tools — solo texto de cierre
+                close_response = self.llm.completion(
+                    messages=state.messages,
+                    tools=None,
+                )
+                state.final_output = close_response.content
+            except Exception as e:
+                self.log.warning("agent.close_response_failed", error=str(e))
+                state.final_output = (
+                    f"El agente se detuvo ({reason.value}). "
+                    f"Pasos completados: {state.current_step}."
+                )
+
+        state.status = "partial"
+        self.log.info(
+            "agent.loop.complete",
+            status=state.status,
+            stop_reason=state.stop_reason.value,
+            total_steps=state.current_step,
+            total_tool_calls=state.total_tool_calls,
+        )
+        self.hlog.loop_complete(
+            status=state.status,
+            stop_reason=state.stop_reason.value,
+            total_steps=state.current_step,
+            total_tool_calls=state.total_tool_calls,
+        )
+        return state
+
+    # ── EJECUCIÓN DE TOOL CALLS ──────────────────────────────────────────
+
     def _execute_tool_calls_batch(
         self,
         tool_calls: list,
         step: int,
     ) -> list[ToolCallResult]:
-        """Ejecuta un lote de tool calls, paralelizando si es seguro (F11).
+        """Ejecuta un lote de tool calls, paralelizando si es seguro.
 
         La paralelización solo se activa cuando:
         - Hay más de una tool call
-        - ``parallel_tools=True`` en la configuración (o no hay context_manager)
-        - El modo de confirmación es ``yolo``
-        - O el modo es ``confirm-sensitive`` y ninguna tool es sensible
-
-        En cualquier otro caso (``confirm-all``, tools sensibles, una sola tool),
-        la ejecución es secuencial para permitir la interacción con el usuario.
-
-        Args:
-            tool_calls: Lista de ToolCall del LLM
-            step: Número de step actual (para logging)
-
-        Returns:
-            Lista de ToolCallResult en el mismo orden que tool_calls
+        - parallel_tools=True en la configuración
+        - El modo de confirmación es yolo
+        - O confirm-sensitive y ninguna tool es sensible
         """
         if not tool_calls:
             return []
@@ -295,10 +404,9 @@ class AgentLoop:
             return [self._execute_single_tool(tool_calls[0], step)]
 
         if not self._should_parallelize(tool_calls):
-            # Ejecución secuencial
             return [self._execute_single_tool(tc, step) for tc in tool_calls]
 
-        # Ejecución paralela: preservar orden original
+        # Ejecución paralela preservando orden original
         self.log.info(
             "agent.tool_calls.parallel",
             step=step,
@@ -319,27 +427,41 @@ class AgentLoop:
         return results  # type: ignore[return-value]
 
     def _execute_single_tool(self, tc: object, step: int) -> ToolCallResult:
-        """Ejecuta una sola tool call y devuelve el resultado.
+        """Ejecuta una sola tool call y retorna el resultado.
 
-        Args:
-            tc: ToolCall del LLM
-            step: Número de step (para logging)
-
-        Returns:
-            ToolCallResult con el resultado de la ejecución
+        Después de tools de edición, ejecuta hooks post-edit (v3-M4) y
+        añade su output al resultado para que el LLM lo vea.
         """
-        # tc es un ToolCall de llm.adapter
         self.log.info(
             "agent.tool_call.execute",
             step=step,
             tool=tc.name,  # type: ignore[attr-defined]
             args=self._sanitize_args_for_log(tc.arguments),  # type: ignore[attr-defined]
         )
+        self.hlog.tool_call(tc.name, tc.arguments)  # type: ignore[attr-defined]
 
         result = self.engine.execute_tool_call(
             tc.name,  # type: ignore[attr-defined]
             tc.arguments,  # type: ignore[attr-defined]
         )
+
+        # v3-M4: Ejecutar hooks post-edit si aplican
+        hook_output = self.engine.run_post_edit_hooks(
+            tc.name,  # type: ignore[attr-defined]
+            tc.arguments,  # type: ignore[attr-defined]
+        )
+
+        # Si hay output de hooks, añadirlo al resultado del tool
+        if hook_output and result.success:
+            from ..tools.base import ToolResult as TR
+            combined_output = (result.output or "") + "\n\n" + hook_output
+            result = TR(
+                success=result.success,
+                output=combined_output,
+                error=result.error,
+            )
+            self.log.info("agent.hook.complete", step=step, tool=tc.name)  # type: ignore[attr-defined]
+            self.hlog.hook_complete(tc.name)  # type: ignore[attr-defined]
 
         self.log.info(
             "agent.tool_call.complete",
@@ -348,6 +470,7 @@ class AgentLoop:
             success=result.success,
             error=result.error if not result.success else None,
         )
+        self.hlog.tool_result(tc.name, result.success, result.error if not result.success else None)  # type: ignore[attr-defined]
 
         return ToolCallResult(
             tool_name=tc.name,  # type: ignore[attr-defined]
@@ -358,31 +481,16 @@ class AgentLoop:
         )
 
     def _should_parallelize(self, tool_calls: list) -> bool:
-        """Determina si las tool calls se pueden ejecutar en paralelo.
-
-        Reglas:
-        - Si ``parallel_tools=False`` en config → no
-        - Si ``confirm-all`` → no (interacción secuencial)
-        - Si ``confirm-sensitive`` y alguna tool es sensible → no
-        - En cualquier otro caso → sí
-
-        Args:
-            tool_calls: Lista de ToolCall a evaluar
-
-        Returns:
-            True si se pueden ejecutar en paralelo
-        """
-        # Respetar configuración explícita de parallel_tools
+        """Determina si las tool calls se pueden ejecutar en paralelo."""
+        # Respetar configuración explícita
         if self.context_manager and not self.context_manager.config.parallel_tools:
             return False
 
         confirm_mode = self.agent_config.confirm_mode
 
-        # confirm-all: siempre secuencial (requiere confirmación interactiva)
         if confirm_mode == "confirm-all":
             return False
 
-        # confirm-sensitive: verificar si alguna tool es sensible
         if confirm_mode == "confirm-sensitive":
             for tc in tool_calls:
                 if self.engine.registry.has_tool(tc.name):  # type: ignore[attr-defined]
@@ -390,18 +498,10 @@ class AgentLoop:
                     if tool.sensitive:
                         return False
 
-        # yolo o confirm-sensitive con tools no sensibles → paralelo
         return True
 
     def _sanitize_args_for_log(self, args: dict) -> dict:
-        """Sanitiza argumentos para logging (truncar valores largos).
-
-        Args:
-            args: Argumentos originales
-
-        Returns:
-            Argumentos sanitizados
-        """
+        """Sanitiza argumentos para logging (truncar valores largos)."""
         sanitized = {}
         for key, value in args.items():
             if isinstance(value, str) and len(value) > 100:

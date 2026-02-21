@@ -29,6 +29,7 @@ from tenacity import (
 )
 
 from ..config.schema import LLMConfig
+from .cache import LocalLLMCache
 
 logger = structlog.get_logger()
 
@@ -104,13 +105,15 @@ class LLMAdapter:
     - Maneja errores con logging estructurado
     """
 
-    def __init__(self, config: LLMConfig):
+    def __init__(self, config: LLMConfig, local_cache: LocalLLMCache | None = None):
         """Inicializa el adapter con configuración.
 
         Args:
             config: Configuración del LLM
+            local_cache: Cache local de respuestas (opcional, solo para desarrollo)
         """
         self.config = config
+        self._local_cache = local_cache
         self.log = logger.bind(component="llm_adapter", model=config.model)
 
         # Configurar LiteLLM
@@ -122,6 +125,8 @@ class LLMAdapter:
             mode=config.mode,
             model=config.model,
             retries=config.retries,
+            prompt_caching=config.prompt_caching,
+            local_cache=local_cache is not None,
         )
 
     def _on_retry_sleep(self, retry_state: RetryCallState) -> None:
@@ -153,6 +158,48 @@ class LLMAdapter:
         ):
             with attempt:
                 return fn(*args, **kwargs)
+
+    def _prepare_messages_with_caching(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Marca el system prompt con cache_control para prompt caching del proveedor.
+
+        Añade cache_control al contenido del mensaje system para que
+        Anthropic y OpenAI (compatible) lo cacheen automáticamente.
+        El markup se ignora en proveedores que no lo soportan.
+
+        Args:
+            messages: Lista de mensajes originales
+
+        Returns:
+            Lista de mensajes con cache_control en el system (si aplica)
+        """
+        if not self.config.prompt_caching:
+            return messages
+
+        result: list[dict[str, Any]] = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                # Anthropic requiere content como lista de bloques con cache_control
+                if isinstance(content, str):
+                    enhanced = {
+                        **msg,
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": content,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    }
+                else:
+                    # Ya es lista (p.ej. desde indexer) — añadir cache_control al último bloque
+                    enhanced = dict(msg)
+                result.append(enhanced)
+            else:
+                result.append(msg)
+        return result
 
     def _configure_litellm(self) -> None:
         """Configura LiteLLM según la configuración."""
@@ -211,12 +258,21 @@ class LLMAdapter:
                 "Para streaming, use completion_stream() en lugar de completion(stream=True)"
             )
 
+        # Aplicar prompt caching si está habilitado
+        messages = self._prepare_messages_with_caching(messages)
+
         self.log.info(
             "llm.completion.start",
             messages_count=len(messages),
             has_tools=tools is not None,
             tools_count=len(tools) if tools else 0,
         )
+
+        # Consultar local cache (desarrollo)
+        if self._local_cache:
+            cached = self._local_cache.get(messages, tools)
+            if cached is not None:
+                return cached
 
         def _call() -> Any:
             kwargs: dict[str, Any] = {
@@ -232,6 +288,10 @@ class LLMAdapter:
         try:
             response = self._call_with_retry(_call)
             normalized = self._normalize_response(response)
+
+            # Guardar en local cache si está habilitado
+            if self._local_cache:
+                self._local_cache.set(messages, tools, normalized)
 
             self.log.info(
                 "llm.completion.success",
@@ -271,6 +331,9 @@ class LLMAdapter:
         Raises:
             Exception: Si falla la llamada al LLM
         """
+        # Aplicar prompt caching si está habilitado
+        messages = self._prepare_messages_with_caching(messages)
+
         self.log.info(
             "llm.completion_stream.start",
             messages_count=len(messages),
@@ -342,11 +405,15 @@ class LLMAdapter:
                 # Usage (solo viene en el último chunk)
                 if hasattr(chunk, "usage") and chunk.usage:
                     usage_info = {
-                        "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0),
+                        "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
                         "completion_tokens": getattr(
                             chunk.usage, "completion_tokens", 0
+                        ) or 0,
+                        "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
+                        # Tokens servidos desde caché del proveedor (Anthropic: cache_read_input_tokens)
+                        "cache_read_input_tokens": (
+                            getattr(chunk.usage, "cache_read_input_tokens", 0) or 0
                         ),
-                        "total_tokens": getattr(chunk.usage, "total_tokens", 0),
                     }
 
             # Construir respuesta completa
@@ -428,9 +495,13 @@ class LLMAdapter:
         usage = None
         if hasattr(response, "usage") and response.usage:
             usage = {
-                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                "completion_tokens": getattr(response.usage, "completion_tokens", 0),
-                "total_tokens": getattr(response.usage, "total_tokens", 0),
+                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
+                "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
+                # Tokens servidos desde caché del proveedor (Anthropic: cache_read_input_tokens)
+                "cache_read_input_tokens": (
+                    getattr(response.usage, "cache_read_input_tokens", 0) or 0
+                ),
             }
 
         return LLMResponse(

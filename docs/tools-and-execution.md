@@ -45,6 +45,7 @@ El `get_schema()` produce el formato que LiteLLM/OpenAI espera para tool calling
 | `search_code` | `SearchCodeTool` | No | `search.py` | Busca patrones con regex en el código fuente |
 | `grep` | `GrepTool` | No | `search.py` | Busca texto literal (usa rg/grep del sistema si está disponible) |
 | `find_files` | `FindFilesTool` | No | `search.py` | Encuentra archivos por nombre o patrón glob |
+| `run_command` | `RunCommandTool` | **Dinámico** | `commands.py` | Ejecuta comandos del sistema con 4 capas de seguridad (F13) |
 
 ---
 
@@ -235,6 +236,55 @@ find_files(pattern="conftest.py")
 
 ---
 
+## Tool `run_command` — ejecución de código (F13)
+
+Vive en `tools/commands.py`. Disponible solo para el agente `build` por defecto. Se habilita/deshabilita con `commands.enabled` en config o los flags `--allow-commands`/`--no-commands`.
+
+```
+RunCommandArgs:
+  command: str          # comando a ejecutar (shell string)
+  cwd:     str | None   # directorio de trabajo relativo al workspace (default: workspace root)
+  timeout: int = 30     # segundos (1-600; override del default_timeout de config)
+  env:     dict | None  # variables de entorno adicionales (se suman a las del proceso)
+```
+
+### 4 capas de seguridad
+
+**Capa 1 — Blocklist** (`BLOCKED_PATTERNS`): regexes que bloquean comandos destructivos **siempre**, independientemente del modo de confirmación. Incluye: `rm -rf /`, `rm -rf ~`, `sudo`, `su`, `chmod 777`, `curl|bash`, `wget|bash`, `dd of=/dev/`, `> /dev/sd*`, `mkfs`, fork bomb, `pkill -9 -f`, `killall -9`.
+
+**Capa 2 — Clasificación dinámica** (`classify_sensitivity()`): cada comando se clasifica en:
+- `'safe'` — comandos de solo lectura/consulta: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `tree`, `file`, `which`, `echo`, `pwd`, `env`, `date`, `python --version`, `git status`, `git log`, `git diff`, `git show`, `git branch` (vista), `npm list`, `cargo check`, etc.
+- `'dev'` — herramientas de desarrollo: `pytest`, `python -m pytest`, `mypy`, `ruff`, `black`, `eslint`, `make`, `cargo build`, `go build`, `mvn`, `gradle`, `tsc`, `npm run`, `pnpm run`, `yarn run`, `docker ps`, `kubectl get`, etc.
+- `'dangerous'` — cualquier comando no reconocido explícitamente como safe o dev.
+
+**Capa 3 — Timeouts + output limit**: `subprocess.run(..., timeout=N, stdin=subprocess.DEVNULL)`. El proceso es headless (sin stdin). La salida se trunca a `max_output_lines` preservando inicio y final.
+
+**Capa 4 — Directory sandboxing**: el `cwd` del subproceso se valida con `validate_path()` — siempre dentro del workspace.
+
+### Tabla de confirmación dinámica
+
+La sensibilidad de `run_command` no es estática (`tool.sensitive`). `ExecutionEngine._should_confirm_command()` consulta `classify_sensitivity()` en tiempo real:
+
+| Clasificación | `yolo` | `confirm-sensitive` | `confirm-all` |
+|---------------|--------|---------------------|---------------|
+| `safe` | No | No | Sí |
+| `dev` | No | **Sí** | Sí |
+| `dangerous` | **Sí** | **Sí** | Sí |
+
+El modo `yolo` solo confirma comandos `dangerous` (no `safe` ni `dev`). Esto permite que `pytest`, `mypy`, `ruff` etc. se ejecuten sin interrupciones en modo `yolo`.
+
+### `allowed_only`
+
+Si `commands.allowed_only: true`, los comandos clasificados como `dangerous` se rechazan en `execute()` sin llegar a la confirmación. Útil en CI donde solo se quiere permitir un whitelist estricto.
+
+```python
+# Ejemplo con allowed_only=True:
+run_command(command="npm install --global malicious-pkg")
+# → ToolResult(success=False, "Comando clasificado como 'dangerous' y allowed_only=True")
+```
+
+---
+
 ## Validación de paths — seguridad
 
 `execution/validators.py` es la única puerta de seguridad para todas las operaciones de archivos.
@@ -305,12 +355,21 @@ def register_search_tools(registry, workspace_config):
     registry.register(GrepTool(root))
     registry.register(FindFilesTool(root))
 
-def register_all_tools(registry, workspace_config):
+def register_command_tools(registry, workspace_config, commands_config):
+    if not commands_config.enabled:
+        return
+    root = workspace_config.root.resolve()
+    registry.register(RunCommandTool(root, commands_config))
+
+def register_all_tools(registry, workspace_config, commands_config=None):
     register_filesystem_tools(registry, workspace_config)
     register_search_tools(registry, workspace_config)
+    if commands_config is None:
+        commands_config = CommandsConfig()
+    register_command_tools(registry, workspace_config, commands_config)
 ```
 
-La CLI usa `register_all_tools()` — todas las tools siempre están disponibles en el registry. El filtrado por agente se hace a través de `allowed_tools` en `AgentConfig`.
+La CLI usa `register_all_tools()` — todas las tools siempre están disponibles en el registry. El filtrado por agente se hace a través de `allowed_tools` en `AgentConfig`. La tool `run_command` se registra solo si `commands_config.enabled=True`.
 
 ---
 
@@ -324,11 +383,12 @@ class ExecutionEngine:
     config:    AppConfig
     dry_run:   bool = False
     policy:    ConfirmationPolicy
+    hooks:     PostEditHooks | None = None
 
     def execute_tool_call(self, tool_name: str, args: dict) -> ToolResult:
 ```
 
-### Los 7 pasos del pipeline
+### Los 8 pasos del pipeline
 
 ```
 1. registry.get(tool_name)
@@ -348,9 +408,13 @@ class ExecutionEngine:
 5. tool.execute(**validated_args.model_dump())
    (tool.execute() no lanza — si hay excepción interna, la tool la captura)
 
-6. log resultado (structlog)
+6. run_post_edit_hooks(tool_name, args)  → si tool es edit_file/write_file/apply_patch
+   → ejecuta hooks configurados
+   → añade output de hooks al ToolResult
 
-7. return ToolResult
+7. log resultado (structlog)
+
+8. return ToolResult
 ```
 
 Hay un `try/except Exception` exterior que captura cualquier error inesperado del paso 5 y lo convierte en `ToolResult(success=False)`.
@@ -393,6 +457,54 @@ Sensibilidad por defecto de cada tool:
 | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | No | No |
 | `write_file`, `delete_file`, `edit_file`, `apply_patch` | **Sí** | **Sí** |
 | Todas las tools MCP | **Sí** | **Sí** |
+| `run_command` (safe) | Dinámico | No |
+| `run_command` (dev) | Dinámico | **Sí** |
+| `run_command` (dangerous) | Dinámico | **Sí** (y también en `yolo`) |
+
+Para `run_command`, `ExecutionEngine` llama a `_should_confirm_command()` que consulta `tool.classify_sensitivity(command)` en lugar de usar el atributo estático `tool.sensitive`.
+
+---
+
+## PostEditHooks -- verificacion automatica post-edicion (v3-M4)
+
+Cuando el agente edita un archivo (`edit_file`, `write_file`, `apply_patch`), los hooks configurados se ejecutan automaticamente. El resultado vuelve al LLM como parte del tool result para que pueda auto-corregir errores.
+
+```python
+EDIT_TOOLS = {"edit_file", "write_file", "apply_patch"}
+```
+
+Configuracion en YAML:
+
+```yaml
+hooks:
+  post_edit:
+    - name: python-lint
+      command: "ruff check {file} --no-fix"
+      file_patterns: ["*.py"]
+      timeout: 15
+    - name: python-typecheck
+      command: "mypy {file} --no-error-summary"
+      file_patterns: ["*.py"]
+      timeout: 30
+```
+
+El placeholder `{file}` se reemplaza con el path del archivo editado. La variable de entorno `ARCHITECT_EDITED_FILE` tambien contiene el path.
+
+Si un hook falla (exit code != 0), su output se anade al resultado:
+
+```
+[Hook python-lint: FALLO (exit 1)]
+src/main.py:15:5: F841 local variable 'x' is assigned to but never used
+```
+
+Si un hook tiene timeout, retorna:
+
+```
+[Hook python-lint: FALLO (exit -1)]
+Timeout despues de 15s
+```
+
+Los hooks solo se ejecutan si el `PostEditHooks` fue configurado y pasado al `ExecutionEngine` via el parametro `hooks`. Si `hooks` es `None`, el paso 6 del pipeline se omite.
 
 ---
 
@@ -449,13 +561,18 @@ ExecutionEngine.execute_tool_call("edit_file", {path:"main.py", old_str:"...", n
   │     └─ content.replace(old_str, new_str, 1)
   │     └─ file.write_text(new_content)
   │     └─ ToolResult(success=True, output="[unified diff del cambio]")
+  ├─ run_post_edit_hooks("edit_file", {path:"main.py", ...})
+  │     └─ "edit_file" in EDIT_TOOLS → True
+  │     └─ hook "python-lint": ruff check /workspace/main.py --no-fix
+  │     └─ hook "python-typecheck": mypy /workspace/main.py --no-error-summary
+  │     └─ resultado de hooks se añade al ToolResult.output
   └─ return ToolResult
 
 ContextBuilder.append_tool_results(messages, [ToolCall(...)], [ToolResult(...)])
   → messages += [
       {"role":"assistant", "tool_calls":[{"id":"call_abc","function":{...}}]},
-      {"role":"tool", "tool_call_id":"call_abc", "content":"[diff...]}
+      {"role":"tool", "tool_call_id":"call_abc", "content":"[diff + hook results...]"}
     ]
 ```
 
-El resultado de la tool (éxito o error) siempre vuelve al LLM como mensaje `tool`. El LLM decide qué hacer a continuación.
+El resultado de la tool (éxito o error) siempre vuelve al LLM como mensaje `tool`, incluyendo la salida de los hooks post-edicion si aplican. El LLM decide qué hacer a continuación y puede auto-corregir errores detectados por los hooks.

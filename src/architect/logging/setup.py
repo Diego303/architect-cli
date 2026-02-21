@@ -1,11 +1,16 @@
 """
 Configuración completa del sistema de logging estructurado.
 
-Implementa dos pipelines independientes:
-1. Archivo → JSON estructurado (siempre, si se configura)
-2. Stderr → Humano legible (controlado por verbose/quiet)
+v3-M5: Tres pipelines independientes:
+1. Archivo (JSON) — Si config.file está configurado. Captura todo (DEBUG+).
+2. Human handler (stderr) — Solo eventos HUMAN: qué hace el agente.
+3. Console técnico (stderr) — DEBUG/INFO, controlado por -v. Excluye HUMAN.
 
-Logs van a stderr para no romper pipes. Solo el output final va a stdout.
+Comportamiento por defecto (sin -v):
+- El usuario ve solo los logs HUMAN (trazabilidad del agente).
+- Sin ruido técnico de INFO/DEBUG del sistema.
+
+Con -v: añade INFO. Con -vv: añade DEBUG. Con --quiet: silencia todo.
 """
 
 import logging
@@ -15,6 +20,8 @@ from pathlib import Path
 import structlog
 
 from ..config.schema import LoggingConfig
+from .levels import HUMAN
+from .human import HumanLogHandler
 
 
 def configure_logging(
@@ -22,53 +29,25 @@ def configure_logging(
     json_output: bool = False,
     quiet: bool = False,
 ) -> None:
-    """Configura el sistema completo de logging.
-
-    Dos pipelines independientes:
-    1. Archivo (JSON) - Si config.file está configurado
-    2. Stderr (humano) - Controlado por verbose/quiet
+    """Configura el sistema completo de logging con tres pipelines.
 
     Args:
-        config: Configuración de logging
-        json_output: Si True, el usuario quiere salida JSON (reduce logs)
-        quiet: Si True, solo errores críticos
+        config: Configuración de logging (level, file, verbose)
+        json_output: Si True, desactiva human y console handlers (--json)
+        quiet: Si True, desactiva human y console handlers (--quiet)
     """
     # Limpiar configuración anterior
     logging.root.handlers.clear()
     structlog.reset_defaults()
 
-    # Determinar nivel según verbose
-    if quiet:
-        console_level = logging.ERROR
-    else:
-        console_level = _verbose_to_level(config.verbose)
-
-    # Configurar logging estándar de Python
-    # Root logger al nivel más bajo para capturar todo
+    # Root logger captura todo — los handlers filtran por nivel
     logging.basicConfig(
-        level=logging.DEBUG,  # Capturar todo, filtrar por handler
+        level=logging.DEBUG,
         format="%(message)s",
-        handlers=[],  # Añadiremos handlers manualmente
+        handlers=[],
     )
 
-    # Handler para stderr (humano)
-    if not quiet or console_level <= logging.ERROR:
-        console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setLevel(console_level)
-        logging.root.addHandler(console_handler)
-
-    # Handler para archivo (JSON)
-    file_handler = None
-    if config.file:
-        file_path = Path(config.file)
-        # Crear directorio padre si no existe
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        file_handler = logging.FileHandler(file_path, encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)  # Archivo captura todo
-        logging.root.addHandler(file_handler)
-
-    # Procesadores compartidos (para ambos pipelines)
+    # Procesadores compartidos para structlog → stdlib
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
@@ -77,40 +56,44 @@ def configure_logging(
         structlog.processors.StackInfoRenderer(),
     ]
 
-    # Procesador final depende del handler
-    # Para archivo: JSON
-    # Para stderr: ConsoleRenderer (humano)
-    if file_handler:
-        # Pipeline con JSON
-        processors = shared_processors + [
-            structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer(),
-        ]
-    else:
-        # Pipeline solo consola
-        processors = shared_processors + [
-            structlog.processors.format_exc_info,
-            structlog.dev.ConsoleRenderer(
-                colors=sys.stderr.isatty(),  # Colores solo si es TTY
-            ),
-        ]
+    show_human = not quiet and not json_output
+    show_console = not quiet and not json_output
 
-    # Si tenemos archivo, necesitamos dual pipeline
-    if file_handler:
-        processors = shared_processors + [
-            structlog.processors.format_exc_info,
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ]
+    # ── Pipeline 1: Archivo JSON ──────────────────────────────────────────
+    file_handler = None
+    if config.file:
+        file_path = Path(config.file)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Configurar formatter para JSON en archivo
+        file_handler = logging.FileHandler(str(file_path), encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+
+        # Formato JSON para archivo
         json_formatter = structlog.stdlib.ProcessorFormatter(
             processor=structlog.processors.JSONRenderer(),
             foreign_pre_chain=shared_processors,
         )
         file_handler.setFormatter(json_formatter)
+        logging.root.addHandler(file_handler)
 
-        # Configurar formatter para consola en stderr
-        if console_handler:
+    # ── Pipeline 2: Human handler (v3-M5) ────────────────────────────────
+    if show_human:
+        human_handler = HumanLogHandler(stream=sys.stderr)
+        # Solo nivel HUMAN exacto (25), no INFO ni DEBUG
+        human_handler.setLevel(HUMAN)
+        human_handler.addFilter(lambda record: record.levelno == HUMAN)
+        logging.root.addHandler(human_handler)
+
+    # ── Pipeline 3: Console técnico ───────────────────────────────────────
+    if show_console:
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_level = _verbose_to_level(config.verbose)
+        console_handler.setLevel(console_level)
+        # Excluir eventos HUMAN del console handler (ya los muestra el human_handler)
+        console_handler.addFilter(lambda record: record.levelno != HUMAN)
+
+        if file_handler:
+            # Dual pipeline: usar ProcessorFormatter para consistencia
             console_formatter = structlog.stdlib.ProcessorFormatter(
                 processor=structlog.dev.ConsoleRenderer(
                     colors=sys.stderr.isatty(),
@@ -119,7 +102,24 @@ def configure_logging(
             )
             console_handler.setFormatter(console_formatter)
 
-    # Configurar structlog
+        logging.root.addHandler(console_handler)
+
+    # ── Configurar structlog ──────────────────────────────────────────────
+    if file_handler:
+        # Con archivo: usar ProcessorFormatter.wrap_for_formatter para dual pipeline
+        processors = shared_processors + [
+            structlog.processors.format_exc_info,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ]
+    else:
+        # Sin archivo: pipeline directo a ConsoleRenderer
+        processors = shared_processors + [
+            structlog.processors.format_exc_info,
+            structlog.dev.ConsoleRenderer(
+                colors=sys.stderr.isatty(),
+            ),
+        ]
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -130,43 +130,30 @@ def configure_logging(
 
 
 def _verbose_to_level(verbose: int) -> int:
-    """Convierte nivel de verbose a nivel de logging.
+    """Convierte nivel de verbose a nivel de logging para el console handler.
 
-    Niveles:
-        0 (sin -v)  → WARNING (solo problemas)
-        1 (-v)      → INFO (steps del agente, tool calls)
-        2 (-vv)     → DEBUG (args, respuestas LLM)
-        3+ (-vvv)   → DEBUG (todo, incluyendo HTTP)
+    Sin -v  → WARNING (solo problemas; human va por su propio handler)
+    -v      → INFO (operaciones del sistema, config, tool registrations)
+    -vv     → DEBUG (args completos, respuestas LLM, timing)
+    -vvv+   → DEBUG (todo, incluyendo HTTP)
 
     Args:
-        verbose: Contador de -v flags
+        verbose: Contador de flags -v
 
     Returns:
         Nivel de logging de Python
     """
     levels = {
-        0: logging.WARNING,  # Solo problemas
-        1: logging.INFO,  # Operaciones principales
-        2: logging.DEBUG,  # Detalles
+        0: logging.WARNING,
+        1: logging.INFO,
+        2: logging.DEBUG,
     }
-
-    # 3 o más → DEBUG completo
     return levels.get(verbose, logging.DEBUG)
 
 
 def configure_logging_basic() -> None:
-    """Configuración básica de logging para compatibilidad.
-
-    Esta función existe para backward compatibility con código
-    que la llama desde fases anteriores.
-
-    La nueva función configure_logging() es más completa.
-    """
-    config = LoggingConfig(
-        level="info",
-        verbose=1,
-        file=None,
-    )
+    """Configuración básica para backward compatibility."""
+    config = LoggingConfig(level="human", verbose=1, file=None)
     configure_logging(config, json_output=False, quiet=False)
 
 

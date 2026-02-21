@@ -67,3 +67,4 @@ logs/
 # Specific to architect
 architect-output/
 workspace/
+.claude/

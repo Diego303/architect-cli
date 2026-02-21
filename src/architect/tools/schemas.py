@@ -196,3 +196,37 @@ class FindFilesArgs(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+
+class RunCommandArgs(BaseModel):
+    """Argumentos para run_command tool (F13)."""
+
+    command: str = Field(
+        description=(
+            "Comando a ejecutar en el shell. Puede incluir pipes y redirecciones. "
+            "Ejemplos: 'pytest tests/', 'python -m mypy src/', 'git status', 'make build'"
+        ),
+    )
+    cwd: str | None = Field(
+        default=None,
+        description=(
+            "Directorio de trabajo relativo al workspace (opcional). "
+            "Si no se especifica, se usa el workspace root."
+        ),
+        examples=["src", "tests", "frontend"],
+    )
+    timeout: int = Field(
+        default=30,
+        ge=1,
+        le=600,
+        description="Timeout en segundos para el comando (1-600). Default: 30s.",
+    )
+    env: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Variables de entorno adicionales para el proceso (se fusionan con el entorno actual). "
+            "Ejemplo: {'DEBUG': '1', 'PYTHONPATH': 'src'}"
+        ),
+    )
+
+    model_config = {"extra": "forbid"}

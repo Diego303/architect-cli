@@ -48,13 +48,25 @@ ruff check .
 
 ## Estructura del Proyecto
 
-- `src/architect/core/`: Lógica central del loop del agente y gestión de estado.
-- `src/architect/tools/`: Implementación de herramientas locales (fs, etc.).
-- `src/architect/llm/`: Adaptadores para LiteLLM.
-- `src/architect/mcp/`: Cliente y conectores para servidores MCP remotos.
-- `src/architect/execution/`: Motor de ejecución con políticas de confirmación y seguridad.
-- `src/architect/config/`: Schemas de configuración y carga de YAML/ENV.
+- `src/architect/core/`: Lógica central del loop del agente, gestión de estado, ContextManager (pruning) y SelfEvaluator.
+- `src/architect/tools/`: Herramientas locales — filesystem (`read_file`, `write_file`, `edit_file`), patch (`apply_patch`), búsqueda (`search_code`, `grep`, `find_files`).
+- `src/architect/agents/`: Agentes por defecto (plan, build, resume, review), prompts del sistema y registry.
+- `src/architect/indexer/`: Indexador del repositorio (`RepoIndexer`) y caché en disco (`IndexCache`). Inyecta el árbol del proyecto en el system prompt.
+- `src/architect/llm/`: Adaptadores para LiteLLM con retries selectivos.
+- `src/architect/mcp/`: Cliente JSON-RPC 2.0 y conectores para servidores MCP remotos.
+- `src/architect/execution/`: Motor de ejecución con validación de paths, políticas de confirmación y seguridad.
+- `src/architect/config/`: Schemas de configuración Pydantic y carga de YAML/ENV.
+- `src/architect/logging/`: Configuración de structlog (dual pipeline: JSON file + stderr humano).
 
 ## Flujo del Agente
-El loop es determinista y lineal: `LLM → Parse → Validate → Execute → Repeat`.
+
+El loop es determinista y lineal: `LLM → Parse → Validate → Execute → Context Prune → Repeat`.
+
 No se permiten excepciones que rompan el loop; los errores de ejecución se devuelven al LLM como el resultado de la herramienta para que pueda razonar y corregir.
+
+**Jerarquía de edición de archivos** (menor a mayor impacto):
+1. `edit_file` — str_replace exacto (preferido para cambios pequeños)
+2. `apply_patch` — unified diff multi-hunk
+3. `write_file` — solo para archivos nuevos o reescrituras completas
+
+**Herramientas de búsqueda**: `search_code` (regex), `grep` (texto literal), `find_files` (glob).

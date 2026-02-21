@@ -22,6 +22,13 @@ class LLMConfig(BaseModel):
     timeout: int = 60
     retries: int = 2
     stream: bool = True
+    prompt_caching: bool = Field(
+        default=False,
+        description=(
+            "Si True, marca el system prompt con cache_control para que el proveedor "
+            "(Anthropic, OpenAI) lo cachee. Reduce el coste 50-90% en llamadas repetidas."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -37,10 +44,41 @@ class AgentConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class HookConfig(BaseModel):
+    """Configuración de un hook post-edit individual (v3-M4).
+
+    Un hook es un comando que se ejecuta automáticamente cuando el agente
+    edita un archivo que coincide con file_patterns. El resultado se devuelve
+    al LLM para que pueda auto-corregir errores de lint/test.
+    """
+
+    name: str = Field(description="Nombre identificador del hook (ej: 'python-lint')")
+    command: str = Field(description="Comando a ejecutar (shell). Recibe ARCHITECT_EDITED_FILE como env var.")
+    file_patterns: list[str] = Field(
+        description="Patrones glob de archivos que activan el hook (ej: ['*.py', '*.ts'])"
+    )
+    timeout: int = Field(default=15, ge=1, le=300, description="Timeout del comando en segundos")
+    enabled: bool = Field(default=True, description="Si False, el hook se ignora")
+
+    model_config = {"extra": "forbid"}
+
+
+class HooksConfig(BaseModel):
+    """Configuración de hooks post-edit (v3-M4)."""
+
+    post_edit: list[HookConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados automáticamente después de editar un archivo",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class LoggingConfig(BaseModel):
     """Configuración del sistema de logging."""
 
-    level: Literal["debug", "info", "warn", "error"] = "info"
+    # v3: añadido "human" como nivel de trazabilidad del agente
+    level: Literal["debug", "info", "human", "warn", "error"] = "human"
     file: Path | None = None
     verbose: int = 0
 
@@ -202,6 +240,129 @@ class EvaluationConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class CostsConfig(BaseModel):
+    """Configuración del cost tracking (F14).
+
+    Controla si se registran los costes de las llamadas al LLM y si se
+    aplica un límite de presupuesto por ejecución.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="Si True, se registran los costes de cada llamada al LLM.",
+    )
+
+    prices_file: Path | None = Field(
+        default=None,
+        description=(
+            "Path a un archivo JSON con precios custom que sobreescriben los defaults. "
+            "Mismo formato que default_prices.json."
+        ),
+    )
+
+    budget_usd: float | None = Field(
+        default=None,
+        description=(
+            "Límite de gasto en USD por ejecución. Si se supera, el agente se detiene "
+            "con status 'partial'. None = sin límite."
+        ),
+    )
+
+    warn_at_usd: float | None = Field(
+        default=None,
+        description=(
+            "Umbral de aviso en USD. Cuando el gasto acumulado supera este valor "
+            "se emite un log warning (sin detener la ejecución)."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class LLMCacheConfig(BaseModel):
+    """Configuración del cache local de respuestas LLM (F14).
+
+    El cache local es determinista: guarda respuestas completas en disco
+    para evitar llamadas repetidas al LLM. Útil en desarrollo para ahorrar tokens.
+
+    ATENCIÓN: Solo para desarrollo. No usar en producción (las respuestas
+    cacheadas pueden quedar obsoletas si el contexto cambia).
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, activa el cache local de respuestas LLM.",
+    )
+
+    dir: Path = Field(
+        default=Path("~/.architect/cache"),
+        description="Directorio donde guardar las entradas de cache.",
+    )
+
+    ttl_hours: int = Field(
+        default=24,
+        ge=1,
+        le=8760,  # 1 año
+        description="Horas de validez de cada entrada de cache. Después se considera expirada.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class CommandsConfig(BaseModel):
+    """Configuración de la tool run_command (F13).
+
+    Controla si el agente puede ejecutar comandos del sistema y qué restricciones
+    de seguridad se aplican. La tool incluye cuatro capas de seguridad integradas:
+    bloqueada por patrones, clasificación dinámica, timeouts y sandboxing de cwd.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="Si False, la tool run_command no se registra y el agente no puede ejecutar comandos.",
+    )
+
+    default_timeout: int = Field(
+        default=30,
+        ge=1,
+        le=600,
+        description="Timeout por defecto en segundos para run_command si no se especifica uno explícito.",
+    )
+
+    max_output_lines: int = Field(
+        default=200,
+        ge=10,
+        le=5000,
+        description="Líneas máximas de stdout/stderr antes de truncar para evitar llenar el contexto.",
+    )
+
+    blocked_patterns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Patrones regex adicionales a bloquear (además de los built-in: "
+            "rm -rf /, sudo, chmod 777, curl|bash, etc.)."
+        ),
+    )
+
+    safe_commands: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Comandos adicionales considerados seguros (no requieren confirmación). "
+            "Se suman a los built-in: ls, cat, git status, etc."
+        ),
+    )
+
+    allowed_only: bool = Field(
+        default=False,
+        description=(
+            "Si True, solo se permiten comandos clasificados como 'safe' o 'dev'. "
+            "Comandos 'dangerous' son rechazados en execute(), no solo en confirmación."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class AppConfig(BaseModel):
     """Configuración completa de la aplicación.
 
@@ -217,5 +378,9 @@ class AppConfig(BaseModel):
     indexer: IndexerConfig = Field(default_factory=IndexerConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    commands: CommandsConfig = Field(default_factory=CommandsConfig)
+    costs: CostsConfig = Field(default_factory=CostsConfig)
+    llm_cache: LLMCacheConfig = Field(default_factory=LLMCacheConfig)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)  # v3-M4
 
     model_config = {"extra": "forbid"}

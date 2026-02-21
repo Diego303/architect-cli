@@ -1,8 +1,9 @@
 """
 Mixed Mode Runner - Ejecuta plan → build automáticamente.
 
-El modo mixto es el comportamiento por defecto cuando no se especifica
-un agente. Ejecuta primero el agente 'plan' para analizar la tarea,
+El modo mixto se activa con ``architect run --mode mixed "prompt"``
+o como alias ``architect plan-build "prompt"``.
+Ejecuta primero el agente 'plan' para analizar la tarea,
 y luego el agente 'build' con el plan como contexto.
 """
 
@@ -19,7 +20,7 @@ from .shutdown import GracefulShutdown
 from .state import AgentState
 
 if TYPE_CHECKING:
-    pass
+    from ..costs.tracker import CostTracker
 
 logger = structlog.get_logger()
 
@@ -46,6 +47,7 @@ class MixedModeRunner:
         shutdown: GracefulShutdown | None = None,
         step_timeout: int = 0,
         context_manager: ContextManager | None = None,
+        cost_tracker: "CostTracker | None" = None,
     ):
         """Inicializa el mixed mode runner.
 
@@ -58,6 +60,7 @@ class MixedModeRunner:
             shutdown: GracefulShutdown para detectar interrupciones (opcional)
             step_timeout: Segundos máximos por step. 0 = sin timeout.
             context_manager: ContextManager para pruning del contexto (F11).
+            cost_tracker: CostTracker para registrar costes (F14, opcional).
         """
         self.llm = llm
         self.engine = engine
@@ -67,6 +70,7 @@ class MixedModeRunner:
         self.shutdown = shutdown
         self.step_timeout = step_timeout
         self.context_manager = context_manager
+        self.cost_tracker = cost_tracker
         self.log = logger.bind(component="mixed_mode_runner")
 
     def run(
@@ -100,6 +104,7 @@ class MixedModeRunner:
             shutdown=self.shutdown,
             step_timeout=self.step_timeout,
             context_manager=self.context_manager,
+            cost_tracker=self.cost_tracker,
         )
 
         plan_state = plan_loop.run(prompt, stream=False)
@@ -146,6 +151,7 @@ class MixedModeRunner:
             shutdown=self.shutdown,
             step_timeout=self.step_timeout,
             context_manager=self.context_manager,
+            cost_tracker=self.cost_tracker,
         )
 
         # Ejecutar build (con streaming si está habilitado)

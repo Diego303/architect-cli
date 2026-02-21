@@ -3,9 +3,11 @@ Execution Engine - Orquestador central de ejecución de tools.
 
 El ExecutionEngine es el punto de paso obligatorio para toda ejecución
 de tools. Aplica validación, políticas de confirmación, dry-run y logging.
+
+v3-M4: Añadido soporte para PostEditHooks (auto-verificación post-edición).
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -13,6 +15,9 @@ from ..config.schema import AppConfig
 from ..tools.base import BaseTool, ToolResult
 from ..tools.registry import ToolNotFoundError, ToolRegistry
 from .policies import ConfirmationPolicy, NoTTYError
+
+if TYPE_CHECKING:
+    from ..core.hooks import PostEditHooks
 
 logger = structlog.get_logger()
 
@@ -41,6 +46,7 @@ class ExecutionEngine:
         registry: ToolRegistry,
         config: AppConfig,
         confirm_mode: str | None = None,
+        hooks: "PostEditHooks | None" = None,
     ):
         """Inicializa el execution engine.
 
@@ -48,10 +54,12 @@ class ExecutionEngine:
             registry: ToolRegistry con las tools disponibles
             config: Configuración completa de la aplicación
             confirm_mode: Override del modo de confirmación (opcional)
+            hooks: PostEditHooks para auto-verificación post-edición (v3-M4)
         """
         self.registry = registry
         self.config = config
         self.dry_run = False
+        self.hooks = hooks  # v3-M4
 
         # Determinar modo de confirmación
         # Prioridad: argumento confirm_mode > config de agente > default
@@ -108,7 +116,14 @@ class ExecutionEngine:
                 )
 
             # 3. Aplicar política de confirmación
-            if self.policy.should_confirm(tool):
+            # run_command usa clasificación dinámica por comando (no solo tool.sensitive)
+            if tool.name == "run_command":
+                command_str = validated_args.model_dump().get("command", "")
+                needs_confirm = self._should_confirm_command(command_str, tool)
+            else:
+                needs_confirm = self.policy.should_confirm(tool)
+
+            if needs_confirm:
                 try:
                     confirmed = self.policy.request_confirmation(
                         tool_name,
@@ -208,6 +223,50 @@ class ExecutionEngine:
                 sanitized[key] = value
 
         return sanitized
+
+    def _should_confirm_command(self, command: str, tool: Any) -> bool:
+        """Determina si un comando run_command requiere confirmación.
+
+        Implementa una tabla de sensibilidad dinámica para run_command (F13),
+        overridando la política estática basada en tool.sensitive:
+
+        | Clasificación | yolo | confirm-sensitive | confirm-all |
+        |---------------|------|-------------------|-------------|
+        | safe          | No   | No                | Sí          |
+        | dev           | No   | Sí                | Sí          |
+        | dangerous     | Sí   | Sí                | Sí          |
+
+        Args:
+            command: El comando que se va a ejecutar
+            tool: La instancia de RunCommandTool (con classify_sensitivity())
+
+        Returns:
+            True si se debe solicitar confirmación al usuario
+        """
+        classification = tool.classify_sensitivity(command)
+        match self.policy.mode:
+            case "yolo":
+                return classification == "dangerous"
+            case "confirm-sensitive":
+                return classification in ("dev", "dangerous")
+            case "confirm-all":
+                return True
+            case _:
+                return True
+
+    def run_post_edit_hooks(self, tool_name: str, args: dict[str, Any]) -> str | None:
+        """Ejecuta hooks post-edit si el tool es una operación de edición (v3-M4).
+
+        Args:
+            tool_name: Nombre del tool ejecutado
+            args: Argumentos del tool
+
+        Returns:
+            Texto con los resultados de los hooks, o None si no aplican
+        """
+        if not self.hooks or self.dry_run:
+            return None
+        return self.hooks.run_for_tool(tool_name, args)
 
     def set_dry_run(self, enabled: bool) -> None:
         """Habilita o deshabilita el modo dry-run.
