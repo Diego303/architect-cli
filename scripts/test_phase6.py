@@ -112,13 +112,19 @@ def test_json_output_format():
     _info(f"Output generado: {json.dumps(output, indent=2)}")
 
     # Verificar campos requeridos por el plan
-    required_fields = ["status", "output", "steps", "tools_used", "duration_seconds", "model"]
+    # v3: to_output_dict() siempre incluye stop_reason (None si terminó limpiamente)
+    required_fields = ["status", "stop_reason", "output", "steps", "tools_used", "duration_seconds"]
     for field in required_fields:
         assert field in output, f"Campo '{field}' faltante en output"
         _ok(f"Campo '{field}' presente: {output[field]!r}")
 
+    # model es condicional (solo si state.model está seteado)
+    assert "model" in output, "Campo 'model' faltante (state.model fue seteado)"
+    _ok(f"Campo 'model' presente: {output['model']!r}")
+
     # Verificar valores
     assert output["status"] == "success"
+    assert output["stop_reason"] is None, f"stop_reason esperado None, got {output['stop_reason']!r}"
     assert output["output"] == "Tarea completada exitosamente."
     assert output["steps"] == 2
     assert output["model"] == "gpt-4o-mini"

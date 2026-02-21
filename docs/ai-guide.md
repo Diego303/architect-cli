@@ -329,6 +329,7 @@ except Exception as e:
 | Prompt caching headers (F14) | `llm/adapter.py` → `_prepare_messages_with_caching()` |
 | Post-edit hooks (v3-M4) | `core/hooks.py` → `PostEditHooks`, `config/schema.py` → `HookConfig` |
 | Human logging (v3-M5) | `logging/human.py` → `HumanLog`, `HumanFormatter`, `HumanLogHandler` |
+| Pipeline structlog (v0.15.3) | `logging/setup.py` → siempre `wrap_for_formatter`, nunca `ConsoleRenderer` directo |
 | Nivel HUMAN (25) | `logging/levels.py` |
 | Human log integration en loop | `core/loop.py` → `self.hlog = HumanLog(self.log)` |
 | Hook execution in engine | `execution/engine.py` → `run_post_edit_hooks()` |
@@ -361,9 +362,9 @@ tools_schema = registry.get_schemas(agent_config.allowed_tools or None)
 
 El `or None` es el truco. Una lista vacía `[]` es falsy en Python, por lo que se convierte en `None`.
 
-### MixedModeRunner crea dos engines distintos
+### MixedModeRunner crea dos engines distintos (legacy)
 
-No reutilices el mismo `ExecutionEngine` para plan y build en modo mixto. El plan necesita `confirm_mode="confirm-all"` y tools limitadas; el build necesita `confirm_mode="confirm-sensitive"` y todas las tools. La CLI crea dos engines separados. El `ContextManager` sí se **comparte** entre ambas fases.
+El modo mixto plan→build ya no es el default (v3-M3). La CLI usa `build` directamente como agente por defecto. Si usas `MixedModeRunner` programáticamente, no reutilices el mismo `ExecutionEngine` para plan y build. El plan necesita `confirm_mode="confirm-all"` y tools limitadas; el build necesita `confirm_mode="confirm-sensitive"` y todas las tools. El `ContextManager` sí se **comparte** entre ambas fases.
 
 ### `validate_path()` con paths absolutos
 
@@ -432,7 +433,9 @@ Los hooks siempre retornan `None` o un string, nunca lanzan excepciones. Si un h
 
 ### HumanLog va por pipeline separado
 
-Los eventos con nivel HUMAN (25) se enrutan exclusivamente al `HumanLogHandler` en stderr, NO al handler de consola tecnico. El handler de consola excluye explicitamente los eventos HUMAN. Esto significa que `-v` (INFO) NO muestra los human logs -- los human logs se muestran siempre a menos que se use `--quiet` o `--json`.
+Los eventos con nivel HUMAN (25) se enrutan exclusivamente al `HumanLogHandler` en stderr, NO al handler de consola técnico. El handler de consola excluye explícitamente los eventos HUMAN. Esto significa que `-v` (INFO) NO muestra los human logs — los human logs se muestran siempre (con iconos: 🔄🔧🌐✅⚡❌📦🔍) a menos que se use `--quiet` o `--json`.
+
+**Importante**: structlog SIEMPRE usa `wrap_for_formatter` como procesador final (v0.15.3). Si se cambia a `ConsoleRenderer` directo, el `HumanLogHandler` dejará de funcionar porque recibe strings pre-renderizados en lugar del event dict. La extracción del event dict depende de que `record.msg` sea un `dict`.
 
 ### `_graceful_close()` hace una ultima llamada al LLM
 

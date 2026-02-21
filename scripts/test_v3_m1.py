@@ -299,7 +299,7 @@ def test_run_basic():
     loop.llm.completion.return_value = LLMResponse(
         content="Hola, tarea completada",
         finish_reason="stop",
-        tool_calls=None,
+        tool_calls=[],
         usage=None,
     )
     loop.llm.config = MagicMock()
@@ -333,10 +333,8 @@ def test_run_basic():
     loop2.llm.config.model = "test-model"
 
     # First call: returns tool_calls
-    tc_mock = MagicMock()
-    tc_mock.name = "read_file"
-    tc_mock.arguments = {"path": "main.py"}
-    tc_mock.id = "tc_1"
+    from architect.llm.adapter import ToolCall as TC
+    tc_mock = TC(id="tc_1", name="read_file", arguments={"path": "main.py"})
 
     tool_result = ToolResult(success=True, output="file content")
 
@@ -349,7 +347,7 @@ def test_run_basic():
     response_done = LLMResponse(
         content="Archivo leído correctamente",
         finish_reason="stop",
-        tool_calls=None,
+        tool_calls=[],
         usage=None,
     )
 
@@ -427,6 +425,11 @@ def main():
     print("=" * 60)
     print("Test v3-M1: while True loop + StopReason + safety nets")
     print("=" * 60)
+
+    # Configurar structlog con stdlib (necesario para nivel HUMAN en AgentLoop)
+    from architect.logging.setup import configure_logging
+    from architect.config.schema import LoggingConfig
+    configure_logging(LoggingConfig(), quiet=True)
 
     test_stop_reason_enum()
     test_agent_state_stop_reason()

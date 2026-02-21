@@ -1,10 +1,14 @@
 """
 Cliente HTTP para servidores MCP (Model Context Protocol).
 
-Implementa el protocolo JSON-RPC 2.0 para comunicación con
-servidores MCP remotos vía HTTP.
+Implementa el protocolo JSON-RPC 2.0 sobre HTTP con soporte para:
+- Handshake de inicialización (obligatorio según spec MCP)
+- Gestión de session ID (mcp-session-id)
+- Respuestas SSE (Server-Sent Events) y JSON plano
+- Autenticación Bearer token
 """
 
+import json as _json
 import os
 from typing import Any
 
@@ -14,6 +18,12 @@ import structlog
 from ..config.schema import MCPServerConfig
 
 logger = structlog.get_logger()
+
+# Versión del protocolo MCP soportada
+_MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# Info del cliente para el handshake
+_CLIENT_INFO = {"name": "architect-cli", "version": "1.0"}
 
 
 class MCPError(Exception):
@@ -37,8 +47,14 @@ class MCPToolCallError(MCPError):
 class MCPClient:
     """Cliente HTTP para servidores MCP.
 
-    Implementa el protocolo JSON-RPC 2.0 para comunicación con
-    servidores MCP que exponen tools remotas.
+    Implementa el protocolo JSON-RPC 2.0 con soporte completo para
+    el handshake de inicialización y respuestas SSE que requieren
+    los servidores MCP reales.
+
+    Flujo de conexión:
+    1. POST initialize → obtener session ID de headers
+    2. POST tools/list (con session ID) → listar tools
+    3. POST tools/call (con session ID) → ejecutar tools
     """
 
     def __init__(self, server_config: MCPServerConfig):
@@ -49,18 +65,22 @@ class MCPClient:
         """
         self.config = server_config
         self.base_url = server_config.url
-        self.token = self._resolve_token()
         self.log = logger.bind(component="mcp_client", server=server_config.name)
+        self.token = self._resolve_token()
+        self._session_id: str | None = None
+        self._initialized = False
+        self._request_id = 0
 
-        # Configurar headers
-        headers = {}
+        # Configurar headers (Accept SSE es obligatorio para MCP)
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        headers["Content-Type"] = "application/json"
 
-        # Crear cliente HTTP
+        # Crear cliente HTTP (sin base_url — usamos URL directa)
         self.http = httpx.Client(
-            base_url=self.base_url,
             headers=headers,
             timeout=30.0,
             follow_redirects=True,
@@ -96,6 +116,209 @@ class MCPClient:
 
         return None
 
+    def _next_id(self) -> int:
+        """Genera el siguiente ID de request JSON-RPC."""
+        self._request_id += 1
+        return self._request_id
+
+    def _ensure_initialized(self) -> None:
+        """Asegura que el cliente ha completado el handshake de inicialización.
+
+        El protocolo MCP requiere una llamada `initialize` antes de
+        cualquier otra operación. La respuesta incluye el `mcp-session-id`
+        en los headers, que debe usarse en todas las llamadas posteriores.
+
+        Raises:
+            MCPConnectionError: Si la inicialización falla
+        """
+        if self._initialized:
+            return
+
+        self.log.info("mcp.initialize.start")
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": _MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": _CLIENT_INFO,
+            },
+        }
+
+        try:
+            response = self.http.post(self.base_url, json=request)
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            self.log.error(
+                "mcp.initialize.connection_error",
+                error=str(e),
+                url=self.base_url,
+            )
+            raise MCPConnectionError(
+                f"Error inicializando servidor MCP '{self.config.name}' "
+                f"en {self.base_url}: {e}"
+            )
+
+        # Extraer session ID del header de respuesta
+        self._session_id = response.headers.get("mcp-session-id")
+        if self._session_id:
+            self.log.info(
+                "mcp.initialize.session",
+                session_id=self._session_id[:12] + "...",
+            )
+
+        # Parsear respuesta (puede ser SSE o JSON)
+        data = self._parse_response(response)
+
+        # Verificar que no hubo error
+        if "error" in data:
+            error = data["error"]
+            raise MCPConnectionError(
+                f"Error en initialize: {error.get('message', 'Unknown error')}"
+            )
+
+        # Extraer info del servidor
+        result = data.get("result", {})
+        server_info = result.get("serverInfo", {})
+        self.log.info(
+            "mcp.initialize.success",
+            server_name=server_info.get("name", "unknown"),
+            server_version=server_info.get("version", "unknown"),
+            protocol=result.get("protocolVersion", "unknown"),
+        )
+
+        self._initialized = True
+
+    def _post_rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Envía una petición JSON-RPC al servidor MCP.
+
+        Gestiona automáticamente:
+        - Inicialización lazy (si no se ha hecho)
+        - Header mcp-session-id
+        - Parsing de respuestas SSE y JSON
+
+        Args:
+            method: Método JSON-RPC (ej: "tools/list", "tools/call")
+            params: Parámetros del método
+
+        Returns:
+            Respuesta JSON-RPC parseada (dict con "result" o "error")
+
+        Raises:
+            MCPConnectionError: Si hay error de red
+            MCPError: Si la respuesta no es parseable
+        """
+        self._ensure_initialized()
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": method,
+            "params": params,
+        }
+
+        # Añadir session ID si lo tenemos
+        headers = {}
+        if self._session_id:
+            headers["mcp-session-id"] = self._session_id
+
+        try:
+            response = self.http.post(
+                self.base_url, json=request, headers=headers
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            raise MCPConnectionError(
+                f"Error en {method} al servidor MCP '{self.config.name}': {e}"
+            )
+
+        return self._parse_response(response)
+
+    def _parse_response(self, response: httpx.Response) -> dict[str, Any]:
+        """Parsea la respuesta HTTP que puede ser SSE o JSON.
+
+        Los servidores MCP pueden responder en dos formatos:
+        1. JSON plano (Content-Type: application/json)
+        2. SSE (Content-Type: text/event-stream) con formato:
+           event: message
+           data: {"jsonrpc": "2.0", ...}
+
+        Args:
+            response: Respuesta HTTP
+
+        Returns:
+            Dict con la respuesta JSON-RPC parseada
+
+        Raises:
+            MCPError: Si no se puede parsear la respuesta
+        """
+        content_type = response.headers.get("content-type", "")
+
+        # Caso 1: JSON plano
+        if "application/json" in content_type:
+            try:
+                return response.json()
+            except Exception as e:
+                raise MCPError(f"Respuesta JSON inválida: {e}")
+
+        # Caso 2: SSE (Server-Sent Events)
+        if "text/event-stream" in content_type:
+            return self._parse_sse(response.text)
+
+        # Fallback: intentar JSON, luego SSE
+        try:
+            return response.json()
+        except Exception:
+            pass
+
+        try:
+            return self._parse_sse(response.text)
+        except Exception:
+            pass
+
+        raise MCPError(
+            f"Formato de respuesta no soportado (Content-Type: {content_type}). "
+            f"Body: {response.text[:200]}"
+        )
+
+    def _parse_sse(self, text: str) -> dict[str, Any]:
+        """Parsea una respuesta SSE y extrae el JSON-RPC.
+
+        Formato SSE:
+            event: message
+            data: {"jsonrpc": "2.0", "id": 1, "result": {...}}
+
+        Solo procesa el primer evento 'message' con data JSON-RPC válido.
+
+        Args:
+            text: Texto SSE completo
+
+        Returns:
+            Dict JSON-RPC parseado
+
+        Raises:
+            MCPError: Si no se encuentra un evento válido
+        """
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("data:"):
+                json_str = line[5:].strip()
+                if not json_str:
+                    continue
+                try:
+                    data = _json.loads(json_str)
+                    if isinstance(data, dict) and "jsonrpc" in data:
+                        return data
+                except _json.JSONDecodeError:
+                    continue
+
+        raise MCPError(
+            f"No se encontró evento JSON-RPC válido en respuesta SSE. "
+            f"Body: {text[:200]}"
+        )
+
     def list_tools(self) -> list[dict[str, Any]]:
         """Lista todas las tools disponibles en el servidor MCP.
 
@@ -110,33 +333,7 @@ class MCPClient:
         """
         self.log.info("mcp.list_tools.start")
 
-        # Preparar request JSON-RPC 2.0
-        request = {
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "params": {},
-            "id": 1,
-        }
-
-        try:
-            response = self.http.post("/", json=request)
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            self.log.error(
-                "mcp.list_tools.connection_error",
-                error=str(e),
-                url=self.base_url,
-            )
-            raise MCPConnectionError(
-                f"Error conectando a servidor MCP '{self.config.name}' en {self.base_url}: {e}"
-            )
-
-        # Parsear respuesta JSON-RPC
-        try:
-            data = response.json()
-        except Exception as e:
-            self.log.error("mcp.list_tools.parse_error", error=str(e))
-            raise MCPError(f"Respuesta JSON inválida del servidor MCP: {e}")
+        data = self._post_rpc("tools/list", {})
 
         # Verificar errores JSON-RPC
         if "error" in data:
@@ -180,36 +377,15 @@ class MCPClient:
             args=self._sanitize_args(arguments),
         )
 
-        # Preparar request JSON-RPC 2.0
-        request = {
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {
+        try:
+            data = self._post_rpc("tools/call", {
                 "name": tool_name,
                 "arguments": arguments,
-            },
-            "id": 2,
-        }
-
-        try:
-            response = self.http.post("/", json=request)
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            self.log.error(
-                "mcp.call_tool.connection_error",
-                tool=tool_name,
-                error=str(e),
-            )
-            raise MCPConnectionError(
-                f"Error ejecutando tool '{tool_name}' en servidor MCP: {e}"
-            )
-
-        # Parsear respuesta JSON-RPC
-        try:
-            data = response.json()
-        except Exception as e:
-            self.log.error("mcp.call_tool.parse_error", tool=tool_name, error=str(e))
-            raise MCPToolCallError(f"Respuesta JSON inválida: {e}")
+            })
+        except MCPConnectionError:
+            raise
+        except MCPError as e:
+            raise MCPToolCallError(str(e))
 
         # Verificar errores JSON-RPC
         if "error" in data:

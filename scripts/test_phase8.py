@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-EXPECTED_VERSION = "0.8.0"
+EXPECTED_VERSION = "0.15.0"
 
 
 def _separator(title: str) -> None:
@@ -44,7 +44,7 @@ def _warn(msg: str) -> None:
 def _run_cli(*args) -> tuple[int, str, str]:
     """Ejecuta el CLI architect y retorna (returncode, stdout, stderr)."""
     result = subprocess.run(
-        ["python", "-m", "architect", *args],
+        [sys.executable, "-m", "architect", *args],
         capture_output=True,
         text=True,
         cwd=Path(__file__).parent.parent,
@@ -82,6 +82,14 @@ def test_imports():
         ("architect.mcp.adapter", "MCP adapter"),
         ("architect.mcp.discovery", "MCP discovery"),
         ("architect.logging.setup", "logging setup"),
+        # Módulos añadidos en v3-core
+        ("architect.core.hooks", "post-edit hooks (v3-M4)"),
+        ("architect.core.evaluator", "self-evaluator (F12)"),
+        ("architect.logging.levels", "HUMAN log level (v3-M5)"),
+        ("architect.logging.human", "HumanFormatter/HumanLog (v3-M5/M6)"),
+        ("architect.indexer.tree", "repo indexer (F10)"),
+        ("architect.costs", "cost tracker (F14)"),
+        ("architect.llm.cache", "LLM cache (F14)"),
     ]
 
     for module, description in modules:
@@ -128,10 +136,10 @@ def test_version_consistency():
     # CLI headers (verificar en código fuente)
     cli_path = Path(__file__).parent.parent / "src" / "architect" / "cli.py"
     cli_content = cli_path.read_text()
-    assert f"v{EXPECTED_VERSION}" in cli_content, (
-        f"cli.py no tiene v{EXPECTED_VERSION} en headers"
+    assert EXPECTED_VERSION in cli_content, (
+        f"cli.py no tiene {EXPECTED_VERSION} en el fuente"
     )
-    _ok(f"cli.py headers: v{EXPECTED_VERSION}")
+    _ok(f"cli.py _VERSION = {EXPECTED_VERSION!r}")
 
     return True
 

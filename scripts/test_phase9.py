@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-EXPECTED_VERSION = "0.9.0"
+EXPECTED_VERSION = "0.15.0"
 
 
 def _separator(title: str) -> None:
@@ -68,7 +68,7 @@ def test_imports() -> None:
 
 
 def test_version_consistency() -> None:
-    _separator("Test 2 — Consistencia de versión 0.9.0")
+    _separator("Test 2 — Consistencia de versión 0.15.0")
     import architect
     if architect.__version__ != EXPECTED_VERSION:
         _fail(f"__version__ = {architect.__version__!r}, esperado {EXPECTED_VERSION!r}")

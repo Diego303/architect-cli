@@ -8,6 +8,14 @@ Demuestra el sistema completo de logging:
 - Niveles de verbose
 - Formato JSON para archivos
 - Logs legibles para terminal
+
+NOTA v3-M5: En v3-core se añadió el nivel HUMAN (25, entre INFO y WARNING),
+HumanFormatter.format_event(), HumanLogHandler (filtra solo nivel HUMAN) y
+el helper HumanLog. El sistema ahora tiene 3 pipelines independientes:
+  1. Archivo JSON (DEBUG+, si logging.file configurado)
+  2. HumanLogHandler (stderr, solo nivel HUMAN — sin -v, el usuario solo ve esto)
+  3. Console técnico (stderr, excluye HUMAN, controlado por -v)
+Las pruebas de estos componentes v3 están en scripts/test_v3_m5.py.
 """
 
 import sys

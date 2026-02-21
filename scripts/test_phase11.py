@@ -3,7 +3,7 @@
 Tests de la Fase 11 — Optimización de Tokens y Parallel Tool Calls.
 
 Cubre:
-1.  Importaciones y versión 0.11.0
+1.  Importaciones y versión 0.15.0
 2.  ContextConfig — defaults y validación
 3.  ContextConfig en AppConfig
 4.  ContextManager.truncate_tool_result — resultado corto (sin truncar)
@@ -61,10 +61,10 @@ def skip(msg: str) -> None:
 
 # ── Test 1: Importaciones y versión ──────────────────────────────────────────
 
-header("Test 1 — Importaciones y versión 0.11.0")
+header("Test 1 — Importaciones y versión 0.15.0")
 
 import architect
-assert architect.__version__ == "0.11.0", f"Versión incorrecta: {architect.__version__}"
+assert architect.__version__ == "0.15.0", f"Versión incorrecta: {architect.__version__}"
 ok(f"__version__ = {architect.__version__}")
 
 from architect.config.schema import ContextConfig, AppConfig
@@ -402,6 +402,11 @@ formatted = ctx_no_mgr._format_tool_result(tool_call, tool_result)
 assert formatted["content"] == long_output, "Sin context_manager no debe truncar"
 ok(f"Sin context_manager: {len(long_output)} chars → sin truncado")
 
+# Configurar structlog con stdlib antes de crear AgentLoop (necesario para nivel HUMAN)
+from architect.logging.setup import configure_logging
+from architect.config.schema import LoggingConfig
+configure_logging(LoggingConfig(), quiet=True)
+
 
 # ── Test 16: _should_parallelize — yolo ──────────────────────────────────────
 
@@ -422,6 +427,7 @@ mock_engine.registry.has_tool.return_value = True
 mock_tool = MagicMock()
 mock_tool.sensitive = False
 mock_engine.registry.get.return_value = mock_tool
+mock_engine.run_post_edit_hooks.return_value = None  # Evitar activar lógica de hooks
 
 # Mock del LLM y ContextBuilder
 mock_llm = MagicMock()
@@ -629,7 +635,7 @@ header("Test 22 — Versión consistente en 4 sitios")
 import subprocess
 
 # 1. __init__.py
-assert architect.__version__ == "0.11.0"
+assert architect.__version__ == "0.15.0"
 ok(f"src/architect/__init__.py: {architect.__version__}")
 
 # 2. pyproject.toml
@@ -637,19 +643,19 @@ import tomllib
 pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
 with open(pyproject_path, "rb") as f:
     pyproject = tomllib.load(f)
-assert pyproject["project"]["version"] == "0.11.0", \
+assert pyproject["project"]["version"] == "0.15.0", \
     f"pyproject.toml: {pyproject['project']['version']}"
 ok(f"pyproject.toml: {pyproject['project']['version']}")
 
-# 3. cli.py: version_option
+# 3. cli.py: _VERSION constant
 cli_path = Path(__file__).parent.parent / "src" / "architect" / "cli.py"
 cli_content = cli_path.read_text()
-assert 'version="0.11.0"' in cli_content, "cli.py version_option no es 0.11.0"
-ok("cli.py: @click.version_option(version='0.11.0')")
+assert '_VERSION = "0.15.0"' in cli_content, "cli.py _VERSION no es 0.15.0"
+ok("cli.py: _VERSION = '0.15.0'")
 
-# 4. cli.py: headers
-assert "architect v0.11.0" in cli_content, "cli.py headers no muestran 0.11.0"
-ok("cli.py: headers muestran 'architect v0.11.0'")
+# 4. cli.py: version_option usa _VERSION
+assert "version=_VERSION" in cli_content, "cli.py version_option no usa _VERSION"
+ok("cli.py: @click.version_option(version=_VERSION)")
 
 
 # ── Resumen final ─────────────────────────────────────────────────────────────
@@ -667,5 +673,5 @@ print("    ✓ ContextManager.maybe_compress (con mock LLM)")
 print("    ✓ ContextBuilder integra context_manager")
 print("    ✓ Parallel tool calls: lógica de decisión")
 print("    ✓ Parallel tool calls: orden preservado")
-print("    ✓ Versión 0.11.0 consistente en 4 sitios")
+print("    ✓ Versión 0.15.0 consistente en 4 sitios")
 print()

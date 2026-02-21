@@ -7,10 +7,113 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
-## [No Publicado]
+## [0.15.3] - 2026-02-21
 
-### En Progreso
-(v3-core completada — sin cambios pendientes)
+### Fix — Pipeline structlog sin `--log-file` no mostraba logs HUMAN
+
+El logging HUMAN (trazabilidad del agente con iconos) no aparecía al ejecutar `architect run`
+sin la opción `--log-file`. La causa raíz era que la configuración de structlog tenía dos caminos:
+- **Con `--log-file`**: usaba `wrap_for_formatter` → eventos fluían por stdlib handlers → HumanLogHandler funcionaba.
+- **Sin `--log-file`**: usaba `ConsoleRenderer` directamente → eventos se renderizaban a texto plano
+  antes de llegar a los handlers stdlib → HumanLogHandler recibía strings pre-renderizados y no podía
+  extraer el nombre del evento para formatearlo.
+
+#### Modificado
+
+**`src/architect/logging/setup.py`**:
+- Siempre usa `ProcessorFormatter.wrap_for_formatter` como procesador final de structlog,
+  independientemente de si hay `--log-file` o no.
+- El `console_handler` siempre tiene un `ProcessorFormatter` con `ConsoleRenderer`.
+- Eliminado el camino condicional que ponía `ConsoleRenderer` directamente en la cadena de procesadores.
+
+**`src/architect/logging/human.py`** — `HumanLogHandler.emit()`:
+- Extrae el event dict de `record.msg` (dict puesto por `wrap_for_formatter`) en lugar de
+  buscar atributos sueltos en el record.
+- Separados los conjuntos de campos a filtrar: `_STRUCTLOG_META` (para event dict de structlog)
+  vs `_RECORD_FIELDS` (para fallback con atributos de LogRecord).
+- Corregido bug donde `"args"` (atributo estándar de LogRecord) se filtraba del event dict,
+  impidiendo que `_summarize_args()` recibiera los argumentos de las tools.
+
+---
+
+## [0.15.2] - 2026-02-21
+
+### Mejora — HumanFormatter con iconos según plan v3-M5
+
+Alineación completa del formato de logs HUMAN con la especificación visual del `plan-v3-core.md`.
+
+#### Modificado
+
+**`src/architect/logging/human.py`** — HumanFormatter con iconos y eventos nuevos:
+
+- `agent.llm.call` → `🔄 Paso N → Llamada al LLM (M mensajes)` (antes: sin emoji)
+- `agent.llm.response` → **Nuevo evento**: `✓ LLM respondió con N tool calls` / `✓ LLM respondió con texto final`
+- `agent.complete` → `✅ Agente completado (N pasos)` con razón y coste opcional (antes: `✓ Completado`)
+- `agent.tool_call.execute` → `🔧 tool → summary` para local, `🌐 tool → summary (MCP: server)` para MCP (antes: sin iconos ni distinción MCP)
+- `agent.tool_call.complete` → `✓ OK` / `✗ ERROR: ...` (antes: sin iconos ✓/✗)
+- `agent.hook.complete` → `🔍 Hook nombre: ✓/⚠️ detalle` individual por hook (antes: `[hooks ejecutados]` genérico)
+- `safety.*` → `⚠️` (emoji completo, antes: `⚠` sin variation selector)
+- `agent.llm_error` → `❌ Error del LLM: ...` (antes: `✗`)
+- `agent.closing` → `🔄 Cerrando (...)` (antes: `→`)
+- `context.*` → `📦` para compresión y ventana (antes: texto plano entre corchetes)
+
+**`src/architect/logging/human.py`** — HumanLog ampliado:
+
+- Nuevo método `llm_response(tool_calls)` — emite `agent.llm.response`
+- `tool_call()` acepta `is_mcp` y `mcp_server` para distinción visual MCP
+- `hook_complete()` acepta `hook`, `success`, `detail` para hooks individuales
+- `agent_done()` acepta `cost` opcional para mostrar coste en completado
+
+**`src/architect/core/loop.py`** — Emisión de nuevos eventos:
+
+- Emite `hlog.llm_response()` tras cada respuesta del LLM (con y sin tool calls)
+- Detecta tools MCP (`startswith("mcp_")`) y pasa `is_mcp`/`mcp_server` a `hlog.tool_call()`
+- Pasa `hook="post-edit"` y `success=True` a `hlog.hook_complete()`
+- Incluye `cost_str` de `CostTracker.format_summary_line()` en `hlog.agent_done()`
+
+**`scripts/test_v3_m5.py`** — Tests actualizados (41 → 49 tests):
+
+- Tests de iconos: 🔄, 🔧, 🌐, ✅, ⚠️, ❌, 📦, ⚡, 🔍, ✓, ✗
+- Tests de `agent.llm.response` (texto final y tool calls)
+- Tests de `agent.complete` con coste
+- Tests de MCP tool distinction (`is_mcp=True, mcp_server="docs"`)
+- Tests de hooks individuales (`hook="python-lint"`)
+- Tests de `agent_done(cost=...)` en HumanLog
+
+---
+
+## [0.15.1] - 2026-02-21
+
+### Correcciones — Alineación del Test Suite con v3-core
+
+#### Modificado
+
+**`scripts/test_phase3.py`**:
+- Añadida nota de deprecación en `test_mixed_mode()`: `MixedModeRunner` es legacy a partir de v3-M3. El agente `build` planifica internamente; la CLI ya no usa `MixedModeRunner` como modo por defecto.
+
+**`scripts/test_phase5.py`**:
+- Añadida nota en docstring indicando que las pruebas de los componentes v3-M5 (nivel `HUMAN`, `HumanFormatter`, `HumanLogHandler`, 3 pipelines) están en `scripts/test_v3_m5.py`.
+
+**`scripts/test_phase6.py`**:
+- Añadido `stop_reason` a `required_fields` en `test_json_output_format()`: en v3, `AgentState.to_output_dict()` siempre incluye `stop_reason` (valor `None` si terminó limpiamente).
+- Separada la verificación de `model` (campo condicional, solo presente si `state.model` está seteado).
+
+**`scripts/test_phase8.py`**:
+- Actualizado `EXPECTED_VERSION = "0.8.0"` → `"0.15.0"`.
+- Añadidos 7 módulos v3 al `test_imports()`: `architect.core.hooks`, `architect.core.evaluator`, `architect.logging.levels`, `architect.logging.human`, `architect.indexer.tree`, `architect.costs`, `architect.llm.cache`.
+
+**`scripts/test_phase9.py`**:
+- Actualizado `EXPECTED_VERSION = "0.9.0"` → `"0.15.0"`.
+
+**`scripts/test_phase10.py`**:
+- Actualizada versión `"0.10.0"` → `"0.15.0"` (2 ocurrencias).
+
+**`scripts/test_phase11.py`**:
+- Actualizada versión `"0.11.0"` → `"0.15.0"` (2 ocurrencias).
+- Los métodos de la API original (`truncate_tool_result`, `enforce_window`, `maybe_compress`) siguen presentes en `ContextManager` junto con el nuevo `manage()` unificado de v3-M2.
+
+**`scripts/test_phase12.py`**:
+- Actualizada versión `"0.12.0"` → `"0.15.0"` (2 ocurrencias).
 
 ---
 

@@ -10,7 +10,7 @@ Cubre:
 - SelfEvaluator.evaluate_full (con LLM y run_fn mocks)
 - EvaluationConfig validación Pydantic
 - Integración con AppConfig (evaluation: off/basic/full)
-- Consistencia de versiones (0.12.0)
+- Consistencia de versiones (0.15.0)
 
 Uso:
     python scripts/test_phase12.py
@@ -617,20 +617,20 @@ def _():
 
 # ── Tests de consistencia de versiones ────────────────────────────────────────
 
-@test("Versión: architect.__init__ == 0.12.0")
+@test("Versión: architect.__init__ == 0.15.0")
 def _():
     import architect
-    assert_eq(architect.__version__, "0.12.0")
+    assert_eq(architect.__version__, "0.15.0")
 
 
-@test("Versión: pyproject.toml == 0.12.0")
+@test("Versión: pyproject.toml == 0.15.0")
 def _():
     import re
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     content = pyproject.read_text()
     match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
     assert match, "No se encontró version en pyproject.toml"
-    assert_eq(match.group(1), "0.12.0")
+    assert_eq(match.group(1), "0.15.0")
 
 
 @test("SelfEvaluator y EvalResult exportados desde core.__init__")

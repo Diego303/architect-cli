@@ -84,94 +84,129 @@ def test_human_formatter():
 
     fmt = HumanFormatter()
 
-    # Test: llm_call
+    # Test: llm_call — con emoji 🔄
     result = fmt.format_event("agent.llm.call", step=0, messages_count=5)
-    if result and "Paso 1" in result and "5 mensajes" in result:
-        ok("agent.llm.call → 'Paso 1 → LLM (5 mensajes)'")
+    if result and "Paso 1" in result and "5 mensajes" in result and "🔄" in result:
+        ok("agent.llm.call → '🔄 Paso 1 → Llamada al LLM (5 mensajes)'")
     else:
         fail("agent.llm.call", f"got '{result}'")
 
-    # Test: agent.complete
+    # Test: llm.response con tool calls
+    result = fmt.format_event("agent.llm.response", tool_calls=2)
+    if result and "LLM respondió" in result and "2 tool calls" in result:
+        ok("agent.llm.response (tools) → '✓ LLM respondió con 2 tool calls'")
+    else:
+        fail("agent.llm.response (tools)", f"got '{result}'")
+
+    # Test: llm.response sin tool calls
+    result = fmt.format_event("agent.llm.response", tool_calls=0)
+    if result and "texto final" in result:
+        ok("agent.llm.response (text) → '✓ LLM respondió con texto final'")
+    else:
+        fail("agent.llm.response (text)", f"got '{result}'")
+
+    # Test: agent.complete — con emoji ✅
     result = fmt.format_event("agent.complete", step=3)
-    if result and "Completado" in result and "3" in result:
-        ok("agent.complete → '✓ Completado (3 pasos)'")
+    if result and "completado" in result.lower() and "3" in result and "✅" in result:
+        ok("agent.complete → '✅ Agente completado (3 pasos)'")
     else:
         fail("agent.complete", f"got '{result}'")
 
-    # Test: tool_call
-    result = fmt.format_event("agent.tool_call.execute", tool="read_file", args={"path": "main.py"})
-    if result and "tool read_file" in result:
-        ok("agent.tool_call.execute → 'tool read_file → ...'")
+    # Test: agent.complete con coste
+    result = fmt.format_event("agent.complete", step=5, cost="$0.0234 (12,450 in / 3,200 out)")
+    if result and "Coste:" in result and "$0.0234" in result:
+        ok("agent.complete con coste → incluye línea de coste")
     else:
-        fail("agent.tool_call.execute", f"got '{result}'")
+        fail("agent.complete con coste", f"got '{result}'")
 
-    # Test: tool_result success
+    # Test: tool_call local — con emoji 🔧
+    result = fmt.format_event("agent.tool_call.execute", tool="read_file", args={"path": "main.py"})
+    if result and "🔧" in result and "read_file" in result:
+        ok("agent.tool_call.execute (local) → '🔧 read_file → main.py'")
+    else:
+        fail("agent.tool_call.execute (local)", f"got '{result}'")
+
+    # Test: tool_call MCP — con emoji 🌐
+    result = fmt.format_event("agent.tool_call.execute", tool="mcp_docs_search", args={"q": "auth"}, is_mcp=True, mcp_server="docs")
+    if result and "🌐" in result and "MCP: docs" in result:
+        ok("agent.tool_call.execute (MCP) → '🌐 mcp_docs_search → ... (MCP: docs)'")
+    else:
+        fail("agent.tool_call.execute (MCP)", f"got '{result}'")
+
+    # Test: tool_result success — ✓
     result = fmt.format_event("agent.tool_call.complete", tool="read_file", success=True)
-    if result and "OK" in result:
-        ok("agent.tool_call.complete (success) → 'OK'")
+    if result and "OK" in result and "✓" in result:
+        ok("agent.tool_call.complete (success) → '✓ OK'")
     else:
         fail("agent.tool_call.complete (success)", f"got '{result}'")
 
-    # Test: tool_result failure
+    # Test: tool_result failure — ✗
     result = fmt.format_event("agent.tool_call.complete", tool="edit_file", success=False, error="file not found")
-    if result and "ERROR" in result and "file not found" in result:
-        ok("agent.tool_call.complete (failure) → 'ERROR: file not found'")
+    if result and "ERROR" in result and "file not found" in result and "✗" in result:
+        ok("agent.tool_call.complete (failure) → '✗ ERROR: file not found'")
     else:
         fail("agent.tool_call.complete (failure)", f"got '{result}'")
 
-    # Test: hook complete
-    result = fmt.format_event("agent.hook.complete")
-    if result and "hooks" in result:
-        ok("agent.hook.complete → '[hooks ejecutados]'")
+    # Test: hook complete with name — con emoji 🔍
+    result = fmt.format_event("agent.hook.complete", hook="python-lint", success=True)
+    if result and "🔍" in result and "python-lint" in result:
+        ok("agent.hook.complete (named) → '🔍 Hook python-lint: ✓'")
     else:
-        fail("agent.hook.complete", f"got '{result}'")
+        fail("agent.hook.complete (named)", f"got '{result}'")
 
-    # Test: safety_net user_interrupt
+    # Test: hook complete without name (fallback)
+    result = fmt.format_event("agent.hook.complete")
+    if result and "🔍" in result and "hooks" in result:
+        ok("agent.hook.complete (unnamed) → '🔍 hooks ejecutados'")
+    else:
+        fail("agent.hook.complete (unnamed)", f"got '{result}'")
+
+    # Test: safety_net user_interrupt — ⚠️
     result = fmt.format_event("safety.user_interrupt")
-    if result and "Interrumpido" in result:
-        ok("safety.user_interrupt → 'Interrumpido por el usuario'")
+    if result and "Interrumpido" in result and "⚠️" in result:
+        ok("safety.user_interrupt → '⚠️ Interrumpido por el usuario'")
     else:
         fail("safety.user_interrupt", f"got '{result}'")
 
     # Test: safety_net max_steps
     result = fmt.format_event("safety.max_steps", step=50, max_steps=50)
-    if result and "Límite de pasos" in result:
-        ok("safety.max_steps → 'Límite de pasos alcanzado'")
+    if result and "Límite de pasos" in result and "⚠️" in result:
+        ok("safety.max_steps → '⚠️ Límite de pasos alcanzado'")
     else:
         fail("safety.max_steps", f"got '{result}'")
 
     # Test: safety_net timeout
     result = fmt.format_event("safety.timeout")
-    if result and "Timeout" in result:
-        ok("safety.timeout → 'Timeout alcanzado'")
+    if result and "Timeout" in result and "⚠️" in result:
+        ok("safety.timeout → '⚠️ Timeout alcanzado'")
     else:
         fail("safety.timeout", f"got '{result}'")
 
     # Test: safety_net context_full
     result = fmt.format_event("safety.context_full")
-    if result and "Contexto lleno" in result:
-        ok("safety.context_full → 'Contexto lleno'")
+    if result and "Contexto lleno" in result and "⚠️" in result:
+        ok("safety.context_full → '⚠️ Contexto lleno'")
     else:
         fail("safety.context_full", f"got '{result}'")
 
-    # Test: llm_error
+    # Test: llm_error — ❌
     result = fmt.format_event("agent.llm_error", error="timeout")
-    if result and "Error del LLM" in result and "timeout" in result:
-        ok("agent.llm_error → 'Error del LLM: timeout'")
+    if result and "Error del LLM" in result and "timeout" in result and "❌" in result:
+        ok("agent.llm_error → '❌ Error del LLM: timeout'")
     else:
         fail("agent.llm_error", f"got '{result}'")
 
-    # Test: step_timeout
+    # Test: step_timeout — ⚠️
     result = fmt.format_event("agent.step_timeout", seconds=30)
-    if result and "Step timeout" in result and "30" in result:
-        ok("agent.step_timeout → 'Step timeout (30s)'")
+    if result and "Step timeout" in result and "30" in result and "⚠️" in result:
+        ok("agent.step_timeout → '⚠️ Step timeout (30s)'")
     else:
         fail("agent.step_timeout", f"got '{result}'")
 
-    # Test: agent.closing
+    # Test: agent.closing — 🔄
     result = fmt.format_event("agent.closing", reason="max_steps", steps=10)
-    if result and "Cerrando" in result and "max_steps" in result:
-        ok("agent.closing → 'Cerrando (max_steps, 10 pasos)'")
+    if result and "Cerrando" in result and "max_steps" in result and "🔄" in result:
+        ok("agent.closing → '🔄 Cerrando (max_steps, 10 pasos)'")
     else:
         fail("agent.closing", f"got '{result}'")
 
@@ -182,24 +217,24 @@ def test_human_formatter():
     else:
         fail("agent.loop.complete (success)", f"got '{result}'")
 
-    # Test: loop_complete partial
+    # Test: loop_complete partial — ⚡
     result = fmt.format_event("agent.loop.complete", status="partial", stop_reason="max_steps", total_steps=50, total_tool_calls=100)
-    if result and "Detenido" in result and "max_steps" in result:
-        ok("agent.loop.complete (partial) → 'Detenido (partial — max_steps)'")
+    if result and "Detenido" in result and "max_steps" in result and "⚡" in result:
+        ok("agent.loop.complete (partial) → '⚡ Detenido (partial — max_steps)'")
     else:
         fail("agent.loop.complete (partial)", f"got '{result}'")
 
-    # Test: context.compressing
+    # Test: context.compressing — 📦
     result = fmt.format_event("context.compressing", tool_exchanges=12)
-    if result and "comprimiendo" in result and "12" in result:
-        ok("context.compressing → '[comprimiendo contexto]'")
+    if result and "📦" in result and "12" in result:
+        ok("context.compressing → '📦 Comprimiendo contexto'")
     else:
         fail("context.compressing", f"got '{result}'")
 
-    # Test: context.window_enforced
+    # Test: context.window_enforced — 📦
     result = fmt.format_event("context.window_enforced", removed_messages=6)
-    if result and "eliminados" in result and "6" in result:
-        ok("context.window_enforced → '[eliminados 6 mensajes]'")
+    if result and "eliminados" in result and "6" in result and "📦" in result:
+        ok("context.window_enforced → '📦 eliminados 6 mensajes'")
     else:
         fail("context.window_enforced", f"got '{result}'")
 
@@ -232,9 +267,19 @@ def test_human_log():
     ok("llm_call() → log(HUMAN, 'agent.llm.call', ...)")
     mock_logger.reset_mock()
 
+    hlog.llm_response(tool_calls=2)
+    mock_logger.log.assert_called_with(HUMAN, "agent.llm.response", tool_calls=2)
+    ok("llm_response() → log(HUMAN, 'agent.llm.response', ...)")
+    mock_logger.reset_mock()
+
     hlog.tool_call("read_file", {"path": "test.py"})
-    mock_logger.log.assert_called_with(HUMAN, "agent.tool_call.execute", tool="read_file", args={"path": "test.py"})
+    mock_logger.log.assert_called_with(HUMAN, "agent.tool_call.execute", tool="read_file", args={"path": "test.py"}, is_mcp=False, mcp_server="")
     ok("tool_call() → log(HUMAN, 'agent.tool_call.execute', ...)")
+    mock_logger.reset_mock()
+
+    hlog.tool_call("mcp_docs_search", {"q": "auth"}, is_mcp=True, mcp_server="docs")
+    mock_logger.log.assert_called_with(HUMAN, "agent.tool_call.execute", tool="mcp_docs_search", args={"q": "auth"}, is_mcp=True, mcp_server="docs")
+    ok("tool_call(mcp) → log(HUMAN, 'agent.tool_call.execute', is_mcp=True, ...)")
     mock_logger.reset_mock()
 
     hlog.tool_result("read_file", True, None)
@@ -242,14 +287,19 @@ def test_human_log():
     ok("tool_result() → log(HUMAN, 'agent.tool_call.complete', ...)")
     mock_logger.reset_mock()
 
-    hlog.hook_complete("edit_file")
-    mock_logger.log.assert_called_with(HUMAN, "agent.hook.complete", tool="edit_file")
-    ok("hook_complete() → log(HUMAN, 'agent.hook.complete', ...)")
+    hlog.hook_complete("edit_file", hook="python-lint", success=True, detail="0 errors")
+    mock_logger.log.assert_called_with(HUMAN, "agent.hook.complete", tool="edit_file", hook="python-lint", success=True, detail="0 errors")
+    ok("hook_complete(named) → log(HUMAN, 'agent.hook.complete', hook='python-lint', ...)")
     mock_logger.reset_mock()
 
     hlog.agent_done(5)
-    mock_logger.log.assert_called_with(HUMAN, "agent.complete", step=5)
+    mock_logger.log.assert_called_with(HUMAN, "agent.complete", step=5, cost=None)
     ok("agent_done() → log(HUMAN, 'agent.complete', ...)")
+    mock_logger.reset_mock()
+
+    hlog.agent_done(5, cost="$0.0042")
+    mock_logger.log.assert_called_with(HUMAN, "agent.complete", step=5, cost="$0.0042")
+    ok("agent_done(cost) → log(HUMAN, 'agent.complete', cost='$0.0042')")
     mock_logger.reset_mock()
 
     hlog.safety_net("max_steps", step=50, max_steps=50)
@@ -299,8 +349,8 @@ def test_human_log_handler():
     record_human.messages_count = 5
     handler.emit(record_human)
     output = stream.getvalue()
-    if "Paso 1" in output:
-        ok("Nivel HUMAN → acepta y formatea")
+    if "Paso 1" in output and "🔄" in output:
+        ok("Nivel HUMAN → acepta y formatea con iconos")
     else:
         fail("Nivel HUMAN → acepta y formatea", f"output='{output}'")
 

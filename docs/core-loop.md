@@ -1,6 +1,8 @@
 # El loop de agente (core/loop.py)
 
-El `AgentLoop` es el corazón del sistema. Usa un bucle `while True` — el LLM decide cuándo terminar (deja de pedir tools). Los safety nets (max_steps, budget, timeout, context) son watchdogs que piden un cierre limpio al LLM en lugar de cortar abruptamente.
+El `AgentLoop` es el corazón del sistema. Ver también [`logging.md`](logging.md) para detalles del sistema de logging.
+
+Usa un bucle `while True` — el LLM decide cuándo terminar (deja de pedir tools). Los safety nets (max_steps, budget, timeout, context) son watchdogs que piden un cierre limpio al LLM en lugar de cortar abruptamente.
 
 ---
 
@@ -209,15 +211,15 @@ def _execute_single_tool(tc, step) -> ToolCallResult:
 
 Ejemplo de output con hooks:
 ```
-  tool edit_file → src/main.py (3→5 líneas)
-    OK
-    [hooks ejecutados]
+   🔧 edit_file → src/main.py (3→5 líneas)
+      ✓ OK
+      🔍 Hook python-lint: ✓
 ```
 
 Si un hook falla, el LLM ve el error y puede auto-corregir:
 ```
-[Hook python-lint: FALLÓ (exit 1)]
-src/main.py:45: E302 expected 2 blank lines, found 1
+      🔍 Hook python-lint: ⚠️
+         src/main.py:45: E302 expected 2 blank lines, found 1
 ```
 
 ### Configuración de hooks
@@ -391,35 +393,42 @@ HUMAN = 25  # entre INFO (20) y WARNING (30)
 El `AgentLoop` usa `self.hlog = HumanLog(logger)` para emitir eventos HUMAN:
 
 ```python
-hlog.llm_call(step, messages_count)      # "Paso N → LLM (M mensajes)"
-hlog.tool_call(name, args)               # "  tool read_file → src/main.py"
-hlog.tool_result(name, success, error)   # "    OK" o "    ERROR: ..."
-hlog.hook_complete(name)                 # "    [hooks ejecutados]"
-hlog.agent_done(step)                    # "✓ Completado (N pasos)"
-hlog.safety_net(reason, **kw)            # "⚠  Límite de pasos alcanzado..."
-hlog.closing(reason, steps)              # "→ Cerrando (reason, N pasos)"
+hlog.llm_call(step, messages_count)                    # "🔄 Paso N → Llamada al LLM (M mensajes)"
+hlog.llm_response(tool_calls)                          # "   ✓ LLM respondió con N tool calls"
+hlog.tool_call(name, args, is_mcp, mcp_server)        # "   🔧 tool → summary" or "   🌐 tool → summary (MCP: server)"
+hlog.tool_result(name, success, error)                 # "      ✓ OK" or "      ✗ ERROR: ..."
+hlog.hook_complete(name, hook, success, detail)        # "      🔍 Hook name: ✓/⚠️ detail"
+hlog.agent_done(step, cost)                            # "✅ Agente completado (N pasos)" + cost
+hlog.safety_net(reason, **kw)                          # "⚠️ Límite de pasos alcanzado..."
+hlog.closing(reason, steps)                            # "🔄 Cerrando (reason, N pasos)"
 hlog.loop_complete(status, stop_reason, total_steps, total_tool_calls)
-hlog.llm_error(error)                    # "✗ Error del LLM: ..."
-hlog.step_timeout(seconds)              # "⚠  Step timeout (Ns)..."
+hlog.llm_error(error)                                  # "❌ Error del LLM: ..."
+hlog.step_timeout(seconds)                             # "⚠️ Step timeout (Ns)..."
 ```
 
 ### Formato visual de ejemplo
 
 ```
-Paso 1 → LLM (3 mensajes)
-  tool read_file → src/main.py
-    OK
-  tool read_file → src/config.py
-    OK
+🔄 Paso 1 → Llamada al LLM (3 mensajes)
+   ✓ LLM respondió con 2 tool calls
 
-Paso 2 → LLM (7 mensajes)
-  tool edit_file → src/main.py (3→5 líneas)
-    OK
-    [hooks ejecutados]
+   🔧 read_file → src/main.py
+      ✓ OK
+   🔧 read_file → src/config.py
+      ✓ OK
 
-Paso 3 → LLM (10 mensajes)
+🔄 Paso 2 → Llamada al LLM (7 mensajes)
+   ✓ LLM respondió con 1 tool call
 
-✓ Completado (3 pasos)
+   🔧 edit_file → src/main.py (3→5 líneas)
+      ✓ OK
+      🔍 Hook ruff: ✓
+
+🔄 Paso 3 → Llamada al LLM (10 mensajes)
+   ✓ LLM respondió con texto final
+
+✅ Agente completado (3 pasos)
+   Razón: LLM decidió que terminó
   (3 pasos, 3 tool calls)
 ```
 

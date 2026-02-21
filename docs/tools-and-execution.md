@@ -490,7 +490,13 @@ hooks:
 
 El placeholder `{file}` se reemplaza con el path del archivo editado. La variable de entorno `ARCHITECT_EDITED_FILE` tambien contiene el path.
 
-Si un hook falla (exit code != 0), su output se anade al resultado:
+Si un hook falla (exit code != 0), su output se añade al resultado. En el log HUMAN se muestra con iconos:
+
+```
+      🔍 Hook python-lint: ⚠️
+```
+
+Y en el tool result que recibe el LLM:
 
 ```
 [Hook python-lint: FALLO (exit 1)]
@@ -502,6 +508,12 @@ Si un hook tiene timeout, retorna:
 ```
 [Hook python-lint: FALLO (exit -1)]
 Timeout despues de 15s
+```
+
+Si un hook tiene éxito, el log HUMAN muestra:
+
+```
+      🔍 Hook python-lint: ✓
 ```
 
 Los hooks solo se ejecutan si el `PostEditHooks` fue configurado y pasado al `ExecutionEngine` via el parametro `hooks`. Si `hooks` es `None`, el paso 6 del pipeline se omite.
