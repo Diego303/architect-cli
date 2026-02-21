@@ -1,6 +1,6 @@
 # 📋 Seguimiento de Implementación - architect CLI
 
-Este documento registra el progreso de implementación del proyecto architect siguiendo el plan definido en `Plan_Implementacion.md`.
+Este documento registra el progreso de implementación del proyecto architect
 
 ---
 
