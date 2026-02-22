@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(pip install:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(tail:*)",
+      "Bash(python3.12:*)"
     ]
   }
 }

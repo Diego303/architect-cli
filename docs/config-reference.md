@@ -206,27 +206,94 @@ llm_cache:
   ttl_hours: 24            # validez de cada entrada (1-8760 horas)
 
 # ==============================================================================
-# Hooks — verificacion automatica post-edicion (v3-M4)
+# Hooks — lifecycle completo (v4-A1, retrocompat v3-M4)
 # ==============================================================================
 hooks:
-  post_edit:
-    # Cada hook se ejecuta cuando el agente edita un archivo que coincide con file_patterns
-    - name: python-lint
-      command: "ruff check {file} --no-fix"   # {file} se reemplaza con el path editado
-      file_patterns: ["*.py"]                   # patrones glob
-      timeout: 15                               # segundos (1-300, default: 15)
-      enabled: true                             # false = ignorar este hook
+  # Pre-hooks: se ejecutan ANTES de la acción. Exit code 2 = BLOCK.
+  pre_tool_use:
+    - name: validate-secrets
+      command: "bash scripts/check-secrets.sh"
+      matcher: "write_file|edit_file"      # regex para filtrar tools
+      file_patterns: ["*.py", "*.env"]
+      timeout: 5
 
+  # Post-hooks: se ejecutan DESPUÉS de la acción.
+  post_tool_use:
+    - name: python-lint
+      command: "ruff check {file} --no-fix"    # {file} se reemplaza con el path editado
+      file_patterns: ["*.py"]                    # patrones glob
+      timeout: 15                                # segundos (1-300, default: 10)
+      enabled: true                              # false = ignorar este hook
     - name: python-typecheck
       command: "mypy {file} --no-error-summary"
       file_patterns: ["*.py"]
       timeout: 30
 
-    # Hook para TypeScript
-    # - name: ts-lint
-    #   command: "eslint {file} --no-color"
-    #   file_patterns: ["*.ts", "*.tsx"]
-    #   timeout: 15
+  # Hooks de sesión (notificación, no pueden bloquear)
+  session_start: []
+  session_end: []
+  on_error: []
+  agent_complete: []
+  budget_warning: []
+  context_compress: []
+
+  # Pre/post LLM call
+  pre_llm_call: []
+  post_llm_call: []
+
+  # Retrocompatibilidad v3-M4: post_edit se mapea a post_tool_use
+  # con matcher automático para edit_file/write_file/apply_patch
+  post_edit:
+    - name: legacy-lint
+      command: "ruff check {file}"
+      file_patterns: ["*.py"]
+      timeout: 15
+
+  # Campos de cada hook:
+  # name:          str           — nombre descriptivo
+  # command:       str           — comando shell ({file} se reemplaza)
+  # matcher:       str = "*"    — regex/glob para filtrar tools
+  # file_patterns: list[str]    — patrones glob para filtrar archivos
+  # timeout:       int = 10     — segundos (1-300)
+  # async:         bool = false — true = ejecutar en background sin bloquear
+  # enabled:       bool = true  — false = ignorar
+
+# ==============================================================================
+# Guardrails — seguridad determinista (v4-A2)
+# ==============================================================================
+guardrails:
+  enabled: false              # true = activar guardrails
+  protected_files: []         # globs: [".env", "*.pem", "secrets/**"]
+  blocked_commands: []        # regexes: ["git push --force", "docker rm"]
+  max_files_modified: null    # límite de archivos distintos por sesión (null = sin límite)
+  max_lines_changed: null     # límite de líneas cambiadas acumuladas
+  max_commands_executed: null  # límite de comandos ejecutados
+  require_test_after_edit: false  # forzar test cada N ediciones
+
+  code_rules: []              # reglas de análisis estático simple
+  # - pattern: "eval\\("
+  #   message: "Uso de eval() detectado"
+  #   severity: block          # block | warn
+
+  quality_gates: []           # verificación final al completar
+  # - name: tests
+  #   command: "pytest tests/ -x"
+  #   required: true           # true = bloquea si falla
+  #   timeout: 120
+
+# ==============================================================================
+# Skills — contexto de proyecto y workflows (v4-A3)
+# ==============================================================================
+skills:
+  auto_discover: true         # descubrir skills en .architect/skills/ automáticamente
+  inject_by_glob: true        # inyectar skills según archivos activos
+
+# ==============================================================================
+# Memory — memoria procedural (v4-A4)
+# ==============================================================================
+memory:
+  enabled: false              # true = activar detección de correcciones
+  auto_detect_corrections: true  # detectar correcciones automáticamente en mensajes del usuario
 ```
 
 ---
@@ -397,11 +464,11 @@ llm_cache:
 architect run "PROMPT" -a build --cache --budget 1.5 --show-costs
 ```
 
-### Con hooks post-edit (v3-M4)
+### Con hooks del lifecycle (v4-A1)
 
 ```yaml
 hooks:
-  post_edit:
+  post_tool_use:
     - name: python-lint
       command: "ruff check {file} --no-fix"
       file_patterns: ["*.py"]
@@ -410,12 +477,50 @@ hooks:
       command: "mypy {file} --no-error-summary"
       file_patterns: ["*.py"]
       timeout: 30
+  pre_tool_use:
+    - name: no-secrets
+      command: "bash scripts/check-secrets.sh"
+      matcher: "write_file|edit_file"
+      timeout: 5
 ```
 
 ```bash
 # Los hooks se ejecutan automaticamente — el LLM ve el output de lint/typecheck
-# y puede auto-corregir errores
+# y puede auto-corregir errores. Pre-hooks pueden bloquear acciones.
 architect run "refactoriza utils.py" -a build --mode yolo -c config.yaml
+```
+
+### Con guardrails (v4-A2)
+
+```yaml
+guardrails:
+  enabled: true
+  protected_files: [".env", "*.pem", "deploy/**"]
+  blocked_commands: ["git push", "docker rm"]
+  max_files_modified: 10
+  max_lines_changed: 500
+  require_test_after_edit: true
+  code_rules:
+    - pattern: "eval\\("
+      message: "No usar eval()"
+      severity: block
+  quality_gates:
+    - name: tests
+      command: "pytest tests/ -x"
+      required: true
+      timeout: 120
+```
+
+### Con skills y memoria (v4-A3/A4)
+
+```yaml
+skills:
+  auto_discover: true
+  inject_by_glob: true
+
+memory:
+  enabled: true
+  auto_detect_corrections: true
 ```
 
 ### Config completa con self-eval

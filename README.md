@@ -330,32 +330,136 @@ Ver [`docs/logging.md`](docs/logging.md) para detalles de la arquitectura de log
 
 ---
 
-## Post-Edit Hooks
+## Hooks del Lifecycle
 
-Los hooks se ejecutan automáticamente después de cada operación de edición (`edit_file`, `write_file`, `apply_patch`). El resultado se añade al contexto del agente para que pueda corregir errores.
+Sistema completo de hooks que se ejecutan en 10 puntos del lifecycle del agente. Permiten interceptar, bloquear o modificar operaciones.
 
 ```yaml
 hooks:
-  post_edit:
-    - name: ruff
-      command: "ruff check {file} --fix"
+  pre_tool_use:
+    - command: "python scripts/validate_tool.py"
+      matcher: "write_file|edit_file"
+      timeout: 5
+
+  post_tool_use:
+    - command: "ruff check {file} --fix"
       file_patterns: ["*.py"]
       timeout: 15
-
-    - name: mypy
-      command: "mypy {file} --ignore-missing-imports"
+    - command: "mypy {file} --ignore-missing-imports"
       file_patterns: ["*.py"]
       timeout: 30
 
-    - name: prettier
-      command: "prettier --write {file}"
-      file_patterns: ["*.ts", "*.tsx", "*.json"]
-      timeout: 10
+  session_start:
+    - command: "echo 'Session started'"
+      async: true
+
+  agent_complete:
+    - command: "python scripts/post_run.py"
 ```
 
-- `{file}` se reemplaza por el path del archivo editado
-- También disponible como variable de entorno `ARCHITECT_EDITED_FILE`
-- Un hook que falla (exit code != 0) devuelve su output al LLM como feedback
+**Eventos disponibles**: `pre_tool_use`, `post_tool_use`, `pre_llm_call`, `post_llm_call`, `session_start`, `session_end`, `on_error`, `budget_warning`, `context_compress`, `agent_complete`
+
+**Protocolo de exit codes**:
+- `0` = ALLOW (continuar; si stdout contiene JSON con `updatedInput`, se modifica el input)
+- `2` = BLOCK (abortar la operación)
+- Otro = error (warning en logs, se continúa)
+
+**Variables de entorno** inyectadas: `ARCHITECT_EVENT`, `ARCHITECT_TOOL`, `ARCHITECT_WORKSPACE`, `ARCHITECT_FILE` (si aplica)
+
+**Backward compatible**: la sección `post_edit` sigue funcionando y se mapea a `post_tool_use` con matcher de tools de edición.
+
+---
+
+## Guardrails
+
+Capa de seguridad determinista evaluada **antes** que los hooks. No desactivable por el LLM.
+
+```yaml
+guardrails:
+  protected_files:
+    - "*.env"
+    - "secrets/**"
+    - ".git/**"
+  blocked_commands:
+    - "rm -rf /"
+    - "DROP TABLE"
+  max_files_per_session: 20
+  max_lines_changed: 5000
+  code_rules:
+    - pattern: "TODO|FIXME"
+      severity: warn
+      message: "Código con TODOs pendientes"
+    - pattern: "eval\\("
+      severity: block
+      message: "eval() no permitido"
+  quality_gates:
+    - name: tests
+      command: "pytest --tb=short -q"
+      required: true
+    - name: lint
+      command: "ruff check src/"
+      required: false
+```
+
+**Quality gates**: se ejecutan cuando el agente declara completado. Si un gate `required` falla, el agente recibe feedback y sigue trabajando hasta que pase.
+
+---
+
+## Skills y .architect.md
+
+El agente carga automáticamente contexto de proyecto desde `.architect.md`, `AGENTS.md` o `CLAUDE.md` en la raíz del workspace e inyecta su contenido en el system prompt.
+
+**Skills especializadas** se descubren en `.architect/skills/` y `.architect/installed-skills/`:
+
+```
+.architect/
+├── skills/
+│   └── django/
+│       └── SKILL.md        # frontmatter YAML + contenido
+└── installed-skills/
+    └── react-patterns/
+        └── SKILL.md
+```
+
+Cada `SKILL.md` puede tener un frontmatter YAML con `globs` para activarse solo cuando los archivos relevantes están en juego:
+
+```yaml
+---
+name: django
+description: Patrones Django para el proyecto
+globs: ["*.py", "*/models.py", "*/views.py"]
+---
+# Instrucciones para Django
+Usa class-based views siempre que sea posible...
+```
+
+```bash
+# Gestión de skills
+architect skill list
+architect skill create mi-skill
+architect skill install github-user/repo/path/to/skill
+architect skill remove mi-skill
+```
+
+---
+
+## Memoria Procedural
+
+El agente detecta correcciones del usuario y las persiste entre sesiones en `.architect/memory.md`.
+
+```yaml
+memory:
+  enabled: true
+  auto_detect_corrections: true
+```
+
+Cuando el usuario corrige al agente (ej. "no uses print, usa logging"), el patrón se guarda y se inyecta en futuras sesiones como contexto adicional en el system prompt.
+
+El archivo `.architect/memory.md` es editable manualmente y sigue el formato:
+```
+- [2026-02-22] correction: No usar print(), usar logging
+- [2026-02-22] pattern: Siempre ejecutar tests después de editar
+```
 
 ---
 
@@ -495,7 +599,10 @@ architect run PROMPT
     ├── RepoIndexer            árbol del workspace → inyectado en system prompt
     ├── LLMAdapter             LiteLLM con retries selectivos + prompt caching
     ├── ContextManager         pruning: compress + enforce_window + is_critically_full
-    ├── PostEditHooks          lint/test automático post-edición
+    ├── HookExecutor           10 eventos del lifecycle, exit code protocol
+    ├── GuardrailsEngine       seguridad determinista (before hooks)
+    ├── SkillsLoader           .architect.md + skills por glob
+    ├── ProceduralMemory       correcciones del usuario entre sesiones
     ├── CostTracker            coste acumulado + watchdog de presupuesto
     │
     └── AgentLoop (while True — el LLM decide cuándo parar)
@@ -504,10 +611,14 @@ architect run PROMPT
             │       └── si salta → _graceful_close(): última LLM call sin tools
             │                         el agente resume qué hizo y qué queda pendiente
             ├── context_manager.manage()     compress + enforce_window si necesario
+            ├── hooks: pre_llm_call          → interceptar antes de LLM
             ├── llm.completion()             → streaming chunks a stderr
+            ├── hooks: post_llm_call         → interceptar después de LLM
             ├── si no hay tool_calls         → LLM_DONE, fin natural
+            ├── guardrails.check()           → seguridad determinista (antes de hooks)
+            ├── hooks: pre_tool_use          → ALLOW / BLOCK / MODIFY
             ├── engine.execute_tool_calls()  → paralelo si posible → confirmar → ejecutar
-            ├── engine.run_post_edit_hooks() → lint/test → feedback al LLM si falla
+            ├── hooks: post_tool_use         → lint/test → feedback al LLM si falla
             └── repetir
 ```
 
@@ -546,3 +657,5 @@ architect run PROMPT
 | v0.15.0 | **v3-core** — rediseño del núcleo: `while True` loop, safety nets con cierre limpio, `PostEditHooks`, nivel de log HUMAN, `StopReason`, `ContextManager.manage()` |
 | v0.15.2 | **Human logging con iconos** — formato visual alineado con plan v3: 🔄🔧🌐✅⚡❌📦🔍, distinción MCP, eventos nuevos (`llm_response`), coste en completado |
 | v0.15.3 | **Fix pipeline structlog** — human logging funciona sin `--log-file`; `wrap_for_formatter` siempre activo |
+| v0.16.0 | **v4 Phase A** — hooks lifecycle (10 eventos, exit code protocol), guardrails deterministas, skills ecosystem (.architect.md), memoria procedural |
+| v0.16.1 | **QA Phase A** — 228 verificaciones, 5 bugs corregidos (ToolResult import, CostTracker.total, YAML off, schema shadowing), 24 scripts alineados |

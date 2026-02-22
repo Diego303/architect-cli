@@ -23,13 +23,16 @@ Guía práctica de uso real: desde el caso más simple hasta configuraciones ava
 15. [Auto-evaluación --self-eval (F12)](#15-auto-evaluación---self-eval-f12)
 16. [Ejecución de comandos --allow-commands (F13)](#16-ejecución-de-comandos---allow-commands-f13)
 17. [Seguimiento de costes --show-costs (F14)](#17-seguimiento-de-costes---show-costs-f14)
-18. [Post-edit hooks (v3-M4)](#18-post-edit-hooks-v3-m4)
+18. [Hooks del lifecycle (v4-A1)](#18-hooks-del-lifecycle-v4-a1)
 19. [Uso en scripts y pipes](#19-uso-en-scripts-y-pipes)
 20. [CI/CD: GitHub Actions, GitLab, cron](#20-cicd-github-actions-gitlab-cron)
 21. [Multi-proyecto: workspace y config por proyecto](#21-multi-proyecto-workspace-y-config-por-proyecto)
 22. [Agentes custom en YAML](#22-agentes-custom-en-yaml)
 23. [Comandos auxiliares](#23-comandos-auxiliares)
 24. [Referencia rápida de flags](#24-referencia-rápida-de-flags)
+25. [Guardrails (v4-A2)](#25-guardrails-v4-a2)
+26. [Skills y .architect.md (v4-A3)](#26-skills-y-architectmd-v4-a3)
+27. [Memoria procedural (v4-A4)](#27-memoria-procedural-v4-a4)
 
 ---
 
@@ -42,7 +45,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.15.3
+architect --version   # architect, version 0.16.1
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -1020,15 +1023,47 @@ print(f\"Tokens: {costs.get('total_tokens', 0):,}\")
 
 ---
 
-## 18. Post-edit hooks (v3-M4)
+## 18. Hooks del lifecycle (v4-A1)
 
-A partir de v0.15.0, architect puede ejecutar hooks automáticamente cuando el agente edita archivos. Los resultados vuelven al LLM para que pueda auto-corregir errores. A partir de v0.15.2, cada hook se muestra individualmente con iconos: `🔍 Hook python-lint: ✓`.
+A partir de v0.16.0, architect soporta un sistema completo de hooks en **10 eventos del lifecycle**. El sistema es retrocompatible con los `post_edit` hooks de v0.15.x.
+
+### Eventos disponibles
+
+| Evento | Cuándo se ejecuta | Tipo |
+|--------|-------------------|------|
+| `pre_tool_use` | Antes de ejecutar cada tool call | Pre-hook (puede BLOCK) |
+| `post_tool_use` | Después de ejecutar cada tool call | Post-hook |
+| `pre_llm_call` | Antes de cada llamada al LLM | Pre-hook (puede BLOCK) |
+| `post_llm_call` | Después de cada respuesta del LLM | Post-hook |
+| `session_start` | Al iniciar la sesión del agente | Notificación |
+| `session_end` | Al terminar la sesión del agente | Notificación |
+| `on_error` | Cuando ocurre un error en el loop | Notificación |
+| `budget_warning` | Cuando se alcanza `warn_at_usd` | Notificación |
+| `context_compress` | Cuando se comprime el contexto | Notificación |
+| `agent_complete` | Cuando el agente termina su tarea | Notificación |
+
+### Protocolo de exit codes
+
+Los hooks se ejecutan como subprocesos del sistema y se comunican mediante exit codes:
+
+| Exit code | Decisión | Descripción |
+|:---------:|----------|-------------|
+| `0` | **ALLOW** | Permite la acción. stdout puede contener JSON con `additionalContext` o `updatedInput` |
+| `2` | **BLOCK** | Bloquea la acción (solo pre-hooks). stderr contiene la razón |
+| Otro | **Error** | Se logea como warning, no rompe el loop. La acción se permite |
 
 ### Configurar hooks en YAML
 
 ```yaml
 hooks:
-  post_edit:
+  # Hooks del lifecycle completo (v4-A1)
+  pre_tool_use:
+    - name: validate-path
+      command: "python3 scripts/validate.py"
+      matcher: "write_file|edit_file"    # regex para filtrar tools
+      timeout: 5
+
+  post_tool_use:
     - name: python-lint
       command: "ruff check {file} --no-fix"
       file_patterns: ["*.py"]
@@ -1037,28 +1072,101 @@ hooks:
       command: "mypy {file} --no-error-summary"
       file_patterns: ["*.py"]
       timeout: 30
+
+  session_start:
+    - name: notify-start
+      command: "echo 'Sesión iniciada'"
+      async: true                        # ejecutar en background sin bloquear
+
+  on_error:
+    - name: log-error
+      command: "logger -t architect 'Error en sesión'"
+
+  # Retrocompatibilidad v3-M4: post_edit se mapea a post_tool_use
+  # con matcher automático para edit_file/write_file/apply_patch
+  post_edit:
+    - name: legacy-lint
+      command: "ruff check {file}"
+      file_patterns: ["*.py"]
+      timeout: 15
 ```
 
-### Como funciona
+### Campos de cada hook
 
-1. El agente llama a `edit_file`, `write_file` o `apply_patch`
-2. La tool se ejecuta normalmente
-3. Si el archivo coincide con `file_patterns`, se ejecutan los hooks configurados
-4. El output de los hooks se anade al resultado del tool
-5. El LLM lee el output y puede auto-corregir errores
+```yaml
+- name: mi-hook             # nombre descriptivo
+  command: "mi-script.sh"   # comando shell a ejecutar
+  matcher: "*"              # regex/glob para filtrar tools (default: "*")
+  file_patterns: ["*.py"]   # patrones glob para filtrar archivos
+  timeout: 10               # segundos (1-300, default: 10)
+  async: false              # true = ejecutar en background sin bloquear
+  enabled: true             # false = ignorar este hook
+```
 
-### Ejemplo de flujo con hooks
+### Variables de entorno inyectadas
+
+Los hooks reciben contexto via variables de entorno `ARCHITECT_*`:
+
+| Variable | Contenido |
+|----------|-----------|
+| `ARCHITECT_EVENT` | Nombre del evento (e.g., `pre_tool_use`) |
+| `ARCHITECT_WORKSPACE` | Directorio raíz del workspace |
+| `ARCHITECT_TOOL` | Nombre de la tool (en eventos de tools) |
+| `ARCHITECT_FILE` | Path del archivo (si aplica) |
+| `ARCHITECT_EDITED_FILE` | Path del archivo editado (retrocompat v3) |
+
+Además, `{file}` en el comando se reemplaza con el path del archivo editado.
+
+### Ejemplo: pre-hook que bloquea
+
+```bash
+#!/bin/bash
+# scripts/validate-no-secrets.sh
+# Bloquea si el archivo contiene API keys
+if grep -qE "(sk-|AKIA)" "$ARCHITECT_FILE" 2>/dev/null; then
+    echo "Archivo contiene posibles secretos" >&2
+    exit 2   # BLOCK
+fi
+exit 0       # ALLOW
+```
+
+```yaml
+hooks:
+  pre_tool_use:
+    - name: no-secrets
+      command: "bash scripts/validate-no-secrets.sh"
+      matcher: "write_file|edit_file"
+      file_patterns: ["*.py", "*.env"]
+```
+
+### Ejemplo: post-hook con lint automático
+
+```yaml
+hooks:
+  post_tool_use:
+    - name: python-lint
+      command: "ruff check {file} --no-fix"
+      file_patterns: ["*.py"]
+      timeout: 15
+```
 
 El agente edita `src/main.py`:
-- edit_file ejecuta el cambio -- OK
-- Hook python-lint ejecuta `ruff check src/main.py` -- 1 error
-- El LLM ve: "[Hook python-lint: FALLO (exit 1)] src/main.py:15:5: F841..."
-- El LLM corrige el error automaticamente con otro edit_file
+1. `edit_file` ejecuta el cambio — OK
+2. Hook `python-lint` ejecuta `ruff check src/main.py` — 1 error
+3. El LLM ve: `[Hook python-lint: FALLO (exit 1)] src/main.py:15:5: F841...`
+4. El LLM corrige el error automáticamente con otro `edit_file`
 
-### Variables de entorno
+### Hooks async (no bloqueantes)
 
-- `{file}` en el comando se reemplaza con el path del archivo editado
-- `ARCHITECT_EDITED_FILE` env var contiene el path del archivo
+```yaml
+hooks:
+  session_end:
+    - name: notify-slack
+      command: "curl -s -X POST $SLACK_WEBHOOK -d '{\"text\": \"Sesión completada\"}'"
+      async: true    # no bloquea la finalización
+```
+
+Los hooks con `async: true` se ejecutan en un thread daemon en background. No bloquean el loop ni esperan resultado.
 
 ---
 
@@ -1482,6 +1590,24 @@ architect validate-config -c config.example.yaml
 # → "Configuración válida: model=gpt-4o-mini, workspace=., retries=2, agentes=0, MCP servers=0"
 ```
 
+### `architect skill` — gestión de skills (v4-A3)
+
+```bash
+# Listar skills instaladas y locales
+architect skill list
+
+# Crear una skill local nueva
+architect skill create mi-skill
+# → Crea .architect/skills/mi-skill/SKILL.md con plantilla
+
+# Instalar skill desde GitHub
+architect skill install usuario/repo
+architect skill install usuario/repo/path/to/skill
+
+# Desinstalar una skill
+architect skill remove nombre-skill
+```
+
 ---
 
 ## 24. Referencia rápida de flags
@@ -1531,6 +1657,9 @@ Costes y caché (F14)
   --cache                   Activar cache local de respuestas LLM
   --no-cache                Desactivar cache local de respuestas LLM
   --cache-clear             Limpiar cache local antes de ejecutar
+
+Hooks y guardrails (v4)
+  (hooks y guardrails se configuran exclusivamente via YAML — sin flags de CLI)
 ```
 
 ### Combinaciones más comunes
@@ -1572,4 +1701,258 @@ architect run "PROMPT" -a build --cache --show-costs
 
 # CI con presupuesto estricto y output JSON (incluye costs en el JSON)
 architect run "PROMPT" --mode yolo --allow-commands --budget 1.0 --quiet --json
+```
+
+---
+
+## 25. Guardrails (v4-A2)
+
+A partir de v0.16.0, architect incluye un motor de **guardrails deterministas** que se evalúan ANTES de los hooks. Son reglas de seguridad que no pueden ser desactivadas por el LLM.
+
+### Configurar en YAML
+
+```yaml
+guardrails:
+  enabled: true
+
+  # Archivos protegidos (glob patterns)
+  protected_files:
+    - ".env"
+    - "*.pem"
+    - "*.key"
+    - "secrets/**"
+
+  # Comandos bloqueados (regex patterns)
+  blocked_commands:
+    - "git push --force"
+    - "docker rm -f"
+    - "kubectl delete"
+
+  # Límites de edición por sesión
+  max_files_modified: 10       # máximo archivos distintos modificados
+  max_lines_changed: 500       # máximo líneas cambiadas acumuladas
+  max_commands_executed: 20    # máximo comandos ejecutados
+
+  # Forzar tests después de N ediciones
+  require_test_after_edit: true
+
+  # Reglas de código (análisis estático simple)
+  code_rules:
+    - pattern: "eval\\("
+      message: "Uso de eval() detectado — potencial riesgo de seguridad"
+      severity: block            # block | warn
+
+    - pattern: "TODO|FIXME|HACK"
+      message: "Marcador temporal encontrado"
+      severity: warn
+
+  # Quality gates (se ejecutan al completar el agente)
+  quality_gates:
+    - name: lint
+      command: "ruff check src/"
+      required: true             # true = bloquea si falla
+      timeout: 60
+
+    - name: tests
+      command: "pytest tests/ -x --tb=short"
+      required: true
+      timeout: 120
+
+    - name: typecheck
+      command: "mypy src/ --no-error-summary"
+      required: false            # solo informativo
+      timeout: 60
+```
+
+### Orden de evaluación
+
+```
+Guardrails (determinista, primero)
+  ↓
+Hooks pre_tool_use (shell scripts, pueden BLOCK)
+  ↓
+Ejecución de la tool
+  ↓
+Hooks post_tool_use (lint, typecheck, etc.)
+```
+
+Los guardrails se evalúan **siempre antes** que los hooks. Si un guardrail bloquea, ni siquiera se ejecutan los hooks.
+
+### Qué protege cada guardrail
+
+| Guardrail | Protección |
+|-----------|-----------|
+| `protected_files` | Bloquea write/edit/delete en archivos sensibles |
+| `blocked_commands` | Bloquea `run_command` con patrones peligrosos |
+| `max_files_modified` | Limita el alcance de cambios por sesión |
+| `max_lines_changed` | Evita refactorizaciones masivas no intencionadas |
+| `max_commands_executed` | Previene loops infinitos de ejecución |
+| `require_test_after_edit` | Fuerza al agente a ejecutar tests periódicamente |
+| `code_rules` | Detecta patrones peligrosos en código escrito |
+| `quality_gates` | Verificación final de calidad al completar |
+
+### Ejemplo: equipo con políticas estrictas
+
+```yaml
+guardrails:
+  enabled: true
+  protected_files: [".env", "*.pem", "deploy/**", "Dockerfile"]
+  blocked_commands: ["git push", "docker build"]
+  max_files_modified: 5
+  max_lines_changed: 200
+  require_test_after_edit: true
+  quality_gates:
+    - name: tests
+      command: "pytest tests/ -x"
+      required: true
+      timeout: 120
+```
+
+---
+
+## 26. Skills y .architect.md (v4-A3)
+
+A partir de v0.16.0, architect soporta un sistema de **skills** de dos niveles para inyectar contexto específico del proyecto en el system prompt del agente.
+
+### Nivel 1: Contexto del proyecto (siempre activo)
+
+Architect busca automáticamente estos archivos en la raíz del workspace:
+
+```
+.architect.md    ← preferido
+AGENTS.md        ← alternativa
+CLAUDE.md        ← alternativa
+```
+
+Si existe alguno, su contenido se inyecta al inicio del system prompt como `# Instrucciones del Proyecto`.
+
+```markdown
+<!-- .architect.md -->
+# Convenciones del Proyecto
+
+- Usar snake_case en Python, camelCase en TypeScript
+- Siempre incluir docstrings en funciones públicas
+- Tests en tests/ con nombre test_*.py
+- No usar print() para debug, usar logging
+```
+
+### Nivel 2: Skills activadas por glob
+
+Las skills son carpetas en `.architect/skills/` o `.architect/installed-skills/` con un archivo `SKILL.md`:
+
+```
+.architect/
+├── skills/
+│   ├── django-patterns/
+│   │   └── SKILL.md
+│   └── api-docs/
+│       └── SKILL.md
+└── installed-skills/
+    └── react-best-practices/
+        └── SKILL.md
+```
+
+#### Formato de SKILL.md
+
+```markdown
+---
+name: django-patterns
+description: "Patrones Django para este proyecto"
+globs: ["*.py", "**/views.py", "**/models.py"]
+---
+
+# Patrones Django
+
+- Usar class-based views para CRUD
+- Validar con serializers, nunca en views
+- Queries con select_related/prefetch_related
+```
+
+El YAML frontmatter define cuándo se activa la skill (por `globs`). Si el agente está trabajando con archivos que coinciden con los globs, la skill se inyecta automáticamente.
+
+### Gestión de skills
+
+```bash
+# Crear skill local
+architect skill create mi-patron
+# → .architect/skills/mi-patron/SKILL.md (plantilla)
+
+# Instalar desde GitHub (sparse checkout)
+architect skill install usuario/repo
+architect skill install usuario/repo/skills/mi-skill
+
+# Listar todas
+architect skill list
+# Salida:
+# Skills disponibles:
+#   django-patterns  [local]     .architect/skills/django-patterns/
+#   react-best       [installed] .architect/installed-skills/react-best/
+
+# Desinstalar
+architect skill remove react-best
+```
+
+### Configurar en YAML
+
+```yaml
+skills:
+  auto_discover: true      # descubrir skills automáticamente (default: true)
+  inject_by_glob: true     # inyectar skills según archivos activos (default: true)
+```
+
+---
+
+## 27. Memoria procedural (v4-A4)
+
+A partir de v0.16.0, architect puede detectar correcciones del usuario y almacenarlas como **memoria procedural** que persiste entre sesiones.
+
+### Cómo funciona
+
+1. El usuario corrige al agente: *"No, usa const en vez de var"*
+2. Architect detecta el patrón de corrección automáticamente
+3. Lo guarda en `.architect/memory.md` con timestamp
+4. En sesiones futuras, el contenido de `memory.md` se inyecta en el system prompt
+
+### Patrones de detección
+
+Architect detecta 6 tipos de correcciones en español:
+
+| Tipo | Ejemplo |
+|------|---------|
+| Corrección directa | "No, usa const" / "No utilices var" |
+| Negación | "Eso no es correcto" / "Eso está mal" |
+| Clarificación | "En realidad es así..." / "De hecho..." |
+| Debería ser | "Debería ser snake_case" / "El correcto es..." |
+| Enfoque incorrecto | "No funciona así" / "Así no" |
+| Regla absoluta | "Siempre usa TypeScript" / "Nunca pongas secrets en código" |
+
+### Archivo de memoria
+
+```markdown
+<!-- .architect/memory.md (auto-generado, editable manualmente) -->
+# Memoria del Proyecto
+
+> Auto-generado por architect. Editable manualmente.
+
+- [2026-02-22] Correccion: No uses var, usa const en todo el proyecto
+- [2026-02-22] Patron: Siempre incluir error handling en try-catch
+- [2026-02-23] Correccion: El comando correcto es pnpm, no npm
+```
+
+### Configurar en YAML
+
+```yaml
+memory:
+  enabled: true                    # activar memoria procedural (default: false)
+  auto_detect_corrections: true    # detectar correcciones automáticamente (default: true)
+```
+
+### Uso manual
+
+El archivo `.architect/memory.md` es editable manualmente. Puedes añadir reglas que quieras que el agente siempre recuerde:
+
+```markdown
+- [2026-02-22] Patron: En este proyecto usamos pnpm, nunca npm ni yarn
+- [2026-02-22] Patron: Los tests van en __tests__/ al lado del código fuente
+- [2026-02-22] Patron: Usar zod para validación de schemas, no joi
 ```

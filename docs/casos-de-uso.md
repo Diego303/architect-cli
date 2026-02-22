@@ -1157,3 +1157,137 @@ Estimaciones basadas en uso real con modelos comunes. Los costes dependen del mo
 - El agente `plan` es mucho más barato que `build` (solo lee, no itera con ediciones).
 - Los hooks (ruff, mypy) añaden iteraciones: cada error detectado es una vuelta más al LLM.
 - El cache local (`--cache`) elimina costes en re-ejecuciones idénticas durante desarrollo.
+
+---
+
+## Casos de uso v4 Phase A
+
+### Guardrails para equipos
+
+Protege el código base con reglas deterministas que el agente no puede ignorar.
+
+```yaml
+# config-team.yaml
+guardrails:
+  enabled: true
+  protected_files:
+    - ".env*"
+    - "*.pem"
+    - "deploy/**"
+    - "Dockerfile"
+    - "docker-compose*.yml"
+  blocked_commands:
+    - "git push"
+    - "docker rm"
+    - "kubectl delete"
+  max_files_modified: 10
+  max_lines_changed: 500
+  require_test_after_edit: true
+  code_rules:
+    - pattern: "eval\\("
+      message: "No usar eval() — riesgo de inyección de código"
+      severity: block
+    - pattern: "TODO|FIXME"
+      message: "Marcador temporal detectado — resolver antes de merge"
+      severity: warn
+  quality_gates:
+    - name: tests
+      command: "pytest tests/ -x --tb=short"
+      required: true
+      timeout: 120
+    - name: lint
+      command: "ruff check src/"
+      required: true
+      timeout: 30
+```
+
+```bash
+# El agente trabaja libremente pero dentro de los guardrails
+architect run "refactoriza el módulo de pagos" \
+  --mode yolo -c config-team.yaml
+# → Si intenta editar .env → bloqueado
+# → Si genera eval() → bloqueado
+# → Al completar → pytest + ruff obligatorios
+```
+
+### Skills como marketplace interno
+
+Crea skills reutilizables para tu equipo o comunidad.
+
+```bash
+# Crear skill local para patrones del proyecto
+architect skill create django-patterns
+# Editar .architect/skills/django-patterns/SKILL.md
+
+# Compartir via GitHub
+# Push .architect/skills/django-patterns/ al repo
+
+# Otro dev instala la skill
+architect skill install tu-org/repo/skills/django-patterns
+```
+
+**Ejemplo de SKILL.md para un framework:**
+
+```markdown
+---
+name: fastapi-patterns
+description: "Patrones FastAPI para este proyecto"
+globs: ["**/routes/*.py", "**/schemas/*.py", "**/deps.py"]
+---
+
+# Patrones FastAPI
+
+- Usar `Depends()` para inyección de dependencias
+- Schemas de request/response en schemas/ con Pydantic v2
+- Validación con `Field(...)`, nunca validación manual
+- Excepciones con `HTTPException` y status codes correctos
+- Endpoints async cuando usen I/O (db, http)
+```
+
+### Memoria procedural para proyectos largos
+
+En proyectos donde interactúas con el agente durante días, la memoria reduce correcciones repetidas.
+
+```yaml
+memory:
+  enabled: true
+  auto_detect_corrections: true
+```
+
+```bash
+# Sesión 1: el usuario corrige al agente
+architect run "añade endpoint de login"
+# → Agente genera código con npm
+# → Usuario: "No, usa pnpm, no npm"
+# → Corrección guardada en .architect/memory.md
+
+# Sesión 2: el agente recuerda
+architect run "añade endpoint de logout"
+# → El system prompt incluye: "Correccion: No, usa pnpm, no npm"
+# → Agente usa pnpm directamente
+```
+
+### Hooks de seguridad con pre-hooks
+
+Bloquea acciones antes de que ocurran.
+
+```bash
+#!/bin/bash
+# scripts/check-no-secrets.sh
+# Pre-hook que bloquea si se detectan secretos en archivos escritos
+if grep -qE "(sk-|AKIA|password\s*=\s*['\"])" "$ARCHITECT_FILE" 2>/dev/null; then
+    echo "Archivo contiene posibles secretos" >&2
+    exit 2   # BLOCK — el agente recibe "Bloqueado por hook"
+fi
+exit 0       # ALLOW
+```
+
+```yaml
+hooks:
+  pre_tool_use:
+    - name: no-secrets
+      command: "bash scripts/check-no-secrets.sh"
+      matcher: "write_file|edit_file"
+      file_patterns: ["*.py", "*.env", "*.yaml"]
+      timeout: 5
+```

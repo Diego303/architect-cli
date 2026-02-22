@@ -94,22 +94,88 @@ Valores `0` desactivan el mecanismo correspondiente:
 - `summarize_after_steps=0` → sin compresión con LLM.
 - `max_context_tokens=0` → sin ventana deslizante (peligroso para tareas largas).
 
-### `HookConfig` (v3-M4)
+### `HookItemConfig` (v4-A1)
 
 ```python
-class HookConfig(BaseModel):
-    name:          str           # identificador del hook (ej: "python-lint")
-    command:       str           # comando shell a ejecutar; soporta {file} placeholder
-    file_patterns: list[str]    # patrones glob (ej: ["*.py", "*.ts"])
-    timeout:       int = 15     # ge=1, le=300 — segundos máximos
-    enabled:       bool = True  # si False, el hook se ignora
+class HookItemConfig(BaseModel):
+    name:          str           = ""     # identificador del hook (ej: "python-lint")
+    command:       str                    # comando shell a ejecutar; soporta {file} placeholder
+    matcher:       str           = "*"   # regex/glob para filtrar tools
+    file_patterns: list[str]    = []     # patrones glob (ej: ["*.py", "*.ts"])
+    timeout:       int           = 10    # ge=1, le=300 — segundos máximos
+    async_:        bool          = False # alias="async" — ejecutar en background
+    enabled:       bool          = True  # si False, el hook se ignora
 ```
 
-### `HooksConfig` (v3-M4)
+Alias backward-compat: `HookConfig = HookItemConfig`.
+
+### `HooksConfig` (v4-A1)
 
 ```python
 class HooksConfig(BaseModel):
-    post_edit: list[HookConfig] = []  # hooks ejecutados después de editar un archivo
+    # 10 lifecycle events
+    pre_tool_use:      list[HookItemConfig] = []
+    post_tool_use:     list[HookItemConfig] = []
+    pre_llm_call:      list[HookItemConfig] = []
+    post_llm_call:     list[HookItemConfig] = []
+    session_start:     list[HookItemConfig] = []
+    session_end:       list[HookItemConfig] = []
+    on_error:          list[HookItemConfig] = []
+    agent_complete:    list[HookItemConfig] = []
+    budget_warning:    list[HookItemConfig] = []
+    context_compress:  list[HookItemConfig] = []
+    # Retrocompat v3-M4: se mapea internamente a post_tool_use
+    post_edit:         list[HookItemConfig] = []
+```
+
+### `GuardrailsConfig` (v4-A2)
+
+```python
+class GuardrailsConfig(BaseModel):
+    enabled:                bool              = False
+    protected_files:        list[str]         = []     # glob patterns
+    blocked_commands:       list[str]         = []     # regex patterns
+    max_files_modified:     int | None        = None
+    max_lines_changed:      int | None        = None
+    max_commands_executed:   int | None        = None
+    require_test_after_edit: bool             = False
+    quality_gates:          list[QualityGateConfig] = []
+    code_rules:             list[CodeRuleConfig]    = []
+```
+
+### `QualityGateConfig` (v4-A2)
+
+```python
+class QualityGateConfig(BaseModel):
+    name:     str              # nombre del gate (ej: "lint", "tests")
+    command:  str              # comando shell a ejecutar
+    required: bool = True      # si False, solo informativo
+    timeout:  int  = 60        # ge=1, le=600 — segundos
+```
+
+### `CodeRuleConfig` (v4-A2)
+
+```python
+class CodeRuleConfig(BaseModel):
+    pattern:  str                             # regex a buscar en código escrito
+    message:  str                             # mensaje para el agente
+    severity: Literal["warn", "block"] = "warn"
+```
+
+### `SkillsConfig` (v4-A3)
+
+```python
+class SkillsConfig(BaseModel):
+    auto_discover: bool = True   # descubrir skills en .architect/skills/
+    inject_by_glob: bool = True  # inyectar skills según archivos activos
+```
+
+### `MemoryConfig` (v4-A4)
+
+```python
+class MemoryConfig(BaseModel):
+    enabled:                  bool = False  # activar memoria procedural
+    auto_detect_corrections:  bool = True   # detectar correcciones automáticamente
 ```
 
 ### `EvaluationConfig` (F12)
@@ -177,7 +243,10 @@ class AppConfig(BaseModel):
     commands:   CommandsConfig   = CommandsConfig()   # F13
     costs:      CostsConfig      = CostsConfig()      # F14
     llm_cache:  LLMCacheConfig   = LLMCacheConfig()   # F14
-    hooks:      HooksConfig      = HooksConfig()      # v3-M4
+    hooks:      HooksConfig      = HooksConfig()      # v4-A1 (retrocompat v3-M4)
+    guardrails: GuardrailsConfig = GuardrailsConfig() # v4-A2
+    skills:     SkillsConfig     = SkillsConfig()     # v4-A3
+    memory:     MemoryConfig     = MemoryConfig()     # v4-A4
 ```
 
 ---
@@ -410,22 +479,163 @@ class BudgetExceededError(Exception):
 
 ---
 
-## Post-Edit Hooks (`core/hooks.py`) -- v3-M4
+## Hooks del Lifecycle (`core/hooks.py`) — v4-A1
 
-### `HookRunResult` (dataclass, v3-M4)
+### `HookEvent` (enum)
 
-Resultado de la ejecución de un hook post-edit individual.
+```python
+class HookEvent(Enum):
+    PRE_TOOL_USE      = "pre_tool_use"
+    POST_TOOL_USE     = "post_tool_use"
+    PRE_LLM_CALL      = "pre_llm_call"
+    POST_LLM_CALL     = "post_llm_call"
+    SESSION_START     = "session_start"
+    SESSION_END       = "session_end"
+    ON_ERROR          = "on_error"
+    BUDGET_WARNING    = "budget_warning"
+    CONTEXT_COMPRESS  = "context_compress"
+    AGENT_COMPLETE    = "agent_complete"
+```
+
+### `HookDecision` (enum)
+
+```python
+class HookDecision(Enum):
+    ALLOW  = "allow"    # Permitir la acción
+    BLOCK  = "block"    # Bloquear la acción (solo pre-hooks)
+    MODIFY = "modify"   # Modificar input y permitir
+```
+
+### `HookResult` (dataclass)
+
+```python
+@dataclass
+class HookResult:
+    decision:           HookDecision = HookDecision.ALLOW
+    reason:             str | None = None     # razón de block/error
+    additional_context: str | None = None     # contexto extra para el LLM
+    updated_input:      dict[str, Any] | None = None  # input modificado (MODIFY)
+    duration_ms:        float = 0.0
+```
+
+### `HooksRegistry`
+
+```python
+class HooksRegistry:
+    hooks: dict[HookEvent, list[HookConfig]]
+
+    def get_hooks(self, event: HookEvent) -> list[HookConfig]: ...
+    def has_hooks(self) -> bool: ...
+```
+
+### `HookExecutor`
+
+```python
+class HookExecutor:
+    def __init__(self, registry: HooksRegistry, workspace_root: str): ...
+    def execute_hook(self, hook, event, context, stdin_data) -> HookResult: ...
+    def run_event(self, event, context, stdin_data) -> list[HookResult]: ...
+    def run_post_edit(self, tool_name, args) -> str | None: ...  # backward-compat v3
+```
+
+**Exit code protocol**: 0=ALLOW, 2=BLOCK, otro=Error (warning, no rompe loop).
+**Env vars**: `ARCHITECT_EVENT`, `ARCHITECT_WORKSPACE`, `ARCHITECT_TOOL`, `ARCHITECT_FILE`.
+
+### `HookRunResult` (legacy, v3-M4)
 
 ```python
 @dataclass
 class HookRunResult:
-    hook_name:  str    # nombre del hook (ej: "python-lint")
-    success:    bool   # True si exit_code == 0
-    output:     str    # stdout + stderr combinados (truncado a 1000 chars)
-    exit_code:  int    # código de salida del proceso
+    hook_name:  str
+    success:    bool
+    output:     str    # truncado a 1000 chars
+    exit_code:  int
 ```
 
-`PostEditHooks` ejecuta los hooks configurados en `HooksConfig.post_edit` despues de cada operacion de edicion (`edit_file`, `write_file`, `apply_patch`). Los resultados se concatenan y se devuelven al LLM como parte del tool result para que pueda auto-corregir errores de lint o typecheck.
+`PostEditHooks` (legacy) sigue disponible para retrocompatibilidad.
+
+---
+
+## GuardrailsEngine (`core/guardrails.py`) — v4-A2
+
+Motor de seguridad determinista evaluado ANTES que los hooks.
+
+```python
+class GuardrailsEngine:
+    def __init__(self, config: GuardrailsConfig, workspace_root: str): ...
+
+    def check_file_access(self, file_path: str, action: str) -> tuple[bool, str]: ...
+    def check_command(self, command: str) -> tuple[bool, str]: ...
+    def check_edit_limits(self, file_path: str, lines_added: int, lines_removed: int) -> tuple[bool, str]: ...
+    def check_code_rules(self, content: str, file_path: str) -> list[tuple[str, str]]: ...
+    def should_force_test(self) -> bool: ...
+    def run_quality_gates(self) -> list[dict]: ...
+```
+
+Tracking interno: `_files_modified`, `_lines_changed`, `_commands_executed`, `_edits_since_last_test`.
+
+---
+
+## Skills (`skills/loader.py`) — v4-A3
+
+### `SkillInfo` (dataclass)
+
+```python
+@dataclass
+class SkillInfo:
+    name:        str
+    description: str = ""
+    globs:       list[str] = field(default_factory=list)
+    content:     str = ""
+    source:      str = ""    # "local" | "installed" | "project"
+```
+
+### `SkillsLoader`
+
+```python
+class SkillsLoader:
+    def __init__(self, workspace_root: str): ...
+    def load_project_context(self) -> str | None: ...       # .architect.md / AGENTS.md / CLAUDE.md
+    def discover_skills(self) -> list[SkillInfo]: ...        # .architect/skills/ + installed-skills/
+    def get_relevant_skills(self, file_paths: list[str]) -> list[SkillInfo]: ...
+    def build_system_context(self, active_files: list[str] | None) -> str: ...
+```
+
+### `SkillInstaller`
+
+```python
+class SkillInstaller:
+    def __init__(self, workspace_root: str): ...
+    def install_from_github(self, repo_spec: str) -> bool: ...   # sparse checkout
+    def create_local(self, name: str) -> Path: ...               # plantilla SKILL.md
+    def list_installed(self) -> list[dict[str, str]]: ...        # {name, source, path}
+    def uninstall(self, name: str) -> bool: ...
+```
+
+---
+
+## Memoria Procedural (`skills/memory.py`) — v4-A4
+
+```python
+class ProceduralMemory:
+    CORRECTION_PATTERNS = [
+        (r"no[,.]?\s+(usa|utiliza|haz|pon|cambia|es)\b", "direct_correction"),
+        (r"(eso no|eso está mal|no es correcto|está mal)", "negation"),
+        (r"(en realidad|realmente|de hecho)\b", "clarification"),
+        (r"(debería ser|el correcto es|el comando es)\b", "should_be"),
+        (r"(no funciona así|así no)\b", "wrong_approach"),
+        (r"(siempre|nunca)\s+(usa|hagas|pongas)\b", "absolute_rule"),
+    ]
+
+    def __init__(self, workspace_root: str): ...
+    def detect_correction(self, user_msg: str, prev_agent_action: str | None) -> str | None: ...
+    def add_correction(self, correction: str) -> None: ...    # dedup + persist
+    def add_pattern(self, pattern: str) -> None: ...
+    def get_context(self) -> str: ...                          # para inyectar en system prompt
+    def analyze_session_learnings(self, conversation: list[dict]) -> list[str]: ...
+```
+
+Persiste en `.architect/memory.md` con formato: `- [YYYY-MM-DD] Correccion: {text}`.
 
 ---
 
@@ -645,9 +855,16 @@ Exception
 │   # Step del agente excedió el tiempo máximo configurado
 │   # .seconds: int — tiempo en segundos que se superó
 │
-└── BudgetExceededError             costs/tracker.py
-    # Coste total de la sesión superó el budget_usd configurado
-    # Lanzada por CostTracker.record() → capturada por AgentLoop → state.status="partial"
+├── BudgetExceededError             costs/tracker.py
+│   # Coste total de la sesión superó el budget_usd configurado
+│   # Lanzada por CostTracker.record() → capturada por AgentLoop → state.status="partial"
+│
+├── GuardrailViolation              core/guardrails.py       # v4-A2
+│   # Violación de guardrail determinista (file access, command block, edit limits)
+│   # Capturada por ExecutionEngine → ToolResult(success=False)
+│
+└── BlockedCommandError             tools/commands.py
+    # Comando en la blocklist estática (siempre bloqueado)
 ```
 
 Estas excepciones son para señalización interna — la mayoría se captura en `ExecutionEngine` o en `AgentLoop` y se convierte en un `ToolResult(success=False)` o en un cambio de status del agente, respectivamente. **Ninguna debería propagarse hasta el usuario final.**

@@ -8,7 +8,7 @@ valores por defecto y serialización.
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class LLMConfig(BaseModel):
@@ -44,31 +44,95 @@ class AgentConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class HookConfig(BaseModel):
-    """Configuración de un hook post-edit individual (v3-M4).
+class HookItemConfig(BaseModel):
+    """Configuración de un hook individual (v4-A1).
 
-    Un hook es un comando que se ejecuta automáticamente cuando el agente
-    edita un archivo que coincide con file_patterns. El resultado se devuelve
-    al LLM para que pueda auto-corregir errores de lint/test.
+    Un hook es un comando shell que se ejecuta en puntos del lifecycle del agente.
+    Recibe contexto vía env vars (ARCHITECT_EVENT, ARCHITECT_TOOL_NAME, etc.) y stdin JSON.
+
+    Protocolo:
+    - Exit 0 = ALLOW (JSON en stdout para contexto adicional o modificación de input)
+    - Exit 2 = BLOCK (stderr = razón del bloqueo, solo para pre-hooks)
+    - Otro   = Error (se logea warning, no bloquea)
     """
 
-    name: str = Field(description="Nombre identificador del hook (ej: 'python-lint')")
-    command: str = Field(description="Comando a ejecutar (shell). Recibe ARCHITECT_EDITED_FILE como env var.")
-    file_patterns: list[str] = Field(
-        description="Patrones glob de archivos que activan el hook (ej: ['*.py', '*.ts'])"
+    name: str = Field(default="", description="Nombre descriptivo del hook")
+    command: str = Field(description="Comando shell a ejecutar")
+    matcher: str = Field(
+        default="*",
+        description="Regex/glob del tool name para filtrar (solo para tool hooks). '*' = todos.",
     )
-    timeout: int = Field(default=15, ge=1, le=300, description="Timeout del comando en segundos")
+    file_patterns: list[str] = Field(
+        default_factory=list,
+        description="Patrones glob de archivos que activan el hook (ej: ['*.py', '*.ts'])",
+    )
+    timeout: int = Field(default=10, ge=1, le=300, description="Timeout en segundos")
+    async_: bool = Field(
+        default=False,
+        alias="async",
+        description="Si True, ejecutar en background sin bloquear",
+    )
     enabled: bool = Field(default=True, description="Si False, el hook se ignora")
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+
+# Backward-compat alias for v3-M4 code that references HookConfig
+HookConfig = HookItemConfig
 
 
 class HooksConfig(BaseModel):
-    """Configuración de hooks post-edit (v3-M4)."""
+    """Configuración del sistema de hooks (v4-A1).
 
-    post_edit: list[HookConfig] = Field(
+    Organiza hooks por evento del lifecycle. Cada evento tiene una lista
+    de hooks que se ejecutan en orden. Los hooks de post_edit son un alias
+    de post_tool_use para backward compatibility con v3-M4.
+    """
+
+    pre_tool_use: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados automáticamente después de editar un archivo",
+        description="Hooks ejecutados ANTES de cada tool call",
+    )
+    post_tool_use: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados DESPUÉS de cada tool call",
+    )
+    pre_llm_call: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados ANTES de cada llamada al LLM",
+    )
+    post_llm_call: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados DESPUÉS de cada llamada al LLM",
+    )
+    session_start: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados al iniciar sesión",
+    )
+    session_end: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados al terminar sesión",
+    )
+    on_error: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados cuando un tool falla",
+    )
+    agent_complete: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados cuando el agente declara completado",
+    )
+    budget_warning: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados cuando se supera % del presupuesto",
+    )
+    context_compress: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="Hooks ejecutados antes de comprimir contexto",
+    )
+    # Backward compat: post_edit maps to post_tool_use with edit-tool matcher
+    post_edit: list[HookItemConfig] = Field(
+        default_factory=list,
+        description="(Compat v3) Hooks post-edit. Se añaden a post_tool_use con matcher 'write_file|edit_file|apply_patch'.",
     )
 
     model_config = {"extra": "forbid"}
@@ -220,6 +284,14 @@ class EvaluationConfig(BaseModel):
 
     mode: Literal["off", "basic", "full"] = "off"
 
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _coerce_yaml_bool(cls, v: object) -> object:
+        """YAML 1.1 parsea `off` sin comillas como False (bool). Lo convertimos a 'off'."""
+        if v is False:
+            return "off"
+        return v
+
     max_retries: int = Field(
         default=2,
         ge=1,
@@ -363,6 +435,118 @@ class CommandsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class QualityGateConfig(BaseModel):
+    """Configuración de un quality gate individual (v4-A2).
+
+    Los quality gates se ejecutan cuando el agente declara completado.
+    Si un gate requerido falla, el agente recibe feedback y continúa.
+    """
+
+    name: str = Field(description="Nombre del quality gate (ej: 'lint', 'tests')")
+    command: str = Field(description="Comando shell a ejecutar")
+    required: bool = Field(
+        default=True,
+        description="Si True, el agente no puede terminar sin pasarlo",
+    )
+    timeout: int = Field(default=60, ge=1, le=600, description="Timeout en segundos")
+
+    model_config = {"extra": "forbid"}
+
+
+class CodeRuleConfig(BaseModel):
+    """Configuración de una regla de código (v4-A2).
+
+    Las code rules escanean el contenido escrito por el agente
+    con regex para detectar patrones prohibidos.
+    """
+
+    pattern: str = Field(description="Regex a buscar en código escrito")
+    message: str = Field(description="Mensaje al LLM cuando se detecta el patrón")
+    severity: Literal["warn", "block"] = Field(
+        default="warn",
+        description="'warn' adjunta aviso, 'block' impide el write",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class GuardrailsConfig(BaseModel):
+    """Configuración de guardrails de seguridad (v4-A2).
+
+    Los guardrails son reglas DETERMINISTAS que se evalúan ANTES que los hooks
+    y no pueden ser desactivados por el LLM. Son la capa de seguridad base.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, activa el sistema de guardrails",
+    )
+    protected_files: list[str] = Field(
+        default_factory=list,
+        description="Patrones glob de archivos protegidos (ej: ['.env', '*.pem', '*.key'])",
+    )
+    blocked_commands: list[str] = Field(
+        default_factory=list,
+        description="Patrones regex de comandos bloqueados (ej: ['rm\\s+-[rf]+\\s+/'])",
+    )
+    max_files_modified: int | None = Field(
+        default=None,
+        description="Máximo de archivos que el agente puede modificar. None = sin límite.",
+    )
+    max_lines_changed: int | None = Field(
+        default=None,
+        description="Máximo de líneas cambiadas. None = sin límite.",
+    )
+    max_commands_executed: int | None = Field(
+        default=None,
+        description="Máximo de comandos que el agente puede ejecutar. None = sin límite.",
+    )
+    require_test_after_edit: bool = Field(
+        default=False,
+        description="Si True, fuerza al agente a ejecutar tests después de editar.",
+    )
+    quality_gates: list[QualityGateConfig] = Field(
+        default_factory=list,
+        description="Quality gates ejecutados cuando el agente declara completado.",
+    )
+    code_rules: list[CodeRuleConfig] = Field(
+        default_factory=list,
+        description="Reglas regex que escanean contenido escrito por el agente.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class MemoryConfig(BaseModel):
+    """Configuración de memoria procedural (v4-A4)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, activa la memoria procedural.",
+    )
+    auto_detect_corrections: bool = Field(
+        default=True,
+        description="Si True, detecta correcciones automáticamente en mensajes del usuario.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class SkillsConfig(BaseModel):
+    """Configuración del ecosistema de skills (v4-A3)."""
+
+    auto_discover: bool = Field(
+        default=True,
+        description="Si True, descubre skills automáticamente en .architect/skills/",
+    )
+    inject_by_glob: bool = Field(
+        default=True,
+        description="Si True, inyecta skills relevantes según los globs de archivos activos.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class AppConfig(BaseModel):
     """Configuración completa de la aplicación.
 
@@ -381,6 +565,9 @@ class AppConfig(BaseModel):
     commands: CommandsConfig = Field(default_factory=CommandsConfig)
     costs: CostsConfig = Field(default_factory=CostsConfig)
     llm_cache: LLMCacheConfig = Field(default_factory=LLMCacheConfig)
-    hooks: HooksConfig = Field(default_factory=HooksConfig)  # v3-M4
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
+    guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)  # v4-A2
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)  # v4-A4
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)  # v4-A3
 
     model_config = {"extra": "forbid"}

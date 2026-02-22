@@ -7,7 +7,7 @@ con el sistema local de tools.
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from ..tools.base import BaseTool, ToolResult
 from .client import MCPClient, MCPConnectionError, MCPToolCallError
@@ -75,15 +75,31 @@ class MCPToolAdapter(BaseTool):
         properties = self._raw_schema.get("properties", {})
         required_fields = set(self._raw_schema.get("required", []))
 
+        # Nombres reservados de Pydantic BaseModel que no se pueden usar directamente
+        _RESERVED = frozenset(dir(BaseModel))
+
         # Construir campos para Pydantic
         fields = {}
         for field_name, field_schema in properties.items():
             # Determinar tipo Python desde JSON Schema type
             field_type = self._json_schema_type_to_python(field_schema)
 
+            # Si el campo colisiona con atributos de BaseModel (ej. "schema"),
+            # usar alias para evitar el UserWarning de Pydantic.
+            alias = None
+            python_name = field_name
+            if field_name in _RESERVED:
+                python_name = f"{field_name}_"
+                alias = field_name
+
             # Si el campo es requerido, usar el tipo directo
             # Si es opcional, usar tipo | None con default None
-            if field_name in required_fields:
+            if alias:
+                if field_name in required_fields:
+                    fields[python_name] = (field_type, Field(..., alias=alias))
+                else:
+                    fields[python_name] = (field_type | None, Field(default=None, alias=alias))
+            elif field_name in required_fields:
                 fields[field_name] = (field_type, ...)
             else:
                 fields[field_name] = (field_type | None, None)
@@ -91,7 +107,7 @@ class MCPToolAdapter(BaseTool):
         # Crear modelo dinámico
         model = create_model(
             f"{self.name}_Args",
-            __config__=ConfigDict(extra="forbid"),
+            __config__=ConfigDict(extra="forbid", populate_by_name=True),
             **fields,
         )
 

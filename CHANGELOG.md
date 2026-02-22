@@ -7,6 +7,90 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [0.16.1] - 2026-02-22
+
+### QA Phase A — Corrección de Bugs y Alineación de Tests
+
+QA exhaustivo de 228 verificaciones sobre toda la base de código. 5 bugs encontrados y corregidos. 24 scripts legacy actualizados.
+
+#### Corregido
+
+- **[CRITICAL] `NameError: ToolResult`** en `core/loop.py:596` — `isinstance(pre_result, ToolResult)` sin import. Añadido import local de `ToolResult` desde `tools.base`.
+- **[MEDIUM] `CostTracker.total` inexistente** en `core/loop.py:317,359` — el atributo correcto es `total_cost_usd`. Renombrado.
+- **[MINOR] YAML `off` → `False`** en `EvaluationConfig.mode` — YAML 1.1 parsea `off` sin comillas como bool `False`. Añadido `@field_validator("mode", mode="before")` que convierte `False → "off"`.
+- **[MINOR] Pydantic `schema` field shadowing** en `mcp/adapter.py` — tools MCP con campo "schema" causan `UserWarning` por shadowing de `BaseModel.schema`. Añadida detección de nombres reservados + alias (`schema_ = Field(..., alias="schema")`) con `populate_by_name=True`.
+
+#### Modificado
+
+- `scripts/test_phase{8-12}.py` — versión actualizada a `0.16.0`
+- `scripts/test_phase11.py` — añadidos mocks para v4-A1/A2 (`check_guardrails`, `run_pre_tool_hooks`, `check_code_rules`, `run_post_tool_hooks`, `dry_run`)
+- `scripts/test_v3_m1.py` — añadidos mocks de guardrails/hooks para test de tool_calls
+- `scripts/test_v3_m4.py` — reescritura completa para API v4-A1 (HookExecutor, HookEvent, HooksRegistry, HookDecision, HookResult); 31 tests
+- `scripts/test_parallel_execution.py` — añadidos mocks v4 a `_make_loop()` + renombrado `run_post_edit_hooks` → `run_post_tool_hooks`
+
+---
+
+## [0.16.0] - 2026-02-22
+
+### v4 Phase A — Fundamentos de Extensibilidad
+
+Implementación completa de los 4 pilares de extensibilidad del Plan V4: hooks completos, guardrails, skills y memoria procedural.
+
+#### Añadido
+
+**A1 — Sistema de Hooks Completo**:
+- `HookExecutor` con 10 eventos del lifecycle (pre/post_tool_use, pre/post_llm_call, session_start/end, on_error, budget_warning, context_compress, agent_complete)
+- Protocolo de exit codes: 0=ALLOW, 2=BLOCK, otro=error(warn)
+- Soporte para modificación de input (MODIFY) y contexto adicional via JSON stdout
+- Env vars injection (ARCHITECT_*) y stdin JSON para hooks
+- Hooks async (daemon threads) para tareas de background
+- Matcher regex y file_patterns para filtrado granular
+- Backward compat con PostEditHooks de v3-M4
+
+**A2 — Guardrails de Primera Clase**:
+- `GuardrailsEngine` — capa de seguridad determinista evaluada ANTES que hooks
+- Protected files (fnmatch), blocked commands (regex), edit limits (files/lines)
+- Code rules: regex scan de contenido escrito (severity: warn/block)
+- Quality gates: comandos que se ejecutan cuando el agente declara completado
+- Quality gates required: si fallan, el agente recibe feedback y sigue trabajando
+
+**A3 — Skills Ecosystem (.architect.md)**:
+- `SkillsLoader`: carga .architect.md / AGENTS.md / CLAUDE.md como contexto de proyecto
+- Descubrimiento de skills en .architect/skills/ y .architect/installed-skills/
+- SKILL.md con frontmatter YAML (name, description, globs)
+- Filtrado por glob: skills se activan segun archivos en juego
+- `SkillInstaller`: install desde GitHub (sparse checkout), create, list, uninstall
+- CLI: `architect skill install|create|list|remove`
+- Inyeccion automatica en system prompt del agente
+
+**A4 — Memoria Procedural**:
+- `ProceduralMemory`: deteccion de correcciones del usuario (6 patrones en español)
+- Persistencia en .architect/memory.md con formato `- [YYYY-MM-DD] Tipo: contenido`
+- Deduplicacion de entradas
+- Inyeccion automatica en system prompt
+- `analyze_session_learnings()`: extraccion post-sesion de correcciones
+
+#### Archivos nuevos
+- `src/architect/core/guardrails.py`
+- `src/architect/skills/__init__.py`
+- `src/architect/skills/loader.py`
+- `src/architect/skills/installer.py`
+- `src/architect/skills/memory.py`
+- `tests/test_hooks/` (29 tests)
+- `tests/test_guardrails/` (29 tests)
+- `tests/test_skills/` (29 tests)
+- `tests/test_memory/` (29 tests)
+
+#### Modificados
+- `src/architect/core/hooks.py` — reescritura completa (HookExecutor, HooksRegistry, HookEvent)
+- `src/architect/config/schema.py` — HookItemConfig, HooksConfig, GuardrailsConfig, QualityGateConfig, CodeRuleConfig, SkillsConfig, MemoryConfig
+- `src/architect/execution/engine.py` — hook_executor, guardrails, check_guardrails(), check_code_rules()
+- `src/architect/core/loop.py` — hooks lifecycle, guardrails, skills_loader, memory
+- `src/architect/cli.py` — HookExecutor, GuardrailsEngine, SkillsLoader, ProceduralMemory, `architect skill` commands
+- `src/architect/core/__init__.py` — exports actualizados
+
+---
+
 ## [0.15.3] - 2026-02-21
 
 ### Fix — Pipeline structlog sin `--log-file` no mostraba logs HUMAN

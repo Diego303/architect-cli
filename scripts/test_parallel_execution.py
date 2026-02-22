@@ -81,6 +81,10 @@ def _make_loop(confirm_mode="yolo", max_steps=20, parallel_tools=True,
     loop.engine = MagicMock()
     loop.engine.registry = MagicMock()
     loop.engine.dry_run = False
+    loop.engine.check_guardrails.return_value = None  # v4-A2: no bloquear
+    loop.engine.run_pre_tool_hooks.return_value = None  # v4-A1: no bloquear
+    loop.engine.check_code_rules.return_value = []  # v4-A2: sin violaciones
+    loop.engine.run_post_tool_hooks.return_value = None  # v4-A1: sin output extra
     loop.shutdown = None
     loop.step_timeout = 0
     loop.timeout = None
@@ -390,7 +394,7 @@ def test_post_edit_hooks():
     loop = _make_loop()
     tc = _make_tool_call("edit_file", {"path": "/a.py", "old_str": "x", "new_str": "y"})
     loop.engine.execute_tool_call.return_value = ToolResult(success=True, output="File edited")
-    loop.engine.run_post_edit_hooks.return_value = "[lint] OK - no errors"
+    loop.engine.run_post_tool_hooks.return_value = "[lint] OK - no errors"
 
     result = loop._execute_single_tool(tc, step=0)
     if "File edited" in result.result.output and "[lint] OK" in result.result.output:
@@ -402,7 +406,7 @@ def test_post_edit_hooks():
     loop = _make_loop()
     tc = _make_tool_call("edit_file", {"path": "/a.py"})
     loop.engine.execute_tool_call.return_value = ToolResult(success=False, output="", error="File not found")
-    loop.engine.run_post_edit_hooks.return_value = "[lint] some output"
+    loop.engine.run_post_tool_hooks.return_value = "[lint] some output"
 
     result = loop._execute_single_tool(tc, step=0)
     if not result.result.success and "[lint]" not in (result.result.output or ""):
@@ -414,7 +418,7 @@ def test_post_edit_hooks():
     loop = _make_loop()
     tc = _make_tool_call("read_file")
     loop.engine.execute_tool_call.return_value = ToolResult(success=True, output="content here")
-    loop.engine.run_post_edit_hooks.return_value = None
+    loop.engine.run_post_tool_hooks.return_value = None
 
     result = loop._execute_single_tool(tc, step=0)
     if result.result.output == "content here":
@@ -426,7 +430,7 @@ def test_post_edit_hooks():
     loop = _make_loop()
     tc = _make_tool_call("write_file")
     loop.engine.execute_tool_call.return_value = ToolResult(success=True, output="Written")
-    loop.engine.run_post_edit_hooks.return_value = ""
+    loop.engine.run_post_tool_hooks.return_value = ""
 
     result = loop._execute_single_tool(tc, step=0)
     if result.result.output == "Written":
