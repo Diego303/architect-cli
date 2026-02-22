@@ -18,6 +18,12 @@
 | [`logging.md`](logging.md) | **Sistema de logging**: 3 pipelines, nivel HUMAN, iconos, HumanFormatter, structlog |
 | [`ai-guide.md`](ai-guide.md) | Guía para IA: invariantes críticos, patrones, dónde añadir cosas, trampas |
 | [`testing.md`](testing.md) | Mapa de tests: ~597 tests en 25 archivos, cobertura por módulo |
+| [`containers.md`](containers.md) | **Contenedores**: Containerfiles (root, non-root, OpenShift), Kubernetes Deployments, Docker, configuración para CI/CD |
+| [`casos-de-uso.md`](casos-de-uso.md) | **Casos de uso**: integración en desarrollo diario, CI/CD, QA, DevOps, AIOps, MLOps, arquitecturas MCP, pipelines multi-agente |
+| [`fast-usage.md`](fast-usage.md) | **Guía rápida**: instalación, configuración mínima, comandos más útiles y referencia de flags |
+| [`mcp-server.md`](mcp-server.md) | **MCP Server**: cómo crear un servidor MCP que exponga architect como herramienta remota (server.py + tools.py completos) |
+| [`good-practices.md`](good-practices.md) | **Buenas prácticas**: prompts, agentes, edición, costes, hooks, auto-evaluación, CI/CD, errores comunes |
+| [`security.md`](security.md) | **Modelo de seguridad**: 19 capas defensivas, modelo de amenazas, path traversal, command security, prompt injection, hardening |
 
 ---
 
