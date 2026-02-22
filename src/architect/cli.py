@@ -41,7 +41,7 @@ EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
 # Versión actual
-_VERSION = "0.16.1"
+_VERSION = "0.16.2"
 
 
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
@@ -412,6 +412,17 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
             available = list_available_agents(config.agents)
             click.echo(f"Agentes disponibles: {', '.join(available)}", err=True)
             sys.exit(EXIT_FAILED)
+
+        # Inyectar MCP tools en allowed_tools del agente para que el LLM las vea.
+        # Sin esto, los agentes con allowed_tools explícito (como build) no expondrían
+        # las MCP tools al LLM aunque estén registradas en el ToolRegistry.
+        if agent_config.allowed_tools:
+            mcp_tool_names = [
+                t.name for t in registry.list_all()
+                if t.name.startswith("mcp_")
+            ]
+            if mcp_tool_names:
+                agent_config.allowed_tools.extend(mcp_tool_names)
 
         # v4-A2: Crear guardrails engine si configurado
         guardrails_engine: GuardrailsEngine | None = None

@@ -66,7 +66,7 @@ architect run "refactoriza main.py" -a build --mode yolo
 
 **Stack**: Python 3.12+, Click, Pydantic v2, LiteLLM, httpx, structlog, tenacity.
 
-**Versión actual**: 0.16.1
+**Versión actual**: 0.16.2
 
 ---
 
@@ -85,3 +85,4 @@ architect run "refactoriza main.py" -a build --mode yolo
 | v0.15.3 | Fix pipeline structlog: `wrap_for_formatter` siempre activo, human logging funciona sin `--log-file` |
 | v0.16.0 | **v4 Phase A**: `HookExecutor` (10 lifecycle events, exit code protocol), `GuardrailsEngine` (protected files, blocked commands, edit limits, quality gates), `SkillsLoader` + `SkillInstaller` (.architect.md, SKILL.md, glob activation), `ProceduralMemory` (correction detection, persistence) |
 | v0.16.1 | QA Phase A: 5 bug fixes, 116 nuevos tests (713 total), scripts actualizados |
+| v0.16.2 | QA2: streaming costs fix, yolo mode fix, timeout separation, MCP tools auto-injection, defensive get_schemas |

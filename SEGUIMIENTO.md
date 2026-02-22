@@ -8,7 +8,7 @@ Este documento registra el progreso de implementación del proyecto architect
 
 - **Inicio**: 2026-02-18
 - **Fase Actual**: v4 Phase A Completada — Fundamentos de Extensibilidad
-- **Estado**: ✅ v0.16.1 — Phase A validada con QA, 5 bugs corregidos
+- **Estado**: ✅ v0.16.2 — Phase A validada con QA, 5+5 bugs corregidos (2 rondas QA)
 
 ---
 

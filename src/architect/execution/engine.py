@@ -417,7 +417,12 @@ class ExecutionEngine:
         |---------------|------|-------------------|-------------|
         | safe          | No   | No                | Sí          |
         | dev           | No   | Sí                | Sí          |
-        | dangerous     | Sí   | Sí                | Sí          |
+        | dangerous     | No   | Sí                | Sí          |
+
+        En modo yolo NUNCA se pide confirmación. La seguridad está garantizada
+        por la blocklist (Capa 1) que impide comandos realmente peligrosos.
+        Los comandos "dangerous" son simplemente comandos no reconocidos en
+        las listas safe/dev, no necesariamente peligrosos.
 
         Args:
             command: El comando que se va a ejecutar
@@ -429,7 +434,7 @@ class ExecutionEngine:
         classification = tool.classify_sensitivity(command)
         match self.policy.mode:
             case "yolo":
-                return classification == "dangerous"
+                return False
             case "confirm-sensitive":
                 return classification in ("dev", "dangerous")
             case "confirm-all":

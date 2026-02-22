@@ -350,6 +350,9 @@ class LLMAdapter:
                 "messages": messages,
                 "timeout": self.config.timeout,
                 "stream": True,
+                # Solicitar usage en streaming (OpenAI-compatible APIs)
+                # Sin esto, usage no se devuelve y el cost tracker no registra datos
+                "stream_options": {"include_usage": True},
             }
 
             # Añadir tools si están disponibles
@@ -432,6 +435,17 @@ class LLMAdapter:
                             tc_dict["function"]["arguments"]
                         ),
                     )
+                )
+
+            # Fallback: si el provider no devolvió usage en streaming,
+            # estimar tokens usando litellm.token_counter para que el
+            # cost tracker pueda registrar datos aproximados.
+            if usage_info is None or (
+                usage_info.get("prompt_tokens", 0) == 0
+                and usage_info.get("completion_tokens", 0) == 0
+            ):
+                usage_info = self._estimate_streaming_usage(
+                    messages, content, collected_tool_calls
                 )
 
             response = LLMResponse(
@@ -604,6 +618,57 @@ class LLMAdapter:
             return result
 
         return []
+
+    def _estimate_streaming_usage(
+        self,
+        messages: list[dict[str, Any]],
+        content: str | None,
+        tool_calls_raw: dict[int, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Estima usage cuando el provider no lo devuelve en streaming.
+
+        Usa litellm.token_counter para contar tokens de los mensajes de input
+        y estima output tokens a partir del contenido generado (~4 chars/token).
+
+        Args:
+            messages: Mensajes enviados al LLM (input)
+            content: Contenido de texto generado (output)
+            tool_calls_raw: Tool calls acumulados en streaming
+
+        Returns:
+            Dict con estimaciones de prompt_tokens y completion_tokens
+        """
+        try:
+            prompt_tokens = litellm.token_counter(
+                model=self.config.model,
+                messages=messages,
+            )
+        except Exception:
+            # Fallback: estimar ~4 chars/token
+            total_chars = sum(
+                len(str(m.get("content", ""))) for m in messages
+            )
+            prompt_tokens = total_chars // 4
+
+        # Estimar output tokens
+        output_text = content or ""
+        for tc_dict in tool_calls_raw.values():
+            output_text += tc_dict.get("function", {}).get("name", "")
+            output_text += tc_dict.get("function", {}).get("arguments", "")
+        completion_tokens = max(1, len(output_text) // 4)
+
+        self.log.debug(
+            "llm.streaming_usage_estimated",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "cache_read_input_tokens": 0,
+        }
 
     def _parse_arguments(self, arguments: Any) -> dict[str, Any]:
         """Parsea los argumentos de un tool call.

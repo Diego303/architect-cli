@@ -135,9 +135,11 @@ La clasificación determina si se pide confirmación según el modo:
 |---------------|--------|---------------------|---------------|
 | `safe` | No | No | Si |
 | `dev` | No | Si | Si |
-| `dangerous` | **Si** | Si | Si |
+| `dangerous` | **No** | Si | Si |
 
-Incluso en modo `yolo`, los comandos `dangerous` requieren confirmación. La única forma de saltarse confirmación para dangerous es que no haya TTY (headless), lo cual lanza `NoTTYError`.
+En modo `yolo`, **nunca** se pide confirmación — ni siquiera para comandos `dangerous`. La seguridad está garantizada por la blocklist (Capa 2.1), que impide los comandos realmente peligrosos (`rm -rf /`, `sudo`, etc.) independientemente del modo. Los comandos `dangerous` son simplemente "no reconocidos" en las listas safe/dev, no necesariamente peligrosos.
+
+Para entornos donde se quiere rechazar comandos `dangerous` sin confirmación, usar `allowed_only: true` (ver más abajo).
 
 ### Capa 2.3 — Timeouts y truncado de output
 
@@ -198,7 +200,7 @@ O via CLI: `--no-commands`. En este caso, la tool ni siquiera está disponible p
 |------|---------------|-----------------|
 | `confirm-all` | Confirma **cada** tool call | Producción, primera vez |
 | `confirm-sensitive` | Solo confirma tools con `sensitive=True` | Default, desarrollo normal |
-| `yolo` | Sin confirmación (excepto `dangerous` commands) | Tareas de confianza, CI |
+| `yolo` | Sin confirmación para ninguna tool ni comando | Tareas de confianza, CI |
 
 ### Tools sensibles (built-in)
 
@@ -518,13 +520,13 @@ Cada agente tiene restricciones de tools definidas en su configuración:
 | Output adversarial de comandos | Truncado de output (`max_output_lines`); comandos peligrosos bloqueados/clasificados; timeout |
 | Servidor MCP malicioso | Token auth; timeout HTTP; tools MCP marcadas como sensitive |
 | LLM intenta escapar workspace | `validate_path()` en TODAS las tools de filesystem |
-| LLM intenta ejecutar `sudo rm -rf /` | Blocklist hard (Capa 2.1) + clasificación dangerous + confirmación |
+| LLM intenta ejecutar `sudo rm -rf /` | Blocklist hard (Capa 2.1) — bloqueado antes de cualquier política de confirmación |
 
 ### Limitaciones conocidas
 
 - Architect **no** sanitiza el contenido de los archivos antes de enviarlo al LLM. Si un archivo contiene prompt injection, el LLM puede seguir las instrucciones falsas.
 - La defensa principal contra esto es el **pipeline de confirmación**: el usuario ve y confirma cada operación sensible antes de ejecutarla.
-- En modo `yolo`, la protección contra prompt injection se reduce a la blocklist y la clasificación de comandos.
+- En modo `yolo`, la protección contra prompt injection se reduce a la blocklist (Capa 2.1) y el modo `allowed_only` si está activado. Sin `allowed_only`, cualquier comando que pase la blocklist se ejecutará sin confirmación.
 
 ---
 
