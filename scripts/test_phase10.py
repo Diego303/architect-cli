@@ -743,7 +743,7 @@ test("Agente 'build' tiene tanto search tools como edit tools", test_build_agent
 
 
 # ---------------------------------------------------------------------------
-# 11. Versión 0.15.0
+# 11. Versión 0.16.1
 # ---------------------------------------------------------------------------
 
 print("\n── Prueba 11: Versión ──")
@@ -754,15 +754,15 @@ def test_version_consistency():
     import subprocess
 
     # __init__.py
-    assert architect.__version__ == "0.15.0", f"__version__ = {architect.__version__}"
+    assert architect.__version__ == "0.16.1", f"__version__ = {architect.__version__}"
 
     # pyproject.toml
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     content = pyproject.read_text()
-    assert 'version = "0.15.0"' in content, "pyproject.toml debe tener 0.15.0"
+    assert 'version = "0.16.1"' in content, "pyproject.toml debe tener 0.16.1"
 
 
-test("Versión 0.15.0 consistente en __init__.py y pyproject.toml", test_version_consistency)
+test("Versión 0.16.1 consistente en __init__.py y pyproject.toml", test_version_consistency)
 
 
 def test_cli_version():
@@ -773,10 +773,10 @@ def test_cli_version():
         capture_output=True,
         text=True,
     )
-    assert "0.15.0" in result.stdout or "0.15.0" in result.stderr
+    assert "0.16.1" in result.stdout or "0.16.1" in result.stderr
 
 
-test("CLI --version muestra 0.15.0", test_cli_version)
+test("CLI --version muestra 0.16.1", test_cli_version)
 
 
 # ---------------------------------------------------------------------------

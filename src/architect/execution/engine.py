@@ -5,6 +5,7 @@ El ExecutionEngine es el punto de paso obligatorio para toda ejecución
 de tools. Aplica validación, políticas de confirmación, dry-run y logging.
 
 v3-M4: Añadido soporte para PostEditHooks (auto-verificación post-edición).
+v4-A1: Integración con el sistema de hooks completo (pre/post tool hooks).
 """
 
 from typing import TYPE_CHECKING, Any
@@ -17,7 +18,8 @@ from ..tools.registry import ToolNotFoundError, ToolRegistry
 from .policies import ConfirmationPolicy, NoTTYError
 
 if TYPE_CHECKING:
-    from ..core.hooks import PostEditHooks
+    from ..core.guardrails import GuardrailsEngine
+    from ..core.hooks import HookExecutor
 
 logger = structlog.get_logger()
 
@@ -39,6 +41,7 @@ class ExecutionEngine:
     - Soporta dry-run (simulación sin efectos secundarios)
     - Aplica políticas de confirmación configurables
     - Logging estructurado de todas las operaciones
+    - Hooks pre/post tool integrados (v4-A1)
     """
 
     def __init__(
@@ -46,7 +49,8 @@ class ExecutionEngine:
         registry: ToolRegistry,
         config: AppConfig,
         confirm_mode: str | None = None,
-        hooks: "PostEditHooks | None" = None,
+        hook_executor: "HookExecutor | None" = None,
+        guardrails: "GuardrailsEngine | None" = None,
     ):
         """Inicializa el execution engine.
 
@@ -54,12 +58,14 @@ class ExecutionEngine:
             registry: ToolRegistry con las tools disponibles
             config: Configuración completa de la aplicación
             confirm_mode: Override del modo de confirmación (opcional)
-            hooks: PostEditHooks para auto-verificación post-edición (v3-M4)
+            hook_executor: HookExecutor para pre/post hooks (v4-A1)
+            guardrails: GuardrailsEngine para seguridad determinista (v4-A2)
         """
         self.registry = registry
         self.config = config
         self.dry_run = False
-        self.hooks = hooks  # v3-M4
+        self.hook_executor = hook_executor
+        self.guardrails = guardrails
 
         # Determinar modo de confirmación
         # Prioridad: argumento confirm_mode > config de agente > default
@@ -203,6 +209,183 @@ class ExecutionEngine:
                 error=f"Error inesperado en el execution engine: {e}",
             )
 
+    def check_guardrails(
+        self, tool_name: str, tool_input: dict[str, Any]
+    ) -> ToolResult | None:
+        """Verifica guardrails ANTES de ejecutar un tool (v4-A2).
+
+        Los guardrails se evalúan antes que los hooks de usuario.
+        Son la capa de seguridad determinista que el LLM no puede saltarse.
+
+        Args:
+            tool_name: Nombre del tool a ejecutar.
+            tool_input: Argumentos del tool.
+
+        Returns:
+            ToolResult con error si un guardrail bloqueó, None si todo OK.
+        """
+        if not self.guardrails:
+            return None
+
+        # Verificar archivos protegidos
+        if tool_name in ("write_file", "edit_file", "delete_file"):
+            file_path = tool_input.get("path", "")
+            allowed, reason = self.guardrails.check_file_access(file_path, tool_name)
+            if not allowed:
+                return ToolResult(success=False, output=f"Guardrail: {reason}")
+
+        # Verificar comandos bloqueados
+        if tool_name == "run_command":
+            command = tool_input.get("command", "")
+            allowed, reason = self.guardrails.check_command(command)
+            if not allowed:
+                return ToolResult(success=False, output=f"Guardrail: {reason}")
+            self.guardrails.record_command()
+
+        # Verificar límites de edición
+        if tool_name in ("write_file", "edit_file", "apply_patch"):
+            file_path = tool_input.get("path", "")
+            content = tool_input.get("content", "")
+            lines = content.count("\n") + 1 if content else 0
+            allowed, reason = self.guardrails.check_edit_limits(file_path, lines_added=lines)
+            if not allowed:
+                return ToolResult(success=False, output=f"Guardrail: {reason}")
+
+        return None
+
+    def check_code_rules(
+        self, tool_name: str, tool_input: dict[str, Any]
+    ) -> list[str]:
+        """Escanea contenido escrito contra code_rules DESPUÉS de ejecutar (v4-A2).
+
+        Args:
+            tool_name: Nombre del tool ejecutado.
+            tool_input: Argumentos del tool.
+
+        Returns:
+            Lista de mensajes de warning/block.
+        """
+        if not self.guardrails:
+            return []
+
+        if tool_name not in ("write_file", "edit_file"):
+            return []
+
+        content = tool_input.get("content", "") or tool_input.get("new_str", "")
+        if not content:
+            return []
+
+        file_path = tool_input.get("path", "")
+        violations = self.guardrails.check_code_rules(content, file_path)
+
+        messages: list[str] = []
+        for severity, msg in violations:
+            if severity == "block":
+                messages.append(f"BLOQUEADO por code rule: {msg}")
+            else:
+                messages.append(f"Aviso code rule: {msg}")
+
+        if tool_name in ("write_file", "edit_file"):
+            self.guardrails.record_edit()
+
+        return messages
+
+    def run_pre_tool_hooks(
+        self, tool_name: str, tool_input: dict[str, Any]
+    ) -> ToolResult | dict[str, Any] | None:
+        """Ejecuta pre-tool hooks (v4-A1).
+
+        Args:
+            tool_name: Nombre del tool a ejecutar.
+            tool_input: Argumentos originales del tool.
+
+        Returns:
+            - ToolResult si un hook bloqueó la acción (con blocked_by_hook info)
+            - dict con input actualizado si un hook lo modificó
+            - None si todos permiten la acción sin modificación
+        """
+        if not self.hook_executor or self.dry_run:
+            return None
+
+        from ..core.hooks import HookDecision, HookEvent
+
+        context: dict[str, Any] = {"tool_name": tool_name}
+        file_path = tool_input.get("path") or tool_input.get("file_path")
+        if file_path:
+            context["file_path"] = str(file_path)
+        if "command" in tool_input:
+            context["command"] = tool_input["command"]
+
+        results = self.hook_executor.run_event(
+            HookEvent.PRE_TOOL_USE,
+            context,
+            stdin_data={"tool_name": tool_name, "tool_input": tool_input},
+        )
+
+        updated_input: dict[str, Any] | None = None
+        additional_contexts: list[str] = []
+
+        for result in results:
+            if result.decision == HookDecision.BLOCK:
+                return ToolResult(
+                    success=False,
+                    output=f"Bloqueado por hook: {result.reason}",
+                    error=f"Hook bloqueó la acción: {result.reason}",
+                )
+            if result.decision == HookDecision.MODIFY and result.updated_input:
+                updated_input = result.updated_input
+            if result.additional_context:
+                additional_contexts.append(result.additional_context)
+
+        if updated_input:
+            return updated_input
+
+        return None
+
+    def run_post_tool_hooks(
+        self, tool_name: str, tool_input: dict[str, Any], tool_output: str, success: bool
+    ) -> str | None:
+        """Ejecuta post-tool hooks (v4-A1).
+
+        Args:
+            tool_name: Nombre del tool ejecutado.
+            tool_input: Argumentos del tool.
+            tool_output: Output del tool (truncado).
+            success: Si el tool se ejecutó exitosamente.
+
+        Returns:
+            Texto con contexto adicional de los hooks, o None.
+        """
+        if not self.hook_executor or self.dry_run:
+            return None
+
+        from ..core.hooks import HookEvent
+
+        context: dict[str, Any] = {
+            "tool_name": tool_name,
+            "tool_result_success": str(success),
+        }
+        file_path = tool_input.get("path") or tool_input.get("file_path")
+        if file_path:
+            context["file_path"] = str(file_path)
+
+        results = self.hook_executor.run_event(
+            HookEvent.POST_TOOL_USE,
+            context,
+            stdin_data={
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_output": tool_output[:2000],
+            },
+        )
+
+        outputs: list[str] = []
+        for result in results:
+            if result.additional_context:
+                outputs.append(result.additional_context)
+
+        return "\n".join(outputs) if outputs else None
+
     def _sanitize_args_for_log(self, args: dict[str, Any]) -> dict[str, Any]:
         """Sanitiza argumentos para logging seguro.
 
@@ -253,20 +436,6 @@ class ExecutionEngine:
                 return True
             case _:
                 return True
-
-    def run_post_edit_hooks(self, tool_name: str, args: dict[str, Any]) -> str | None:
-        """Ejecuta hooks post-edit si el tool es una operación de edición (v3-M4).
-
-        Args:
-            tool_name: Nombre del tool ejecutado
-            args: Argumentos del tool
-
-        Returns:
-            Texto con los resultados de los hooks, o None si no aplican
-        """
-        if not self.hooks or self.dry_run:
-            return None
-        return self.hooks.run_for_tool(tool_name, args)
 
     def set_dry_run(self, enabled: bool) -> None:
         """Habilita o deshabilita el modo dry-run.

@@ -5,6 +5,8 @@ v3: Rediseñado con while True — el LLM decide cuándo parar.
 Los safety nets (max_steps, budget, timeout, context) son watchdogs
 que, al dispararse, piden un cierre limpio al LLM en lugar de cortar.
 
+v4-A1: Integración con el sistema de hooks completo.
+
 Invariantes:
 - El LLM termina cuando no solicita más tool calls (StopReason.LLM_DONE)
 - Los watchdogs inyectan instrucción de cierre → última llamada al LLM
@@ -13,7 +15,7 @@ Invariantes:
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import structlog
 
@@ -30,6 +32,10 @@ from .timeout import StepTimeout, StepTimeoutError
 if TYPE_CHECKING:
     from ..costs.tracker import CostTracker
     from ..llm.adapter import ToolCall
+    from ..skills.loader import SkillsLoader
+    from ..skills.memory import ProceduralMemory
+    from .guardrails import GuardrailsEngine
+    from .hooks import HookExecutor
 
 logger = structlog.get_logger()
 
@@ -65,10 +71,12 @@ class AgentLoop:
     Flujo por iteración:
     1. Comprobar safety nets → si saltan, _graceful_close() y terminar
     2. Gestionar contexto (comprimir si es necesario)
-    3. Llamar al LLM
-    4. Si no hay tool_calls → el LLM terminó, salir (LLM_DONE)
-    5. Ejecutar tool calls + hooks post-edit
-    6. Añadir resultados al contexto y repetir
+    3. Pre-LLM hooks (v4-A1)
+    4. Llamar al LLM
+    5. Post-LLM hooks (v4-A1)
+    6. Si no hay tool_calls → agent_complete hooks → quality gates → salir
+    7. Pre/post-tool hooks dentro de execute_tool_call
+    8. Añadir resultados al contexto y repetir
     """
 
     def __init__(
@@ -82,6 +90,10 @@ class AgentLoop:
         context_manager: ContextManager | None = None,
         cost_tracker: "CostTracker | None" = None,
         timeout: int | None = None,
+        hook_executor: "HookExecutor | None" = None,
+        guardrails: "GuardrailsEngine | None" = None,
+        skills_loader: "SkillsLoader | None" = None,
+        memory: "ProceduralMemory | None" = None,
     ):
         """Inicializa el agent loop.
 
@@ -95,6 +107,10 @@ class AgentLoop:
             context_manager: ContextManager para pruning del contexto
             cost_tracker: CostTracker para registrar costes
             timeout: Segundos máximos totales de ejecución. None = sin límite.
+            hook_executor: HookExecutor para hooks del lifecycle (v4-A1)
+            guardrails: GuardrailsEngine para seguridad determinista (v4-A2)
+            skills_loader: SkillsLoader para contexto de proyecto y skills (v4-A3)
+            memory: ProceduralMemory para persistir correcciones (v4-A4)
         """
         self.llm = llm
         self.engine = engine
@@ -105,7 +121,12 @@ class AgentLoop:
         self.context_manager = context_manager
         self.cost_tracker = cost_tracker
         self.timeout = timeout
+        self.hook_executor = hook_executor
+        self.guardrails = guardrails
+        self.skills_loader = skills_loader
+        self.memory = memory
         self._start_time: float = 0.0
+        self._pending_context: list[str] = []
         self.log = logger.bind(component="agent_loop")
         self.hlog = HumanLog(self.log)
 
@@ -133,6 +154,18 @@ class AgentLoop:
         state.model = self.llm.config.model
         state.cost_tracker = self.cost_tracker
 
+        # v4-A3: Inyectar contexto de skills en el system prompt
+        if self.skills_loader:
+            skills_context = self.skills_loader.build_system_context()
+            if skills_context and state.messages and state.messages[0]["role"] == "system":
+                state.messages[0]["content"] += "\n\n" + skills_context
+
+        # v4-A4: Inyectar memoria procedural en el system prompt
+        if self.memory:
+            memory_context = self.memory.get_context()
+            if memory_context and state.messages and state.messages[0]["role"] == "system":
+                state.messages[0]["content"] += "\n\n" + memory_context
+
         # Obtener schemas de tools permitidas
         tools_schema = self.engine.registry.get_schemas(
             self.agent_config.allowed_tools or None
@@ -146,124 +179,185 @@ class AgentLoop:
             timeout=self.timeout,
         )
 
+        # ── SESSION START HOOK (v4-A1) ─────────────────────────────────
+        self._run_hooks_safe("session_start", {
+            "task": prompt[:200],
+            "agent": "build",
+            "model": self.llm.config.model,
+        })
+
         step = 0
 
         # ── Loop principal: el LLM decide cuándo terminar ────────────────
-        while True:
+        try:
+            while True:
 
-            # ── SAFETY NETS (antes de cada llamada al LLM) ────────────────
-            stop_reason = self._check_safety_nets(state, step)
-            if stop_reason is not None:
-                return self._graceful_close(state, stop_reason, tools_schema)
+                # ── SAFETY NETS (antes de cada llamada al LLM) ────────────────
+                stop_reason = self._check_safety_nets(state, step)
+                if stop_reason is not None:
+                    return self._graceful_close(state, stop_reason, tools_schema)
 
-            # ── CONTEXT MANAGEMENT ────────────────────────────────────────
-            if self.context_manager:
-                state.messages = self.context_manager.manage(
-                    state.messages, self.llm
-                )
-
-            # ── LLAMADA AL LLM ────────────────────────────────────────────
-            self.log.info("agent.step.start", step=step)
-            self.hlog.llm_call(step, messages_count=len(state.messages))
-
-            try:
-                with StepTimeout(self.step_timeout):
-                    if stream:
-                        response = None
-                        for chunk_or_response in self.llm.completion_stream(
-                            messages=state.messages,
-                            tools=tools_schema if tools_schema else None,
-                        ):
-                            if isinstance(chunk_or_response, StreamChunk):
-                                if on_stream_chunk and chunk_or_response.type == "content":
-                                    on_stream_chunk(chunk_or_response.data)
-                            else:
-                                response = chunk_or_response
-
-                        if response is None:
-                            raise RuntimeError("Streaming completó sin retornar respuesta final")
-                    else:
-                        response = self.llm.completion(
-                            messages=state.messages,
-                            tools=tools_schema if tools_schema else None,
-                        )
-
-            except StepTimeoutError:
-                self.log.error("agent.step_timeout", step=step, seconds=self.step_timeout)
-                self.hlog.step_timeout(self.step_timeout)
-                # Tratar timeout de step como timeout total
-                return self._graceful_close(state, StopReason.TIMEOUT, tools_schema)
-
-            except Exception as e:
-                self.log.error("agent.llm_error", error=str(e), step=step)
-                self.hlog.llm_error(str(e))
-                state.status = "failed"
-                state.stop_reason = StopReason.LLM_ERROR
-                state.final_output = f"Error irrecuperable del LLM: {e}"
-                return state
-
-            # ── REGISTRAR COSTE ───────────────────────────────────────────
-            if self.cost_tracker and response.usage:
-                try:
-                    self.cost_tracker.record(
-                        step=step,
-                        model=self.llm.config.model,
-                        usage=response.usage,
-                        source="agent",
+                # ── CONTEXT MANAGEMENT ────────────────────────────────────────
+                if self.context_manager:
+                    state.messages = self.context_manager.manage(
+                        state.messages, self.llm
                     )
-                except BudgetExceededError as e:
-                    self.log.error("agent.budget_exceeded", step=step, error=str(e))
-                    # El presupuesto se superó en este step — cierre limpio
-                    return self._graceful_close(state, StopReason.BUDGET_EXCEEDED, tools_schema)
 
-            step += 1
+                # ── PRE-LLM HOOKS (v4-A1) ──────────────────────────────────
+                self._run_hooks_safe("pre_llm_call", {
+                    "step": str(step),
+                })
 
-            # ── EL LLM DECIDIÓ TERMINAR (no pidió tools) ──────────────────
-            if not response.tool_calls:
-                self.hlog.llm_response(tool_calls=0)
+                # Inyectar contexto pendiente de hooks (si hay)
+                if self._pending_context:
+                    for ctx_text in self._pending_context:
+                        state.messages.append({
+                            "role": "user",
+                            "content": f"[Contexto de hook]: {ctx_text}",
+                        })
+                    self._pending_context.clear()
+
+                # ── LLAMADA AL LLM ────────────────────────────────────────────
+                self.log.info("agent.step.start", step=step)
+                self.hlog.llm_call(step, messages_count=len(state.messages))
+
+                try:
+                    with StepTimeout(self.step_timeout):
+                        if stream:
+                            response = None
+                            for chunk_or_response in self.llm.completion_stream(
+                                messages=state.messages,
+                                tools=tools_schema if tools_schema else None,
+                            ):
+                                if isinstance(chunk_or_response, StreamChunk):
+                                    if on_stream_chunk and chunk_or_response.type == "content":
+                                        on_stream_chunk(chunk_or_response.data)
+                                else:
+                                    response = chunk_or_response
+
+                            if response is None:
+                                raise RuntimeError("Streaming completó sin retornar respuesta final")
+                        else:
+                            response = self.llm.completion(
+                                messages=state.messages,
+                                tools=tools_schema if tools_schema else None,
+                            )
+
+                except StepTimeoutError:
+                    self.log.error("agent.step_timeout", step=step, seconds=self.step_timeout)
+                    self.hlog.step_timeout(self.step_timeout)
+                    # Tratar timeout de step como timeout total
+                    return self._graceful_close(state, StopReason.TIMEOUT, tools_schema)
+
+                except Exception as e:
+                    self.log.error("agent.llm_error", error=str(e), step=step)
+                    self.hlog.llm_error(str(e))
+                    state.status = "failed"
+                    state.stop_reason = StopReason.LLM_ERROR
+                    state.final_output = f"Error irrecuperable del LLM: {e}"
+                    return state
+
+                # ── REGISTRAR COSTE ───────────────────────────────────────────
+                if self.cost_tracker and response.usage:
+                    try:
+                        self.cost_tracker.record(
+                            step=step,
+                            model=self.llm.config.model,
+                            usage=response.usage,
+                            source="agent",
+                        )
+                    except BudgetExceededError as e:
+                        self.log.error("agent.budget_exceeded", step=step, error=str(e))
+                        # El presupuesto se superó en este step — cierre limpio
+                        return self._graceful_close(state, StopReason.BUDGET_EXCEEDED, tools_schema)
+
+                # ── POST-LLM HOOKS (v4-A1) ─────────────────────────────────
+                self._run_hooks_safe("post_llm_call", {
+                    "step": str(step),
+                    "has_tool_calls": str(bool(response.tool_calls)),
+                })
+
+                step += 1
+
+                # ── EL LLM DECIDIÓ TERMINAR (no pidió tools) ──────────────────
+                if not response.tool_calls:
+                    self.hlog.llm_response(tool_calls=0)
+                    self.log.info(
+                        "agent.complete",
+                        step=step,
+                        reason="llm_decided",
+                        output_preview=(
+                            response.content[:100] + "..."
+                            if response.content and len(response.content) > 100
+                            else response.content
+                        ),
+                    )
+
+                    # ── QUALITY GATES (v4-A2) ────────────────────────────────
+                    if self.guardrails and self.guardrails.config.quality_gates:
+                        gate_results = self.guardrails.run_quality_gates()
+                        failed_required = [
+                            g for g in gate_results if not g["passed"] and g["required"]
+                        ]
+                        if failed_required:
+                            feedback = "Quality gates obligatorios no superados:\n"
+                            for g in failed_required:
+                                feedback += f"  - {g['name']}: {g['output'][:200]}\n"
+                            feedback += "\nCorrige estos problemas antes de poder completar la tarea."
+                            state.messages.append({"role": "user", "content": feedback})
+                            self.log.info(
+                                "guardrail.quality_gates_failed",
+                                failed=[g["name"] for g in failed_required],
+                            )
+                            continue  # Vuelve al while True
+
+                    # ── AGENT COMPLETE HOOKS (v4-A1) ─────────────────────────
+                    self._run_hooks_safe("agent_complete", {
+                        "step": str(step),
+                        "total_cost": str(self.cost_tracker.total_cost_usd if self.cost_tracker else 0),
+                    })
+
+                    # Include cost in completion message if tracker available
+                    cost_str = None
+                    if self.cost_tracker:
+                        cost_str = self.cost_tracker.format_summary_line()
+                    self.hlog.agent_done(step, cost=cost_str)
+                    state.final_output = response.content
+                    state.status = "success"
+                    state.stop_reason = StopReason.LLM_DONE
+                    break
+
+                # ── EL LLM PIDIÓ TOOLS → EJECUTAR ────────────────────────────
+                self.hlog.llm_response(tool_calls=len(response.tool_calls))
                 self.log.info(
-                    "agent.complete",
+                    "agent.tool_calls_received",
                     step=step,
-                    reason="llm_decided",
-                    output_preview=(
-                        response.content[:100] + "..."
-                        if response.content and len(response.content) > 100
-                        else response.content
-                    ),
+                    count=len(response.tool_calls),
+                    tools=[tc.name for tc in response.tool_calls],
                 )
-                # Include cost in completion message if tracker available
-                cost_str = None
-                if self.cost_tracker:
-                    cost_str = self.cost_tracker.format_summary_line()
-                self.hlog.agent_done(step, cost=cost_str)
-                state.final_output = response.content
-                state.status = "success"
-                state.stop_reason = StopReason.LLM_DONE
-                break
 
-            # ── EL LLM PIDIÓ TOOLS → EJECUTAR ────────────────────────────
-            self.hlog.llm_response(tool_calls=len(response.tool_calls))
-            self.log.info(
-                "agent.tool_calls_received",
-                step=step,
-                count=len(response.tool_calls),
-                tools=[tc.name for tc in response.tool_calls],
-            )
+                # Ejecutar tool calls (paralelo o secuencial)
+                tool_results = self._execute_tool_calls_batch(response.tool_calls, step)
 
-            # Ejecutar tool calls (paralelo o secuencial)
-            tool_results = self._execute_tool_calls_batch(response.tool_calls, step)
+                # Actualizar mensajes con tool results
+                state.messages = self.ctx.append_tool_results(
+                    state.messages, response.tool_calls, tool_results
+                )
 
-            # Actualizar mensajes con tool results
-            state.messages = self.ctx.append_tool_results(
-                state.messages, response.tool_calls, tool_results
-            )
+                # Registrar step
+                state.steps.append(StepResult(
+                    step_number=step,
+                    llm_response=response,
+                    tool_calls_made=tool_results,
+                ))
 
-            # Registrar step
-            state.steps.append(StepResult(
-                step_number=step,
-                llm_response=response,
-                tool_calls_made=tool_results,
-            ))
+        finally:
+            # ── SESSION END HOOK (v4-A1) — siempre se ejecuta ─────────────
+            self._run_hooks_safe("session_end", {
+                "steps": str(step),
+                "status": state.status,
+                "cost": str(self.cost_tracker.total_cost_usd if self.cost_tracker else 0),
+            })
 
         # ── Log final ─────────────────────────────────────────────────────
         self.log.info(
@@ -281,6 +375,34 @@ class AgentLoop:
         )
 
         return state
+
+    # ── HOOKS HELPERS (v4-A1) ─────────────────────────────────────────────
+
+    def _run_hooks_safe(self, event_name: str, context: dict[str, Any]) -> None:
+        """Ejecuta hooks para un evento de forma segura (sin romper el loop).
+
+        Args:
+            event_name: Nombre del evento (debe coincidir con HookEvent value).
+            context: Diccionario de contexto para el hook.
+        """
+        if not self.hook_executor:
+            return
+
+        from .hooks import HookEvent
+
+        try:
+            event = HookEvent(event_name)
+        except ValueError:
+            return
+
+        try:
+            results = self.hook_executor.run_event(event, context)
+            # Recoger contexto adicional para inyectar en el siguiente mensaje
+            for result in results:
+                if result.additional_context:
+                    self._pending_context.append(result.additional_context)
+        except Exception as e:
+            self.log.warning("hooks.lifecycle_error", event=event_name, error=str(e))
 
     # ── SAFETY NETS ───────────────────────────────────────────────────────
 
@@ -435,33 +557,76 @@ class AgentLoop:
     def _execute_single_tool(self, tc: object, step: int) -> ToolCallResult:
         """Ejecuta una sola tool call y retorna el resultado.
 
-        Después de tools de edición, ejecuta hooks post-edit (v3-M4) y
-        añade su output al resultado para que el LLM lo vea.
+        v4-A1: Ejecuta pre-hooks antes del tool y post-hooks después.
+        Los pre-hooks pueden bloquear o modificar el input.
+        Los post-hooks pueden añadir contexto adicional al resultado.
         """
+        tool_name: str = tc.name  # type: ignore[attr-defined]
+        tool_args: dict[str, Any] = tc.arguments  # type: ignore[attr-defined]
+
         self.log.info(
             "agent.tool_call.execute",
             step=step,
-            tool=tc.name,  # type: ignore[attr-defined]
-            args=self._sanitize_args_for_log(tc.arguments),  # type: ignore[attr-defined]
+            tool=tool_name,
+            args=self._sanitize_args_for_log(tool_args),
         )
         # Detectar si es MCP tool para logging diferenciado
-        tool_name = tc.name  # type: ignore[attr-defined]
         is_mcp = tool_name.startswith("mcp_")
         mcp_server = tool_name.split("_")[1] if is_mcp and "_" in tool_name[4:] else ""
         self.hlog.tool_call(
-            tool_name, tc.arguments,  # type: ignore[attr-defined]
+            tool_name, tool_args,
             is_mcp=is_mcp, mcp_server=mcp_server,
         )
 
-        result = self.engine.execute_tool_call(
-            tc.name,  # type: ignore[attr-defined]
-            tc.arguments,  # type: ignore[attr-defined]
-        )
+        # ── GUARDRAILS (v4-A2) — before hooks ──────────────────────────
+        guardrail_result = self.engine.check_guardrails(tool_name, tool_args)
+        if guardrail_result is not None:
+            self.log.info("agent.tool_call.blocked_by_guardrail", tool=tool_name)
+            self.hlog.tool_result(tool_name, False, guardrail_result.error or guardrail_result.output)
+            return ToolCallResult(
+                tool_name=tool_name,
+                args=tool_args,
+                result=guardrail_result,
+                was_confirmed=True,
+                was_dry_run=self.engine.dry_run,
+            )
 
-        # v3-M4: Ejecutar hooks post-edit si aplican
-        hook_output = self.engine.run_post_edit_hooks(
-            tc.name,  # type: ignore[attr-defined]
-            tc.arguments,  # type: ignore[attr-defined]
+        # ── PRE-TOOL HOOKS (v4-A1) ─────────────────────────────────────
+        pre_result = self.engine.run_pre_tool_hooks(tool_name, tool_args)
+        from ..tools.base import ToolResult
+        if isinstance(pre_result, ToolResult):
+            # Hook bloqueó la acción
+            self.log.info("agent.tool_call.blocked_by_hook", tool=tool_name)
+            self.hlog.tool_result(tool_name, False, pre_result.error)
+            return ToolCallResult(
+                tool_name=tool_name,
+                args=tool_args,
+                result=pre_result,
+                was_confirmed=True,
+                was_dry_run=self.engine.dry_run,
+            )
+        elif isinstance(pre_result, dict):
+            # Hook modificó el input
+            tool_args = pre_result
+
+        # ── EJECUTAR TOOL ────────────────────────────────────────────────
+        result = self.engine.execute_tool_call(tool_name, tool_args)
+
+        # ── POST-EXECUTION CODE RULES (v4-A2) ──────────────────────────
+        code_rule_messages = self.engine.check_code_rules(tool_name, tool_args)
+        if code_rule_messages:
+            block_msgs = [m for m in code_rule_messages if m.startswith("BLOQUEADO")]
+            if block_msgs:
+                from ..tools.base import ToolResult as TR
+                result = TR(
+                    success=False,
+                    output="\n".join(block_msgs),
+                    error="Code rule violation",
+                )
+
+        # ── POST-TOOL HOOKS (v4-A1) ────────────────────────────────────
+        hook_output = self.engine.run_post_tool_hooks(
+            tool_name, tool_args, result.output or "", result.success
         )
 
         # Si hay output de hooks, añadirlo al resultado del tool
@@ -473,21 +638,21 @@ class AgentLoop:
                 output=combined_output,
                 error=result.error,
             )
-            self.log.info("agent.hook.complete", step=step, tool=tc.name)  # type: ignore[attr-defined]
-            self.hlog.hook_complete(tc.name, hook="post-edit", success=True)  # type: ignore[attr-defined]
+            self.log.info("agent.hook.complete", step=step, tool=tool_name)
+            self.hlog.hook_complete(tool_name, hook="post-tool", success=True)
 
         self.log.info(
             "agent.tool_call.complete",
             step=step,
-            tool=tc.name,  # type: ignore[attr-defined]
+            tool=tool_name,
             success=result.success,
             error=result.error if not result.success else None,
         )
-        self.hlog.tool_result(tc.name, result.success, result.error if not result.success else None)  # type: ignore[attr-defined]
+        self.hlog.tool_result(tool_name, result.success, result.error if not result.success else None)
 
         return ToolCallResult(
-            tool_name=tc.name,  # type: ignore[attr-defined]
-            args=tc.arguments,  # type: ignore[attr-defined]
+            tool_name=tool_name,
+            args=tool_args,
             result=result,
             was_confirmed=True,
             was_dry_run=self.engine.dry_run,

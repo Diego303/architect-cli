@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-EXPECTED_VERSION = "0.15.0"
+EXPECTED_VERSION = "0.16.1"
 
 
 def _separator(title: str) -> None:

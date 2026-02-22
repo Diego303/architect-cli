@@ -202,25 +202,65 @@ architect run "..." --model gpt-4o-mini
 
 ---
 
-## Hooks post-edición
+## Hooks del lifecycle (v4)
 
-Auto-lint y auto-fix después de cada edición del agente. El resultado del hook vuelve al LLM para que pueda corregir errores.
+Hooks automáticos en 10 eventos. Los más comunes: lint después de editar y validación antes de escribir.
 
 ```yaml
 # En config.yaml
 hooks:
-  post_edit:
-    - name: format
-      command: "black {file}"
-      file_patterns: ["*.py"]
+  post_tool_use:
     - name: lint
       command: "ruff check {file} --fix"
       file_patterns: ["*.py"]
+  pre_tool_use:
+    - name: no-secrets
+      command: "bash scripts/check-secrets.sh"
+      matcher: "write_file|edit_file"
 ```
 
 ```bash
 architect run "..." -c config.yaml --mode yolo
-# Cada edit_file/write_file → black + ruff automáticos
+# Pre-hooks validan, post-hooks hacen lint automático
+```
+
+---
+
+## Guardrails (v4)
+
+Reglas deterministas de seguridad. Se evalúan ANTES que los hooks.
+
+```yaml
+guardrails:
+  enabled: true
+  protected_files: [".env", "*.pem"]
+  max_files_modified: 10
+  quality_gates:
+    - name: tests
+      command: "pytest tests/ -x"
+      required: true
+```
+
+---
+
+## Skills y memoria (v4)
+
+Contexto del proyecto inyectado automáticamente en el system prompt.
+
+```bash
+# Crear .architect.md con convenciones del proyecto
+# El agente lo lee automáticamente en cada sesión
+
+# Gestión de skills
+architect skill create mi-patron    # Crear skill local
+architect skill install user/repo   # Instalar desde GitHub
+architect skill list                # Listar skills
+```
+
+```yaml
+# Activar memoria procedural (detecta correcciones y las recuerda)
+memory:
+  enabled: true
 ```
 
 ---
@@ -292,10 +332,24 @@ commands:
   enabled: true
 
 hooks:
-  post_edit:
+  post_tool_use:
     - name: lint
       command: "ruff check {file} --fix"
       file_patterns: ["*.py"]
+
+guardrails:
+  enabled: true
+  protected_files: [".env"]
+  quality_gates:
+    - name: tests
+      command: "pytest tests/ -x"
+      required: true
+
+skills:
+  auto_discover: true
+
+memory:
+  enabled: true
 
 costs:
   enabled: true

@@ -379,42 +379,55 @@ Punto de entrada obligatorio para TODA ejecución de tool. **Nunca lanza excepci
 
 ```python
 class ExecutionEngine:
-    registry:  ToolRegistry
-    config:    AppConfig
-    dry_run:   bool = False
-    policy:    ConfirmationPolicy
-    hooks:     PostEditHooks | None = None
+    registry:      ToolRegistry
+    config:        AppConfig
+    dry_run:       bool = False
+    policy:        ConfirmationPolicy
+    hook_executor: HookExecutor | None = None       # v4-A1: lifecycle hooks
+    guardrails:    GuardrailsEngine | None = None    # v4-A2: deterministic rules
+    hooks:         PostEditHooks | None = None       # v3-M4: legacy (backward-compat)
 
     def execute_tool_call(self, tool_name: str, args: dict) -> ToolResult:
 ```
 
-### Los 8 pasos del pipeline
+### Los 10 pasos del pipeline (v4)
 
 ```
-1. registry.get(tool_name)
-   ✗ ToolNotFoundError → return ToolResult(success=False, "Tool no encontrada")
+1.  registry.get(tool_name)
+    ✗ ToolNotFoundError → return ToolResult(success=False, "Tool no encontrada")
 
-2. tool.validate_args(args)
-   ✗ ValidationError → return ToolResult(success=False, "Argumentos inválidos: ...")
+2.  tool.validate_args(args)
+    ✗ ValidationError → return ToolResult(success=False, "Argumentos inválidos: ...")
 
-3. policy.should_confirm(tool)
-   → True: policy.request_confirmation(tool_name, args, dry_run)
-       ✗ NoTTYError → return ToolResult(success=False, "No hay TTY para confirmar")
-       ✗ user cancela → return ToolResult(success=False, "Acción cancelada por usuario")
+3.  guardrails.check_*()  [v4-A2: si guardrails configurado]
+    → check_file_access() para tools de filesystem
+    → check_command() para run_command
+    → check_edit_limits() para edit/write/patch
+    → check_code_rules() para contenido escrito
+    ✗ Bloqueado → return ToolResult(success=False, "Guardrail: {razón}")
 
-4. if dry_run:
-   → return ToolResult(success=True, "[DRY-RUN] Se ejecutaría: tool_name(args)")
+4.  hook_executor.run_event(PRE_TOOL_USE)  [v4-A1: pre-hooks]
+    → HookDecision.BLOCK → return ToolResult(success=False, "Bloqueado por hook: {razón}")
+    → HookDecision.MODIFY → actualizar args con updated_input
 
-5. tool.execute(**validated_args.model_dump())
-   (tool.execute() no lanza — si hay excepción interna, la tool la captura)
+5.  policy.should_confirm(tool)
+    → True: policy.request_confirmation(tool_name, args, dry_run)
+        ✗ NoTTYError → return ToolResult(success=False, "No hay TTY para confirmar")
+        ✗ user cancela → return ToolResult(success=False, "Acción cancelada por usuario")
 
-6. run_post_edit_hooks(tool_name, args)  → si tool es edit_file/write_file/apply_patch
-   → ejecuta hooks configurados
-   → añade output de hooks al ToolResult
+6.  if dry_run:
+    → return ToolResult(success=True, "[DRY-RUN] Se ejecutaría: tool_name(args)")
 
-7. log resultado (structlog)
+7.  tool.execute(**validated_args.model_dump())
+    (tool.execute() no lanza — si hay excepción interna, la tool la captura)
 
-8. return ToolResult
+8.  hook_executor.run_event(POST_TOOL_USE)  [v4-A1: post-hooks]
+    → adicional_context se añade al ToolResult
+    (también: run_post_edit_hooks legacy para backward-compat v3-M4)
+
+9.  log resultado (structlog)
+
+10. return ToolResult
 ```
 
 Hay un `try/except Exception` exterior que captura cualquier error inesperado del paso 5 y lo convierte en `ToolResult(success=False)`.
@@ -465,32 +478,53 @@ Para `run_command`, `ExecutionEngine` llama a `_should_confirm_command()` que co
 
 ---
 
-## PostEditHooks -- verificacion automatica post-edicion (v3-M4)
+## HookExecutor — hooks del lifecycle (v4-A1)
 
-Cuando el agente edita un archivo (`edit_file`, `write_file`, `apply_patch`), los hooks configurados se ejecutan automaticamente. El resultado vuelve al LLM como parte del tool result para que pueda auto-corregir errores.
+A partir de v0.16.0, el sistema de hooks soporta **10 eventos del lifecycle**. Los hooks se ejecutan como subprocesos shell y reciben contexto via variables de entorno `ARCHITECT_*`.
 
-```python
-EDIT_TOOLS = {"edit_file", "write_file", "apply_patch"}
-```
+### Eventos y tipos
 
-Configuracion en YAML:
+| Evento | Tipo | Puede BLOCK |
+|--------|------|:-----------:|
+| `pre_tool_use` | Pre-hook | Sí |
+| `post_tool_use` | Post-hook | No |
+| `pre_llm_call` | Pre-hook | Sí |
+| `post_llm_call` | Post-hook | No |
+| `session_start` | Notificación | No |
+| `session_end` | Notificación | No |
+| `on_error` | Notificación | No |
+| `budget_warning` | Notificación | No |
+| `context_compress` | Notificación | No |
+| `agent_complete` | Notificación | No |
+
+### Exit code protocol
+
+- **Exit 0** → ALLOW. stdout puede contener JSON con `additionalContext` o `updatedInput`.
+- **Exit 2** → BLOCK (solo pre-hooks). stderr contiene la razón.
+- **Otro** → Error. Se logea como warning, no rompe el loop. Decisión = ALLOW.
+
+### Configuración
 
 ```yaml
 hooks:
-  post_edit:
+  pre_tool_use:
+    - name: validate-secrets
+      command: "bash scripts/check.sh"
+      matcher: "write_file|edit_file"
+      file_patterns: ["*.py"]
+      timeout: 5
+  post_tool_use:
     - name: python-lint
       command: "ruff check {file} --no-fix"
       file_patterns: ["*.py"]
       timeout: 15
-    - name: python-typecheck
-      command: "mypy {file} --no-error-summary"
-      file_patterns: ["*.py"]
-      timeout: 30
 ```
 
-El placeholder `{file}` se reemplaza con el path del archivo editado. La variable de entorno `ARCHITECT_EDITED_FILE` tambien contiene el path.
+### Retrocompatibilidad v3-M4
 
-Si un hook falla (exit code != 0), su output se añade al resultado. En el log HUMAN se muestra con iconos:
+`hooks.post_edit` sigue funcionando y se mapea internamente a `post_tool_use` con matcher automático para `edit_file|write_file|apply_patch`. El `PostEditHooks` legacy sigue disponible.
+
+Si un hook falla (exit code != 0), su output se añade al tool result. En el log HUMAN se muestra con iconos:
 
 ```
       🔍 Hook python-lint: ⚠️
@@ -503,20 +537,23 @@ Y en el tool result que recibe el LLM:
 src/main.py:15:5: F841 local variable 'x' is assigned to but never used
 ```
 
-Si un hook tiene timeout, retorna:
+---
 
-```
-[Hook python-lint: FALLO (exit -1)]
-Timeout despues de 15s
-```
+## GuardrailsEngine — seguridad determinista (v4-A2)
 
-Si un hook tiene éxito, el log HUMAN muestra:
+Motor de reglas deterministas evaluado **ANTES** que los hooks en el pipeline de ejecución. No puede ser desactivado por el LLM.
 
-```
-      🔍 Hook python-lint: ✓
-```
+### Checks disponibles
 
-Los hooks solo se ejecutan si el `PostEditHooks` fue configurado y pasado al `ExecutionEngine` via el parametro `hooks`. Si `hooks` es `None`, el paso 6 del pipeline se omite.
+| Check | Método | Cuándo |
+|-------|--------|--------|
+| Archivos protegidos | `check_file_access()` | En tools de filesystem (write, edit, delete) |
+| Comandos bloqueados | `check_command()` | En `run_command` |
+| Límites de edición | `check_edit_limits()` | En tools de edición |
+| Reglas de código | `check_code_rules()` | En contenido escrito |
+| Quality gates | `run_quality_gates()` | Al completar el agente |
+
+Los guardrails se configuran en `guardrails:` del YAML. Si un guardrail bloquea, ni siquiera se ejecutan los hooks pre_tool_use.
 
 ---
 
@@ -564,6 +601,12 @@ ExecutionEngine.execute_tool_call("edit_file", {path:"main.py", old_str:"...", n
   │
   ├─ registry.get("edit_file")               → EditFileTool
   ├─ validate_args({path:..., old_str:..., new_str:...}) → EditFileArgs(...)
+  │
+  ├─ [v4-A2] guardrails.check_file_access("main.py", "edit_file") → (True, "")
+  ├─ [v4-A2] guardrails.check_edit_limits("main.py", lines_added, lines_removed) → (True, "")
+  │
+  ├─ [v4-A1] hook_executor.run_event(PRE_TOOL_USE, context) → [HookResult(ALLOW)]
+  │
   ├─ policy.should_confirm(edit_file)         → True (sensitive=True, mode=confirm-sensitive)
   ├─ request_confirmation("edit_file", ...)   → user: y
   ├─ edit_file.execute(path="main.py", old_str="...", new_str="...")
@@ -573,8 +616,8 @@ ExecutionEngine.execute_tool_call("edit_file", {path:"main.py", old_str:"...", n
   │     └─ content.replace(old_str, new_str, 1)
   │     └─ file.write_text(new_content)
   │     └─ ToolResult(success=True, output="[unified diff del cambio]")
-  ├─ run_post_edit_hooks("edit_file", {path:"main.py", ...})
-  │     └─ "edit_file" in EDIT_TOOLS → True
+  │
+  ├─ [v4-A1] hook_executor.run_event(POST_TOOL_USE, context)
   │     └─ hook "python-lint": ruff check /workspace/main.py --no-fix
   │     └─ hook "python-typecheck": mypy /workspace/main.py --no-error-summary
   │     └─ resultado de hooks se añade al ToolResult.output
@@ -587,4 +630,9 @@ ContextBuilder.append_tool_results(messages, [ToolCall(...)], [ToolResult(...)])
     ]
 ```
 
-El resultado de la tool (éxito o error) siempre vuelve al LLM como mensaje `tool`, incluyendo la salida de los hooks post-edicion si aplican. El LLM decide qué hacer a continuación y puede auto-corregir errores detectados por los hooks.
+El resultado de la tool (éxito o error) siempre vuelve al LLM como mensaje `tool`, incluyendo la salida de los hooks post-edición si aplican. El LLM decide qué hacer a continuación y puede auto-corregir errores detectados por los hooks.
+
+El pipeline completo con v4 Phase A:
+```
+Guardrails (determinista) → Pre-hooks (shell) → Confirmación → Ejecución → Post-hooks → LLM
+```

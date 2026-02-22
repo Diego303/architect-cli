@@ -355,6 +355,10 @@ def test_run_basic():
     loop2.engine.execute_tool_call.return_value = tool_result
     loop2.engine.run_post_edit_hooks.return_value = None
     loop2.engine.dry_run = False
+    loop2.engine.check_guardrails.return_value = None  # v4-A2: no bloquear
+    loop2.engine.run_pre_tool_hooks.return_value = None  # v4-A1: no bloquear
+    loop2.engine.check_code_rules.return_value = []  # v4-A2: sin violaciones
+    loop2.engine.run_post_tool_hooks.return_value = None  # v4-A1: sin output extra
     loop2.ctx.append_tool_results.return_value = [
         {"role": "system", "content": "test"},
         {"role": "user", "content": "lee main.py"},

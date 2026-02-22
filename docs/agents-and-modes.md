@@ -250,3 +250,21 @@ src/
 Esto permite que el agente conozca la estructura del proyecto **antes de leer ningún archivo**, reduciendo el número de llamadas a `list_files` y mejorando la calidad de los planes.
 
 Para repositorios > 300 archivos, se usa una vista compacta agrupada por directorio raíz para no saturar el system prompt.
+
+---
+
+## Contexto inyectado en system prompt (v4 Phase A)
+
+A partir de v0.16.0, el system prompt de cada agente puede recibir contexto adicional de tres fuentes:
+
+### 1. Skills y contexto del proyecto (v4-A3)
+
+El `SkillsLoader` busca `.architect.md`, `AGENTS.md` o `CLAUDE.md` en la raíz del workspace y lo inyecta como `# Instrucciones del Proyecto`. Además, las skills en `.architect/skills/` cuyo `globs` coincida con los archivos activos se inyectan como `# Skill: {name}`.
+
+### 2. Memoria procedural (v4-A4)
+
+Si `memory.enabled: true`, el contenido de `.architect/memory.md` se inyecta en el system prompt. Esto incluye correcciones del usuario detectadas automáticamente en sesiones anteriores.
+
+### 3. Hooks y guardrails en el pipeline
+
+Los hooks del lifecycle (`HookExecutor`) y los guardrails (`GuardrailsEngine`) se integran en el `ExecutionEngine`, no en el system prompt. Los guardrails se evalúan antes de cada tool call, y los hooks pre/post se ejecutan alrededor de cada acción. Ver `tools-and-execution.md` para el pipeline completo de 10 pasos.

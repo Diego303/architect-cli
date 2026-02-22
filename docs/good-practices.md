@@ -12,7 +12,10 @@ Guía de buenas prácticas para sacar el máximo partido a `architect`, evitar e
 - [Ejecución de comandos](#ejecución-de-comandos)
 - [Gestión del contexto](#gestión-del-contexto)
 - [Optimización de costes](#optimización-de-costes)
-- [Hooks post-edición](#hooks-post-edición)
+- [Hooks del lifecycle](#hooks-del-lifecycle)
+- [Guardrails](#guardrails)
+- [Skills y contexto del proyecto](#skills-y-contexto-del-proyecto)
+- [Memoria procedural](#memoria-procedural)
 - [Auto-evaluación](#auto-evaluación)
 - [Modos de confirmación](#modos-de-confirmación)
 - [Configuración del workspace](#configuración-del-workspace)
@@ -305,64 +308,186 @@ No usar en producción: las respuestas cacheadas pueden quedar obsoletas si el c
 
 ---
 
-## Hooks post-edición
+## Hooks del lifecycle
 
 ### Cuándo usarlos
 
-Los hooks ejecutan automáticamente linters, formateadores o type checkers después de cada edición. El resultado vuelve al agente, que puede auto-corregir errores.
+Los hooks ejecutan automáticamente linters, formateadores o type checkers. A partir de v0.16.0, se soportan 10 eventos del lifecycle (no solo post-edición).
 
 ```yaml
 hooks:
-  post_edit:
+  post_tool_use:
     - name: format
       command: "black {file}"
       file_patterns: ["*.py"]
       timeout: 10
-
     - name: lint
       command: "ruff check {file}"
       file_patterns: ["*.py"]
       timeout: 10
-
-    - name: typecheck
-      command: "mypy {file} --ignore-missing-imports"
-      file_patterns: ["*.py"]
-      timeout: 30
+  pre_tool_use:
+    - name: validate-secrets
+      command: "bash scripts/check-secrets.sh"
+      matcher: "write_file|edit_file"
+      timeout: 5
 ```
 
 ### Buenas prácticas con hooks
 
 **Mantén los hooks rápidos.** Cada hook añade tiempo y potencialmente una iteración extra si falla. Un hook de 30s en cada edición suma rápido.
 
-**Evita tests en hooks.** Los tests suelen ser lentos. Es mejor que el agente los ejecute explícitamente con `run_command` una vez al final, no después de cada edición.
+**Evita tests en hooks.** Los tests suelen ser lentos. Es mejor que el agente los ejecute explícitamente con `run_command` una vez al final, o usa quality gates de guardrails para verificar al completar.
 
 ```yaml
 # Bien — hooks rápidos de formateo y lint
 hooks:
-  post_edit:
+  post_tool_use:
     - name: format
       command: "black {file}"
       file_patterns: ["*.py"]
       timeout: 10
-
-# Mal — test suite completa en cada edición
-hooks:
-  post_edit:
-    - name: tests
-      command: "pytest tests/ -x"
-      file_patterns: ["*.py"]
-      timeout: 120     # 2 minutos por cada edición
 ```
+
+**Usa pre-hooks para seguridad, post-hooks para calidad.** Los pre-hooks con exit code 2 bloquean la acción; los post-hooks informan al LLM.
 
 **Si un hook está roto, desactívalo.** Un linter mal configurado que siempre falla causa que el agente entre en un bucle intentando corregir errores que no son suyos.
 
 ```yaml
-# Deshabilitar un hook individual
 hooks:
-  post_edit:
+  post_tool_use:
     - name: broken-lint
       command: "..."
       enabled: false     # Desactivado
+```
+
+**Usa async para notificaciones.** Los hooks de sesión que envían notificaciones (Slack, email) deben ser async para no bloquear.
+
+```yaml
+hooks:
+  session_end:
+    - name: notify
+      command: "curl -s $SLACK_WEBHOOK -d 'Sesión completada'"
+      async: true
+```
+
+---
+
+## Guardrails
+
+### Cuándo usarlos
+
+Los guardrails son reglas **deterministas** de seguridad que se evalúan ANTES que los hooks. Ideales para equipos o entornos donde se necesita control estricto.
+
+### Buenas prácticas con guardrails
+
+**Protege archivos sensibles.** Siempre añade `.env`, certificados y configuraciones de producción a `protected_files`.
+
+```yaml
+guardrails:
+  enabled: true
+  protected_files:
+    - ".env*"
+    - "*.pem"
+    - "*.key"
+    - "deploy/**"
+    - "Dockerfile"
+```
+
+**Limita el alcance de cambios.** En entornos de CI o con agentes de confianza parcial, limita cuánto puede cambiar el agente.
+
+```yaml
+guardrails:
+  max_files_modified: 10
+  max_lines_changed: 500
+```
+
+**Usa quality gates para verificación final.** Son más efectivos que tests en hooks porque se ejecutan una sola vez al completar.
+
+```yaml
+guardrails:
+  quality_gates:
+    - name: tests
+      command: "pytest tests/ -x --tb=short"
+      required: true
+      timeout: 120
+    - name: lint
+      command: "ruff check src/"
+      required: false    # solo informativo
+```
+
+**Usa code_rules para patrones prohibidos.** Útil para prevenir anti-patterns en el código generado.
+
+```yaml
+guardrails:
+  code_rules:
+    - pattern: "eval\\("
+      message: "No usar eval() — riesgo de inyección"
+      severity: block
+    - pattern: "console\\.log"
+      message: "Usar logger en vez de console.log"
+      severity: warn
+```
+
+---
+
+## Skills y contexto del proyecto
+
+### Cuándo usarlos
+
+Las skills inyectan contexto del proyecto en el system prompt del agente. Son la forma de comunicar convenciones del equipo, patrones preferidos y reglas del proyecto.
+
+### Buenas prácticas con skills
+
+**Crea un `.architect.md` en cada proyecto.** Es la forma más efectiva de dar contexto al agente sin repetirlo en cada prompt.
+
+```markdown
+<!-- .architect.md -->
+# Convenciones
+
+- Python: snake_case, black, ruff, mypy
+- Tests en tests/ con pytest
+- Usar pydantic v2 para validación
+- No usar print(), usar structlog
+```
+
+**Usa skills con globs para contexto específico.** Si las reglas de Django solo aplican a ciertos archivos, usa globs.
+
+```markdown
+---
+name: django-patterns
+globs: ["**/views.py", "**/models.py", "**/serializers.py"]
+---
+# Patrones Django
+- Usar class-based views
+- Validar con serializers, nunca en views
+```
+
+**No repitas en skills lo que el código ya dice.** Las skills son para convenciones implícitas, no para documentar lo que ya es visible en el código.
+
+---
+
+## Memoria procedural
+
+### Cuándo usarla
+
+La memoria procedural detecta correcciones del usuario y las persiste para futuras sesiones. Útil para proyectos donde se interactúa repetidamente con el agente.
+
+### Buenas prácticas con memoria
+
+**Actívala en proyectos recurrentes.** Si trabajas con el agente en el mismo proyecto durante días/semanas, la memoria reduce las correcciones repetidas.
+
+```yaml
+memory:
+  enabled: true
+```
+
+**Revisa `.architect/memory.md` periódicamente.** Las correcciones auto-detectadas pueden contener ruido. Edita el archivo manualmente para mantener solo las reglas relevantes.
+
+**Usa patrones para reglas permanentes.** Además de las correcciones automáticas, puedes añadir reglas manualmente:
+
+```markdown
+- [2026-02-22] Patron: Siempre usar pnpm, nunca npm ni yarn
+- [2026-02-22] Patron: Los tests van en __tests__/ junto al código
 ```
 
 ---
@@ -653,9 +778,13 @@ indexer:
 | Prompts | Específicos, un objetivo por ejecución |
 | Agente | `review`/`plan` para análisis, `build` para cambios |
 | Edición | Preferir `edit_file` sobre `write_file` |
-| Comandos | Hooks rápidos, tests solo con `run_command` |
+| Comandos | Hooks rápidos, tests solo con `run_command` o quality gates |
 | Contexto | Buscar antes de leer, dividir tareas grandes |
 | Costes | `prompt_caching: true`, `--budget`, modelo adecuado |
+| Hooks | Pre-hooks para seguridad, post-hooks para lint/format, async para notificaciones |
+| Guardrails | Proteger archivos sensibles, limitar alcance, quality gates al final |
+| Skills | `.architect.md` en cada proyecto, skills con globs para contexto específico |
+| Memoria | Activar en proyectos recurrentes, revisar `.architect/memory.md` periódicamente |
 | Evaluación | `basic` para CI, `full` solo para tareas críticas |
 | Modo | `confirm-sensitive` en local, `yolo` en CI |
-| Seguridad | `allowed_only: true` y `allow_delete: false` en CI |
+| Seguridad | `allowed_only: true`, `allow_delete: false`, guardrails en CI |

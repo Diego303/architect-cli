@@ -1,6 +1,6 @@
 # Testing — Resumen completo de cobertura
 
-Documento generado el 2026-02-21. Refleja el estado actual de todos los test scripts en `scripts/`.
+Documento actualizado el 2026-02-22. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.16.1.
 
 ## Resultado global
 
@@ -26,12 +26,16 @@ Documento generado el 2026-02-21. Refleja el estado actual de todos los test scr
 | `test_v3_m4.py` | 44 | Passed | No |
 | `test_v3_m5.py` | 41 | Passed | No |
 | `test_v3_m6.py` | 23 | Passed | No |
+| `test_phase15.py` | 29 | Passed | No |
+| `test_phase16.py` | 24 | Passed | No |
+| `test_phase17.py` | 31 | Passed | No |
+| `test_phase18.py` | 32 | Passed | No |
 | `test_integration.py` | 54 (47+7) | 47 passed, 7 esperados | 7 requieren key |
 | `test_config_loader.py` | 37 | Passed | No |
 | `test_mcp_internals.py` | 47 | Passed | No |
 | `test_streaming.py` | 33 | Passed | No |
 | `test_parallel_execution.py` | 29 | Passed | No |
-| **TOTAL** | **~597** | **Passed** | **7 esperados con key** |
+| **TOTAL** | **~713** | **Passed** | **7 esperados con key** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -55,7 +59,7 @@ Documento generado el 2026-02-21. Refleja el estado actual de todos los test scr
 | `loop.py` | `test_v3_m1`, `test_parallel_execution` | AgentLoop.run(), _check_safety_nets (5 condiciones), _graceful_close (4 StopReasons), _should_parallelize, _execute_tool_calls_batch (secuencial vs paralelo, orden preservado) |
 | `state.py` | `test_v3_m1`, `test_parallel_execution` | StopReason (7 miembros), AgentState, StepResult, _CLOSE_INSTRUCTIONS (4 keys), ToolCallResult |
 | `context.py` | `test_v3_m2`, `test_phase11` | ContextManager — _estimate_tokens, _is_above_threshold, is_critically_full, manage(), _summarize_steps, _format_steps_for_summary, _count_tool_exchanges, truncate_tool_result, enforce_window, maybe_compress |
-| `hooks.py` | `test_v3_m4`, `test_parallel_execution` | PostEditHooks — EDIT_TOOLS, run_for_tool, _matches, _truncate, _format_result, _run_hook, hook disabled, integración con ExecutionEngine |
+| `hooks.py` | `test_v3_m4`, `test_phase15`, `test_parallel_execution` | HookExecutor — 10 lifecycle events (HookEvent enum), HookDecision (ALLOW/BLOCK/MODIFY), exit code protocol, env vars, async hooks, matcher/file_patterns filtering, HooksRegistry, backward-compat run_post_edit; PostEditHooks legacy |
 | `evaluator.py` | `test_phase12` | SelfEvaluator — basic mode, full mode, evaluación de resultados |
 | `mixed_mode.py` | `test_phase3`, `test_v3_m3` | MixedModeRunner — ya no es default, backward compat |
 | `shutdown.py` | `test_phase7` | GracefulShutdown — estado inicial, reset, should_stop, integración con AgentLoop |
@@ -127,6 +131,17 @@ Documento generado el 2026-02-21. Refleja el estado actual de todos los test scr
 |---|---|
 | `test_phase6`, `test_phase8`, `test_v3_m3` | JSON output format, exit codes, stdout/stderr separation, CLI help, agents command, validate-config, full init without LLM, dry-run sin API key, build como default |
 
+### v4 Phase A — Hooks, Guardrails, Skills, Memory
+
+| Archivo fuente | Test file(s) | Qué se prueba |
+|---|---|---|
+| `core/hooks.py` | `test_phase15` (29 tests) | HookEvent (10 valores), HookDecision (3 valores), HookResult, HookConfig, HooksRegistry (registro, get_hooks, has_hooks), HookExecutor (_build_env, execute_hook, run_event con matcher/file_patterns, run_post_edit backward-compat), exit code protocol (0=ALLOW, 2=BLOCK, otro=Error), async hooks, timeout |
+| `core/guardrails.py` | `test_phase16` (24 tests) | GuardrailsEngine — check_file_access (protected_files globs), check_command (blocked_commands regex), check_edit_limits (max_files/lines), check_code_rules (severity warn/block), record_command/record_edit, should_force_test, run_quality_gates (subprocess, timeout, required vs optional), state tracking |
+| `skills/loader.py` | `test_phase17` (31 tests) | SkillsLoader — load_project_context (.architect.md, AGENTS.md, CLAUDE.md), discover_skills (local + installed), _parse_skill (YAML frontmatter), get_relevant_skills (glob matching), build_system_context; SkillInfo dataclass |
+| `skills/installer.py` | `test_phase17` | SkillInstaller — install_from_github (sparse checkout), create_local (plantilla SKILL.md), list_installed, uninstall |
+| `skills/memory.py` | `test_phase18` (32 tests) | ProceduralMemory — 6 CORRECTION_PATTERNS (direct, negation, clarification, should_be, wrong_approach, absolute_rule), detect_correction, add_correction (dedup), add_pattern, _load/_append_to_file, get_context, analyze_session_learnings |
+| `config/schema.py` | `test_phase15-18`, `test_config_loader` | HookItemConfig, HooksConfig (10 eventos + post_edit compat), GuardrailsConfig, QualityGateConfig, CodeRuleConfig, SkillsConfig, MemoryConfig — validación Pydantic, defaults, extra='forbid' |
+
 ---
 
 ## Tests de integración (`test_integration.py`)
@@ -163,6 +178,22 @@ Estas áreas no tienen cobertura automatizada pero son difíciles de testear sin
 | **SIGINT/SIGTERM real** | `test_phase7` prueba GracefulShutdown en aislamiento; señales reales en un proceso vivo son frágiles en CI |
 
 > Todas las funciones internas, parsing, validación, seguridad y lógica de decisión están cubiertas sin necesidad de credenciales externas.
+
+---
+
+## QA — v0.16.1
+
+Tras la implementación de v4 Phase A se realizó un proceso de QA completo:
+
+1. Se ejecutaron los 25 scripts de test (597 originales + 116 nuevos)
+2. Se detectaron y corrigieron 5 bugs:
+   - `CostTracker.format_summary_line()` — AttributeError por campo mal referenciado
+   - `PriceLoader._load_prices()` — acceso a dict con `get()` vs `[]` en nested keys
+   - `HUMAN` log level — registro doble del nivel en `logging.addLevelName()`
+   - `HumanFormatter._summarize_args()` — `ValueError` en `.index()` para strings sin separador
+   - `CommandTool` — referencia incorrecta a `args.timeout` vs `args.timeout_seconds`
+3. Se actualizaron 5 scripts de test para usar `EXPECTED_VERSION = "0.16.1"`
+4. Resultado final: **713 tests passing**, 7 expected failures (requieren API key)
 
 ---
 

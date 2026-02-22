@@ -24,12 +24,12 @@ from .logging import configure_logging
 from .mcp import MCPDiscovery
 from .tools import ToolRegistry, register_all_tools
 
-# Importación opcional de hooks (v3-M4)
-try:
-    from .core.hooks import PostEditHooks
-    _HOOKS_AVAILABLE = True
-except ImportError:
-    _HOOKS_AVAILABLE = False
+# v4-A1: Sistema de hooks completo
+from .core.hooks import HookConfig, HookEvent, HookExecutor, HooksRegistry
+# v4-A2: Guardrails
+from .core.guardrails import GuardrailsEngine
+# v4-A3: Skills ecosystem
+from .skills import ProceduralMemory, SkillInstaller, SkillsLoader
 
 # Códigos de salida
 EXIT_SUCCESS = 0
@@ -41,7 +41,7 @@ EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
 # Versión actual
-_VERSION = "0.15.0"
+_VERSION = "0.16.1"
 
 
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
@@ -342,12 +342,25 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                 if cache:
                     cache.set(workspace_root, repo_index)
 
-        # Crear PostEditHooks (v3-M4)
-        post_edit_hooks: "PostEditHooks | None" = None
-        if _HOOKS_AVAILABLE and hasattr(config, "hooks") and config.hooks.post_edit:
-            post_edit_hooks = PostEditHooks(
-                hooks=config.hooks.post_edit,
-                workspace_root=Path(config.workspace.root).resolve(),
+        # v4-A3: Crear SkillsLoader y cargar contexto del proyecto
+        skills_loader: SkillsLoader | None = None
+        if config.skills.auto_discover:
+            skills_loader = SkillsLoader(str(Path(config.workspace.root).resolve()))
+            skills_loader.load_project_context()
+            skills_loader.discover_skills()
+
+        # v4-A4: Crear ProceduralMemory si configurado
+        memory: ProceduralMemory | None = None
+        if config.memory.enabled:
+            memory = ProceduralMemory(str(Path(config.workspace.root).resolve()))
+
+        # v4-A1: Crear HookExecutor con el sistema de hooks completo
+        hook_executor: HookExecutor | None = None
+        hooks_registry = _build_hooks_registry(config)
+        if hooks_registry.has_hooks():
+            hook_executor = HookExecutor(
+                registry=hooks_registry,
+                workspace_root=str(Path(config.workspace.root).resolve()),
             )
 
         # Determinar si usar cache local de LLM
@@ -400,12 +413,21 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
             click.echo(f"Agentes disponibles: {', '.join(available)}", err=True)
             sys.exit(EXIT_FAILED)
 
-        # Crear execution engine con hooks (v3-M4)
+        # v4-A2: Crear guardrails engine si configurado
+        guardrails_engine: GuardrailsEngine | None = None
+        if config.guardrails.enabled:
+            guardrails_engine = GuardrailsEngine(
+                config=config.guardrails,
+                workspace_root=str(Path(config.workspace.root).resolve()),
+            )
+
+        # Crear execution engine con hooks (v4-A1) y guardrails (v4-A2)
         engine = ExecutionEngine(
             registry,
             config,
             confirm_mode=agent_config.confirm_mode,
-            hooks=post_edit_hooks,
+            hook_executor=hook_executor,
+            guardrails=guardrails_engine,
         )
 
         # Configurar dry-run
@@ -423,7 +445,7 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                 click.echo("DRY-RUN activado (no se ejecutarán cambios reales)", err=True)
             click.echo(err=True)
 
-        # Crear agent loop (v3-M1: while True + timeout total)
+        # Crear agent loop (v3-M1: while True + timeout, v4-A1: hooks, v4-A2: guardrails, v4-A3: skills)
         loop = AgentLoop(
             llm,
             engine,
@@ -434,6 +456,10 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
             context_manager=context_mgr,
             cost_tracker=cost_tracker,
             timeout=kwargs.get("timeout"),  # v3: total elapsed time watchdog
+            hook_executor=hook_executor,
+            guardrails=guardrails_engine,
+            skills_loader=skills_loader,
+            memory=memory,
         )
 
         # Ejecutar
@@ -618,6 +644,129 @@ def agents(config: Path | None) -> None:
 
     click.echo(f"\n  Uso: architect run \"<tarea>\" -a <nombre-agente>")
     click.echo(f"  Sin -a → usa 'build' por defecto")
+
+
+@main.group()
+def skill() -> None:
+    """Gestionar skills del proyecto."""
+    pass
+
+
+@skill.command("install")
+@click.argument("source")
+def skill_install(source: str) -> None:
+    """Instala una skill desde GitHub. Formato: user/repo/path/to/skill."""
+    import os
+
+    installer = SkillInstaller(os.getcwd())
+    if installer.install_from_github(source):
+        click.echo(f"Skill instalada desde {source}")
+    else:
+        click.echo("Error instalando skill", err=True)
+        raise SystemExit(1)
+
+
+@skill.command("create")
+@click.argument("name")
+def skill_create(name: str) -> None:
+    """Crea una skill local con template."""
+    import os
+
+    installer = SkillInstaller(os.getcwd())
+    path = installer.create_local(name)
+    click.echo(f"Skill creada en {path}")
+
+
+@skill.command("list")
+def skill_list() -> None:
+    """Lista skills disponibles."""
+    import os
+
+    installer = SkillInstaller(os.getcwd())
+    skills = installer.list_installed()
+    if not skills:
+        click.echo("  No hay skills instaladas.")
+        return
+    for s in skills:
+        source_label = "local" if s["source"] == "local" else "installed"
+        click.echo(f"  {s['name']:20s} ({source_label})")
+
+
+@skill.command("remove")
+@click.argument("name")
+def skill_remove(name: str) -> None:
+    """Elimina una skill instalada."""
+    import os
+
+    installer = SkillInstaller(os.getcwd())
+    if installer.uninstall(name):
+        click.echo(f"Skill '{name}' eliminada")
+    else:
+        click.echo(f"Skill '{name}' no encontrada", err=True)
+
+
+def _build_hooks_registry(config) -> HooksRegistry:
+    """Construye un HooksRegistry a partir de la configuración (v4-A1).
+
+    Mapea las listas de HookItemConfig de la sección hooks del config YAML
+    a un HooksRegistry con HookConfig por cada HookEvent.
+    También migra post_edit (v3-M4 compat) a post_tool_use con matcher de edit tools.
+
+    Args:
+        config: AppConfig con la sección hooks.
+
+    Returns:
+        HooksRegistry listo para usar con HookExecutor.
+    """
+    hooks_dict: dict[HookEvent, list[HookConfig]] = {}
+
+    event_mapping = {
+        "pre_tool_use": HookEvent.PRE_TOOL_USE,
+        "post_tool_use": HookEvent.POST_TOOL_USE,
+        "pre_llm_call": HookEvent.PRE_LLM_CALL,
+        "post_llm_call": HookEvent.POST_LLM_CALL,
+        "session_start": HookEvent.SESSION_START,
+        "session_end": HookEvent.SESSION_END,
+        "on_error": HookEvent.ON_ERROR,
+        "agent_complete": HookEvent.AGENT_COMPLETE,
+        "budget_warning": HookEvent.BUDGET_WARNING,
+        "context_compress": HookEvent.CONTEXT_COMPRESS,
+    }
+
+    for config_attr, event in event_mapping.items():
+        items = getattr(config.hooks, config_attr, [])
+        if items:
+            hooks_dict[event] = [
+                HookConfig(
+                    command=h.command,
+                    matcher=h.matcher,
+                    file_patterns=h.file_patterns,
+                    timeout=h.timeout,
+                    is_async=h.async_,
+                    enabled=h.enabled,
+                    name=h.name,
+                )
+                for h in items
+            ]
+
+    # Backward compat: post_edit → post_tool_use con matcher de edit tools
+    if config.hooks.post_edit:
+        edit_hooks = [
+            HookConfig(
+                command=h.command,
+                matcher="write_file|edit_file|apply_patch",
+                file_patterns=h.file_patterns,
+                timeout=h.timeout,
+                is_async=h.async_,
+                enabled=h.enabled,
+                name=h.name or "post-edit-compat",
+            )
+            for h in config.hooks.post_edit
+        ]
+        existing = hooks_dict.get(HookEvent.POST_TOOL_USE, [])
+        hooks_dict[HookEvent.POST_TOOL_USE] = existing + edit_hooks
+
+    return HooksRegistry(hooks=hooks_dict)
 
 
 if __name__ == "__main__":
