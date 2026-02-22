@@ -314,12 +314,13 @@ def test_apply_cli_overrides():
     else:
         fail("no_stream", f"got {result}")
 
-    # 4.5 timeout override
+    # 4.5 timeout CLI flag does NOT override llm.timeout
+    # --timeout is the total session watchdog, not the per-request LLM timeout
     result = apply_cli_overrides({}, {"timeout": 120})
-    if result.get("llm", {}).get("timeout") == 120:
-        ok("timeout override → llm.timeout")
+    if "llm" not in result or "timeout" not in result.get("llm", {}):
+        ok("timeout CLI flag does NOT set llm.timeout (separate concerns)")
     else:
-        fail("timeout override", f"got {result}")
+        fail("timeout should not set llm.timeout", f"got {result}")
 
     # 4.6 workspace override
     result = apply_cli_overrides({}, {"workspace": "/tmp/ws"})

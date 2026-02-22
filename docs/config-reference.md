@@ -39,7 +39,7 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--model MODEL` | `llm.model` |
 | `--api-base URL` | `llm.api_base` |
 | `--api-key KEY` | `llm.api_key_env` → key directa |
-| `--timeout N` | `llm.timeout` (también se usa como `step_timeout`) |
+| `--timeout N` | Timeout total de sesión (watchdog). **No** sobreescribe `llm.timeout` (per-request) |
 | `--no-stream` | `llm.stream = False` |
 | `--workspace PATH` | `workspace.root` |
 | `--max-steps N` | `agent_config.max_steps` |

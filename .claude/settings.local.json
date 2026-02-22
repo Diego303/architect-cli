@@ -4,7 +4,8 @@
       "Bash(pip install:*)",
       "Bash(wc:*)",
       "Bash(tail:*)",
-      "Bash(python3.12:*)"
+      "Bash(python3.12:*)",
+      "Bash(curl:*)"
     ]
   }
 }

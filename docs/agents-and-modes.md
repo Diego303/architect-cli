@@ -190,7 +190,12 @@ Agente build (+ todo lo anterior):
   ✓ run_command     — ejecutar comandos del sistema (F13)
 
 Agentes custom: definidos explícitamente en allowed_tools
+
+MCP tools (auto-inyectadas a partir de v0.16.2):
+  ✓ mcp_{servidor}_{tool}  — descubiertas automáticamente de los servidores MCP
 ```
+
+**Nota sobre MCP tools**: Las tools MCP descubiertas se inyectan automáticamente en `allowed_tools` del agente activo. No es necesario listarlas manualmente. Si el agente tiene `allowed_tools` explícito, las tools MCP se añaden al final.
 
 ---
 

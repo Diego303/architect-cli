@@ -85,6 +85,9 @@ class ToolRegistry:
     def get_schemas(self, allowed: list[str] | None = None) -> list[dict[str, Any]]:
         """Obtiene los JSON schemas de tools para el LLM.
 
+        Silently skips tool names that are not registered (e.g., run_command
+        when --no-commands is used, or MCP tools whose server is down).
+
         Args:
             allowed: Lista de nombres de tools permitidas, o None para todas
 
@@ -105,7 +108,10 @@ class ToolRegistry:
                 ...
             ]
         """
-        tools = self.filter_by_names(allowed) if allowed else self.list_all()
+        if allowed:
+            tools = [self._tools[name] for name in allowed if name in self._tools]
+        else:
+            tools = self.list_all()
         return [tool.get_schema() for tool in tools]
 
     def filter_by_names(self, names: list[str]) -> list[BaseTool]:

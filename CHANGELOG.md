@@ -7,6 +7,31 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [0.16.2] - 2026-02-23
+
+### QA Round 2 — Testing Real End-to-End y Bugfixes Críticos
+
+QA exhaustivo con ejecuciones reales contra LiteLLM proxy y servidores MCP. 5 bugs encontrados y corregidos. 12 tests de integración ejecutados.
+
+#### Corregido
+
+- **[CRITICAL] `--show-costs` no mostraba costes en modo streaming** — `completion_stream()` no pasaba `stream_options={"include_usage": True}` a LiteLLM. Sin esto, las APIs OpenAI-compatible no devuelven datos de uso de tokens en streaming, por lo que `response.usage=None` y el cost tracker nunca registraba datos. Añadido `stream_options` + fallback `_estimate_streaming_usage()` que usa `litellm.token_counter()` cuando el provider no devuelve usage. (`src/architect/llm/adapter.py`)
+
+- **[CRITICAL] `--mode yolo` seguía pidiendo confirmación para comandos** — `_should_confirm_command()` devolvía `True` para comandos "dangerous" incluso en yolo. "Dangerous" solo significa "no reconocido en listas safe/dev", no realmente peligroso (la blocklist ya bloquea los peligrosos). Ahora yolo nunca pide confirmación, alineado con la documentación. (`src/architect/execution/engine.py`)
+
+- **[CRITICAL] MCP tools descubiertas pero no expuestas al LLM** — Los agentes con `allowed_tools` explícito (como build) filtraban las MCP tools al construir los schemas para el LLM. Las tools se registraban en el ToolRegistry pero nunca se enviaban al modelo. Ahora se inyectan los nombres de MCP tools en `allowed_tools` tras la resolución del agente. (`src/architect/cli.py`)
+
+- **[MEDIUM] `--timeout` CLI sobreescribía `llm.timeout` per-request** — `apply_cli_overrides()` mapeaba el flag `--timeout` (timeout total de sesión) también a `llm.timeout` (timeout per-request). Si pasabas `--timeout 10` para limitar la sesión, también limitabas cada llamada individual al LLM a 10s. Separados los dos conceptos. (`src/architect/config/loader.py`)
+
+- **[MEDIUM] `get_schemas()` crasheaba si una tool de `allowed_tools` no estaba registrada** — `filter_by_names()` lanzaba `ToolNotFoundError` si un nombre no existía en el registry. Esto crasheaba con `--no-commands` (run_command no registrada pero en `allowed_tools` del build agent) o si un servidor MCP caía. Ahora hace skip defensivo. (`src/architect/tools/registry.py`)
+
+#### Modificado
+
+- `scripts/test_config_loader.py` — test de timeout actualizado para reflejar la separación de `--timeout` CLI vs `llm.timeout`
+- Documentación actualizada en `docs/` para reflejar el comportamiento real post-fixes
+
+---
+
 ## [0.16.1] - 2026-02-22
 
 ### QA Phase A — Corrección de Bugs y Alineación de Tests

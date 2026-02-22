@@ -45,7 +45,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.16.1
+architect --version   # architect, version 0.16.2
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -354,15 +354,17 @@ architect run "PROMPT" --model ollama/codellama --api-base http://localhost:1143
 ### Timeout y reintentos
 
 ```bash
-# Timeout de 120 segundos por llamada al LLM (y por step)
+# Timeout de 120 segundos para la SESIÓN COMPLETA (watchdog)
 architect run "PROMPT" --timeout 120
 
-# Tareas largas: aumentar timeout
+# Tareas largas: aumentar timeout de sesión
 architect run "analiza todo el código fuente del repositorio" -a resume --timeout 300
 
 # Tareas rápidas en CI: timeout corto para fallar pronto
 architect run "resume README" -a resume --timeout 30
 ```
+
+**Nota**: `--timeout` controla el timeout **total de la sesión** (watchdog), no el timeout por llamada individual al LLM. El timeout per-request se configura en el YAML con `llm.timeout` (default: 60s). Esto permite tener sesiones largas (`--timeout 300`) sin que cada llamada al LLM tenga un timeout excesivo.
 
 ---
 
@@ -528,6 +530,8 @@ architect agents -c config.yaml
 ```
 
 Las tools MCP reciben el nombre `mcp_{servidor}_{nombre_tool}`. Con `parallel_tools=true`, las tool calls MCP independientes se ejecutan en paralelo, lo que es especialmente útil dado que son llamadas de red.
+
+**Auto-inyección en `allowed_tools`**: A partir de v0.16.2, las tools MCP descubiertas se inyectan automáticamente en el `allowed_tools` del agente activo. No necesitas listarlas manualmente en la configuración del agente — basta con configurar los servidores MCP y las tools estarán disponibles para cualquier agente.
 
 ---
 
@@ -872,10 +876,11 @@ El `BUILD_PROMPT` instruye al agente a usar `run_command` para verificar su prop
 |------|----------|-------------------------------------|------------------------|
 | `safe` | `ls`, `cat`, `git status`, `git log`, `grep`, `python --version` | No | No |
 | `dev` | `pytest`, `mypy`, `ruff`, `make`, `npm run test`, `cargo build` | **Sí** | No |
-| `dangerous` | Cualquier otro comando no reconocido | **Sí** | **Sí** |
+| `dangerous` | Cualquier otro comando no reconocido | **Sí** | No |
 
 ```bash
-# Con --mode yolo: pytest, mypy, ruff se ejecutan sin confirmación
+# Con --mode yolo: TODOS los comandos se ejecutan sin confirmación
+# (la seguridad contra destructivos la garantiza la blocklist — Capa 1)
 # Con --mode confirm-sensitive: solo comandos 'dev' y 'dangerous' piden confirmación
 architect run "crea tests y verifica que pasan" -a build --allow-commands --mode yolo
 ```
@@ -923,7 +928,7 @@ A partir de v0.14.0, architect registra el coste de cada llamada al LLM y puede 
 ### Ver el coste de una ejecución
 
 ```bash
-# Mostrar resumen al terminar
+# Mostrar resumen al terminar (funciona con streaming y sin streaming)
 architect run "PROMPT" -a build --show-costs
 
 # También se activa con -v (verbose)
@@ -932,6 +937,8 @@ architect run "PROMPT" -a build -v
 # Output de ejemplo:
 # 💰 Coste: $0.0042 (12,450 in / 3,200 out / 500 cached)
 ```
+
+A partir de v0.16.2, `--show-costs` funciona correctamente tanto en modo streaming (default) como sin streaming (`--no-stream` o `--json`). En streaming, se solicita `stream_options: {include_usage: true}` al provider para obtener el uso real de tokens; si el provider no lo soporta, se estima el uso con `litellm.token_counter`.
 
 ### Presupuesto máximo
 
@@ -1630,7 +1637,7 @@ LLM
   --api-base URL            URL base de la API (Proxy, Ollama, custom)
   --api-key KEY             API key directa (mejor usar env var)
   --no-stream               Esperar respuesta completa (sin streaming)
-  --timeout N               Timeout en segundos por llamada al LLM
+  --timeout N               Timeout total de sesión en segundos (watchdog)
 
 Output
   --json                    Output JSON en stdout (desactiva streaming)

@@ -269,9 +269,9 @@ La sensibilidad de `run_command` no es estática (`tool.sensitive`). `ExecutionE
 |---------------|--------|---------------------|---------------|
 | `safe` | No | No | Sí |
 | `dev` | No | **Sí** | Sí |
-| `dangerous` | **Sí** | **Sí** | Sí |
+| `dangerous` | No | **Sí** | Sí |
 
-El modo `yolo` solo confirma comandos `dangerous` (no `safe` ni `dev`). Esto permite que `pytest`, `mypy`, `ruff` etc. se ejecuten sin interrupciones en modo `yolo`.
+El modo `yolo` **nunca** confirma ningún comando (ni `safe`, ni `dev`, ni `dangerous`). La seguridad contra comandos destructivos se garantiza exclusivamente mediante la Capa 1 (blocklist), que bloquea siempre independientemente del modo de confirmación.
 
 ### `allowed_only`
 
@@ -325,7 +325,7 @@ class ToolRegistry:
     get_schemas(allowed=None) -> list[dict]
     # allowed=None → schemas de todas las tools
     # allowed=["read_file","list_files"] → solo esas dos
-    # Lanza ToolNotFoundError si algún nombre no existe
+    # Nombres no encontrados se ignoran silenciosamente (no lanza error)
 
     filter_by_names(names) -> list[BaseTool]
     has_tool(name) -> bool
@@ -472,7 +472,7 @@ Sensibilidad por defecto de cada tool:
 | Todas las tools MCP | **Sí** | **Sí** |
 | `run_command` (safe) | Dinámico | No |
 | `run_command` (dev) | Dinámico | **Sí** |
-| `run_command` (dangerous) | Dinámico | **Sí** (y también en `yolo`) |
+| `run_command` (dangerous) | Dinámico | **Sí** |
 
 Para `run_command`, `ExecutionEngine` llama a `_should_confirm_command()` que consulta `tool.classify_sensitivity(command)` en lugar de usar el atributo estático `tool.sensitive`.
 
@@ -588,6 +588,19 @@ El generador de `args_model` traduce tipos JSON Schema a Python:
 
 Campos requeridos → `(type, ...)` (Pydantic required).
 Campos opcionales → `(type | None, None)` (Pydantic optional con default None).
+
+### Auto-inyección de MCP tools en `allowed_tools`
+
+A partir de v0.16.2, las tools MCP descubiertas se inyectan automáticamente en el `allowed_tools` del agente activo. Esto resuelve el problema de que un agente con `allowed_tools` explícito (como `build`) filtraba las tools MCP porque no estaban en su lista.
+
+```python
+# En cli.py, después de resolver el agent_config:
+if agent_config.allowed_tools:
+    mcp_tool_names = [t.name for t in registry.list_all() if t.name.startswith("mcp_")]
+    agent_config.allowed_tools.extend(mcp_tool_names)
+```
+
+Esto significa que un agente `build` con `allowed_tools: [read_file, write_file, ...]` automáticamente también tendrá acceso a `mcp_github_create_pr`, `mcp_database_query`, etc. sin necesidad de configurarlos manualmente.
 
 ---
 

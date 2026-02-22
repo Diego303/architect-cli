@@ -118,8 +118,10 @@ def apply_cli_overrides(config_dict: dict[str, Any], cli_args: dict[str, Any]) -
     if cli_args.get("no_stream") is not None:
         overrides.setdefault("llm", {})["stream"] = not cli_args["no_stream"]
 
-    if cli_args.get("timeout"):
-        overrides.setdefault("llm", {})["timeout"] = cli_args["timeout"]
+    # NOTA: --timeout de la CLI es el timeout TOTAL de la sesión (watchdog),
+    # NO el timeout per-request del LLM. El timeout per-request se configura
+    # en el YAML (llm.timeout, default 60s). No aplicar aquí para evitar
+    # que un --timeout bajo mate las llamadas individuales al LLM.
 
     # Workspace overrides
     if cli_args.get("workspace"):

@@ -1,6 +1,6 @@
 # Testing — Resumen completo de cobertura
 
-Documento actualizado el 2026-02-22. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.16.1.
+Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.16.2.
 
 ## Resultado global
 

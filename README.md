@@ -167,7 +167,7 @@ agents:
 |------|---------------|
 | `confirm-all` | Toda acción requiere confirmación interactiva |
 | `confirm-sensitive` | Solo acciones que modifican el sistema (write, delete) |
-| `yolo` | Ejecución completamente automática (para CI/scripts) |
+| `yolo` | Sin confirmaciones — ni tools ni comandos (para CI/scripts). La seguridad se garantiza por la blocklist de comandos destructivos |
 
 > En entornos sin TTY (`--mode confirm-sensitive` en CI), el sistema lanza un error claro. Usa `--mode yolo` o `--dry-run` en pipelines.
 
@@ -476,7 +476,7 @@ costs:
 architect run "..." --budget 1.0
 ```
 
-El coste acumulado aparece en el output `--json` bajo `costs`. Cuando se supera el presupuesto, el agente recibe una instrucción de cierre y hace un último resumen antes de terminar (`stop_reason: "budget_exceeded"`).
+El coste acumulado aparece en el output `--json` bajo `costs` y con `--show-costs` al final de la ejecución (funciona tanto en modo streaming como sin streaming). Cuando se supera el presupuesto, el agente recibe una instrucción de cierre y hace un último resumen antes de terminar (`stop_reason: "budget_exceeded"`).
 
 ---
 
@@ -496,7 +496,7 @@ mcp:
       token_env: DB_TOKEN
 ```
 
-Las tools MCP se descubren automáticamente al iniciar y son indistinguibles de las tools locales para el agente. Si un servidor no está disponible, el agente continúa sin esas tools.
+Las tools MCP se descubren automáticamente al iniciar y se inyectan en el `allowed_tools` del agente activo (no necesitas listarlas en la config del agente). Son indistinguibles de las tools locales para el LLM. Si un servidor no está disponible, el agente continúa sin esas tools.
 
 ```bash
 # Con MCP
@@ -559,7 +559,7 @@ hooks:
 
 - **Path traversal**: todas las operaciones de archivos están confinadas al `workspace.root`. Intentos de acceder a `../../etc/passwd` son bloqueados.
 - **delete_file** requiere `workspace.allow_delete: true` explícito en config.
-- **run_command**: lista de comandos bloqueados (`rm -rf`, `dd`, `mkfs`, etc.) y whitelist de comandos de desarrollo seguros. El directorio de trabajo está siempre confinado al workspace.
+- **run_command**: blocklist de comandos destructivos (`rm -rf /`, `sudo`, `dd`, `mkfs`, `curl|bash`, etc.) activa siempre, independientemente del modo de confirmación. Clasificación dinámica (safe/dev/dangerous) para políticas de confirmación en modos `confirm-sensitive` y `confirm-all`. El directorio de trabajo está siempre confinado al workspace.
 - **Tools MCP** son marcadas como sensibles por defecto (requieren confirmación en `confirm-sensitive`).
 - **API keys** nunca se loggean, solo el nombre de la variable de entorno.
 
@@ -659,3 +659,4 @@ architect run PROMPT
 | v0.15.3 | **Fix pipeline structlog** — human logging funciona sin `--log-file`; `wrap_for_formatter` siempre activo |
 | v0.16.0 | **v4 Phase A** — hooks lifecycle (10 eventos, exit code protocol), guardrails deterministas, skills ecosystem (.architect.md), memoria procedural |
 | v0.16.1 | **QA Phase A** — 228 verificaciones, 5 bugs corregidos (ToolResult import, CostTracker.total, YAML off, schema shadowing), 24 scripts alineados |
+| v0.16.2 | **QA2** — `--show-costs` funciona con streaming, `--mode yolo` nunca pide confirmación (ni para `dangerous`), `--timeout` es watchdog de sesión (no sobreescribe `llm.timeout`), MCP tools auto-inyectadas en `allowed_tools`, `get_schemas` defensivo |
