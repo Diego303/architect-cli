@@ -3,7 +3,7 @@
 Tests de la Fase 11 — Optimización de Tokens y Parallel Tool Calls.
 
 Cubre:
-1.  Importaciones y versión 0.16.1
+1.  Importaciones y versión
 2.  ContextConfig — defaults y validación
 3.  ContextConfig en AppConfig
 4.  ContextManager.truncate_tool_result — resultado corto (sin truncar)
@@ -61,10 +61,12 @@ def skip(msg: str) -> None:
 
 # ── Test 1: Importaciones y versión ──────────────────────────────────────────
 
-header("Test 1 — Importaciones y versión 0.16.1")
+header("Test 1 — Importaciones y versión")
 
 import architect
-assert architect.__version__ == "0.16.1", f"Versión incorrecta: {architect.__version__}"
+# Solo verificar que __version__ existe y es un string no vacío
+assert isinstance(architect.__version__, str) and architect.__version__, \
+    f"__version__ inválido: {architect.__version__}"
 ok(f"__version__ = {architect.__version__}")
 
 from architect.config.schema import ContextConfig, AppConfig
@@ -640,23 +642,23 @@ header("Test 22 — Versión consistente en 4 sitios")
 import subprocess
 
 # 1. __init__.py
-assert architect.__version__ == "0.16.1"
-ok(f"src/architect/__init__.py: {architect.__version__}")
+expected = architect.__version__
+ok(f"src/architect/__init__.py: {expected}")
 
 # 2. pyproject.toml
 import tomllib
 pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
 with open(pyproject_path, "rb") as f:
     pyproject = tomllib.load(f)
-assert pyproject["project"]["version"] == "0.16.1", \
-    f"pyproject.toml: {pyproject['project']['version']}"
+assert pyproject["project"]["version"] == expected, \
+    f"pyproject.toml: {pyproject['project']['version']} != {expected}"
 ok(f"pyproject.toml: {pyproject['project']['version']}")
 
 # 3. cli.py: _VERSION constant
 cli_path = Path(__file__).parent.parent / "src" / "architect" / "cli.py"
 cli_content = cli_path.read_text()
-assert '_VERSION = "0.16.1"' in cli_content, "cli.py _VERSION no es 0.16.1"
-ok("cli.py: _VERSION = '0.16.1'")
+assert f'_VERSION = "{expected}"' in cli_content, f"cli.py _VERSION no es {expected}"
+ok(f"cli.py: _VERSION = '{expected}'")
 
 # 4. cli.py: version_option usa _VERSION
 assert "version=_VERSION" in cli_content, "cli.py version_option no usa _VERSION"
@@ -678,5 +680,5 @@ print("    ✓ ContextManager.maybe_compress (con mock LLM)")
 print("    ✓ ContextBuilder integra context_manager")
 print("    ✓ Parallel tool calls: lógica de decisión")
 print("    ✓ Parallel tool calls: orden preservado")
-print("    ✓ Versión 0.16.1 consistente en 4 sitios")
+print("    ✓ Versión consistente en 4 sitios")
 print()

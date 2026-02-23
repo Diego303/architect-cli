@@ -17,13 +17,16 @@
 | [`config-reference.md`](config-reference.md) | Schema completo de configuración, precedencia, variables de entorno |
 | [`logging.md`](logging.md) | **Sistema de logging**: 3 pipelines, nivel HUMAN, iconos, HumanFormatter, structlog |
 | [`ai-guide.md`](ai-guide.md) | Guía para IA: invariantes críticos, patrones, dónde añadir cosas, trampas |
-| [`testing.md`](testing.md) | Mapa de tests: ~713 tests en 29 archivos, cobertura por módulo |
+| [`testing.md`](testing.md) | Mapa de tests: ~817+ tests en 30+ archivos, cobertura por módulo |
 | [`containers.md`](containers.md) | **Contenedores**: Containerfiles (root, non-root, OpenShift), Kubernetes Deployments, Docker, configuración para CI/CD |
 | [`casos-de-uso.md`](casos-de-uso.md) | **Casos de uso**: integración en desarrollo diario, CI/CD, QA, DevOps, AIOps, MLOps, arquitecturas MCP, pipelines multi-agente |
 | [`fast-usage.md`](fast-usage.md) | **Guía rápida**: instalación, configuración mínima, comandos más útiles y referencia de flags |
 | [`mcp-server.md`](mcp-server.md) | **MCP Server**: cómo crear un servidor MCP que exponga architect como herramienta remota (server.py + tools.py completos) |
 | [`good-practices.md`](good-practices.md) | **Buenas prácticas**: prompts, agentes, edición, costes, hooks lifecycle, guardrails, skills, memoria, auto-evaluación, CI/CD, errores comunes |
 | [`security.md`](security.md) | **Modelo de seguridad**: 19 capas defensivas, modelo de amenazas, path traversal, command security, prompt injection, hardening |
+| [`sessions.md`](sessions.md) | **Sessions**: persistencia y resume — guardar, listar, reanudar y limpiar sesiones entre ejecuciones |
+| [`reports.md`](reports.md) | **Reports**: reportes de ejecución en JSON, Markdown y GitHub PR comment para CI/CD |
+| [`dryrun.md`](dryrun.md) | **Dry Run**: simulación de ejecución — DryRunTracker, WRITE_TOOLS/READ_TOOLS, plan de acciones |
 
 ---
 
@@ -43,6 +46,8 @@ architect run "refactoriza main.py" -a build --mode yolo
          ├─ CostTracker           seguimiento de costes + budget enforcement
          ├─ SkillsLoader          .architect.md + skills → system prompt context
          ├─ ProceduralMemory      correcciones del usuario → .architect/memory.md
+         ├─ SessionManager        persistencia de sesiones en .architect/sessions/
+         ├─ DryRunTracker         registro de acciones en modo --dry-run
          │
          ├─ AgentLoop (build por defecto)        while True + safety nets
          │       │
@@ -58,15 +63,19 @@ architect run "refactoriza main.py" -a build --mode yolo
          │       ├─ HumanLog              → eventos HUMAN (25) a stderr (pipeline separado)
          │       ├─ ctx.append_results()  → siguiente iteración
          │       ├─ context_mgr.prune()   → truncar/resumir/ventana
+         │       ├─ session_mgr.save()    → guardar estado después de cada paso (B1)
          │       └─ _graceful_close()     → ultima llamada al LLM sin tools (resumen)
          │
          └─ SelfEvaluator (opcional, --self-eval)
                  └─ evaluate_basic() / evaluate_full()
+
+         └─ ReportGenerator (opcional, --report json|markdown|github)
+                 └─ to_json() / to_markdown() / to_github_pr_comment()
 ```
 
 **Stack**: Python 3.12+, Click, Pydantic v2, LiteLLM, httpx, structlog, tenacity.
 
-**Versión actual**: 0.16.2
+**Versión actual**: 0.17.0
 
 ---
 
@@ -86,3 +95,4 @@ architect run "refactoriza main.py" -a build --mode yolo
 | v0.16.0 | **v4 Phase A**: `HookExecutor` (10 lifecycle events, exit code protocol), `GuardrailsEngine` (protected files, blocked commands, edit limits, quality gates), `SkillsLoader` + `SkillInstaller` (.architect.md, SKILL.md, glob activation), `ProceduralMemory` (correction detection, persistence) |
 | v0.16.1 | QA Phase A: 5 bug fixes, 116 nuevos tests (713 total), scripts actualizados |
 | v0.16.2 | QA2: streaming costs fix, yolo mode fix, timeout separation, MCP tools auto-injection, defensive get_schemas |
+| v0.17.0 | **v4 Phase B**: `SessionManager` (save/load/resume/cleanup), `ReportGenerator` (JSON/Markdown/GitHub PR), `DryRunTracker` (plan de acciones), CI/CD flags (`--report`, `--session`, `--context-git-diff`, `--exit-code-on-partial`), exit codes (0-5, 130), nuevos comandos (`sessions`, `resume`, `cleanup`) |

@@ -6,7 +6,9 @@ v3: Sin agente explícito → usa 'build' directamente (no más MixedModeRunner 
 """
 
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +32,12 @@ from .core.hooks import HookConfig, HookEvent, HookExecutor, HooksRegistry
 from .core.guardrails import GuardrailsEngine
 # v4-A3: Skills ecosystem
 from .skills import ProceduralMemory, SkillInstaller, SkillsLoader
+# v4-B1: Sessions
+from .features.sessions import SessionManager, generate_session_id
+# v4-B2: Reports
+from .features.report import ExecutionReport, ReportGenerator, collect_git_diff
+# v4-B4: Dry Run Tracker
+from .features.dryrun import DryRunTracker
 
 # Códigos de salida
 EXIT_SUCCESS = 0
@@ -41,7 +49,7 @@ EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
 # Versión actual
-_VERSION = "0.16.2"
+_VERSION = "0.17.0"
 
 
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
@@ -221,6 +229,46 @@ def main() -> None:
     default=False,
     help="Limpiar cache local de LLM antes de ejecutar",
 )
+@click.option(
+    "--report",
+    "report_format",
+    type=click.Choice(["json", "markdown", "github"]),
+    default=None,
+    help="Formato del reporte de ejecución",
+)
+@click.option(
+    "--report-file",
+    "report_file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Archivo de salida para el reporte",
+)
+@click.option(
+    "--context-git-diff",
+    "git_diff_ref",
+    default=None,
+    help="Inyectar diff de git como contexto (ej: origin/main)",
+)
+@click.option(
+    "--session",
+    "session_id",
+    default=None,
+    help="ID de sesión para resume (reanuda sesión previa)",
+)
+@click.option(
+    "--confirm-mode",
+    "confirm_mode",
+    type=click.Choice(["yolo", "confirm-sensitive", "confirm-all"]),
+    default=None,
+    help="Modo de confirmación (alias CI-friendly de --mode)",
+)
+@click.option(
+    "--exit-code-on-partial",
+    "exit_code_on_partial",
+    type=int,
+    default=None,
+    help="Exit code si el resultado es parcial (default: 2)",
+)
 def run(prompt: str, **kwargs) -> None:  # type: ignore
     """Ejecuta una tarea usando un agente de IA.
 
@@ -354,6 +402,37 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         if config.memory.enabled:
             memory = ProceduralMemory(str(Path(config.workspace.root).resolve()))
 
+        # v4-B1: Crear SessionManager si auto_save está habilitado
+        session_manager: SessionManager | None = None
+        if config.sessions.auto_save:
+            session_manager = SessionManager(str(Path(config.workspace.root).resolve()))
+
+        # v4-B1: Si se proporcionó un session_id, cargar la sesión previa
+        resume_session = None
+        session_id = kwargs.get("session_id")
+        if session_id and session_manager:
+            resume_session = session_manager.load(session_id)
+            if resume_session is None:
+                click.echo(f"Error: Sesión '{session_id}' no encontrada", err=True)
+                sys.exit(EXIT_CONFIG_ERROR)
+            if not kwargs.get("quiet"):
+                click.echo(
+                    f"Reanudando sesión {session_id} "
+                    f"(step {resume_session.steps_completed}, "
+                    f"status={resume_session.status})",
+                    err=True,
+                )
+
+        # v4-B3: Inyectar git diff como contexto si se pidió
+        git_diff_context: str | None = None
+        if kwargs.get("git_diff_ref"):
+            git_diff_context = _get_git_diff_context(kwargs["git_diff_ref"])
+            if git_diff_context and not kwargs.get("quiet"):
+                click.echo(
+                    f"Contexto de git diff inyectado (vs {kwargs['git_diff_ref']})",
+                    err=True,
+                )
+
         # v4-A1: Crear HookExecutor con el sistema de hooks completo
         hook_executor: HookExecutor | None = None
         hooks_registry = _build_hooks_registry(config)
@@ -400,8 +479,10 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         ctx = ContextBuilder(repo_index=repo_index, context_manager=context_mgr)
 
         # Resolver agente con overrides CLI
+        # --confirm-mode es alias CI-friendly de --mode; --confirm-mode tiene prioridad
+        effective_mode = kwargs.get("confirm_mode") or kwargs.get("mode")
         cli_overrides = {
-            "mode": kwargs.get("mode"),
+            "mode": effective_mode,
             "max_steps": kwargs.get("max_steps"),
         }
 
@@ -456,7 +537,12 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                 click.echo("DRY-RUN activado (no se ejecutarán cambios reales)", err=True)
             click.echo(err=True)
 
-        # Crear agent loop (v3-M1: while True + timeout, v4-A1: hooks, v4-A2: guardrails, v4-A3: skills)
+        # v4-B4: Crear DryRunTracker si --dry-run
+        dry_run_tracker: DryRunTracker | None = None
+        if kwargs.get("dry_run"):
+            dry_run_tracker = DryRunTracker()
+
+        # Crear agent loop (v3-M1: while True + timeout, v4-A1: hooks, v4-A2: guardrails, v4-A3: skills, v4-B1: sessions)
         loop = AgentLoop(
             llm,
             engine,
@@ -471,10 +557,26 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
             guardrails=guardrails_engine,
             skills_loader=skills_loader,
             memory=memory,
+            session_manager=session_manager,
+            session_id=session_id,
+            dry_run_tracker=dry_run_tracker,
         )
 
+        # v4-B1/B3: Enriquecer prompt con contexto adicional
+        effective_prompt = prompt
+        if resume_session:
+            effective_prompt = (
+                f"Estás reanudando una sesión interrumpida.\n"
+                f"Tarea original: {resume_session.task}\n"
+                f"Steps completados: {resume_session.steps_completed}\n"
+                f"Archivos modificados: {', '.join(resume_session.files_modified) or 'ninguno'}\n\n"
+                f"Continúa la tarea desde donde se quedó."
+            )
+        if git_diff_context:
+            effective_prompt = effective_prompt + "\n\n" + git_diff_context
+
         # Ejecutar
-        state = loop.run(prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
+        state = loop.run(effective_prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
 
         # run_fn para evaluate_full
         def run_fn(correction_prompt: str):  # type: ignore[misc]
@@ -520,6 +622,77 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                         err=True,
                     )
 
+        # v4-B4: Mostrar resumen de dry-run si aplica
+        if dry_run_tracker:
+            if not kwargs.get("quiet"):
+                click.echo("\n" + dry_run_tracker.get_plan_summary(), err=True)
+
+        # v4-B2: Generar reporte si se pidió
+        report_format = kwargs.get("report_format")
+        if report_format:
+            duration = time.time() - state.start_time
+
+            # Recopilar archivos modificados y timeline de los StepResults
+            report_files: list[dict] = []
+            report_timeline: list[dict] = []
+            report_errors: list[str] = []
+            seen_paths: set[str] = set()
+            for sr in state.steps:
+                for tc in sr.tool_calls_made:
+                    # Timeline entry (duration = time from tool execution to step completion)
+                    tool_duration = round(abs(sr.timestamp - tc.timestamp), 2)
+                    report_timeline.append({
+                        "step": sr.step_number,
+                        "tool": tc.tool_name,
+                        "duration": tool_duration,
+                    })
+                    # Files modified
+                    if tc.tool_name in ("write_file", "edit_file", "apply_patch", "delete_file"):
+                        path = tc.args.get("path", "")
+                        if path and path not in seen_paths:
+                            action = "deleted" if tc.tool_name == "delete_file" else "modified"
+                            if tc.tool_name == "write_file":
+                                action = "created"
+                            report_files.append({"path": path, "action": action})
+                            seen_paths.add(path)
+                    # Errors
+                    if not tc.result.success and tc.result.error:
+                        report_errors.append(
+                            f"Step {sr.step_number}, {tc.tool_name}: {tc.result.error}"
+                        )
+
+            exec_report = ExecutionReport(
+                task=prompt,
+                agent=agent_name,
+                model=config.llm.model,
+                status=state.status,
+                duration_seconds=round(duration, 2),
+                steps=state.current_step,
+                total_cost=(
+                    cost_tracker.total_cost_usd if cost_tracker and cost_tracker.has_data() else 0.0
+                ),
+                files_modified=report_files,
+                errors=report_errors,
+                timeline=report_timeline,
+                stop_reason=state.stop_reason.value if state.stop_reason else None,
+                git_diff=collect_git_diff(str(Path(config.workspace.root).resolve())),
+            )
+
+            gen = ReportGenerator(exec_report)
+            report_content = {
+                "json": gen.to_json,
+                "markdown": gen.to_markdown,
+                "github": gen.to_github_pr_comment,
+            }[report_format]()
+
+            report_file = kwargs.get("report_file")
+            if report_file:
+                Path(report_file).write_text(report_content, encoding="utf-8")
+                if not kwargs.get("quiet"):
+                    click.echo(f"Reporte guardado en {report_file}", err=True)
+            else:
+                click.echo(report_content, err=True)
+
         # Mostrar resumen de costes
         show_costs = kwargs.get("show_costs") or kwargs.get("verbose", 0) >= 1
         if show_costs and not kwargs.get("quiet") and cost_tracker and cost_tracker.has_data():
@@ -557,9 +730,13 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         if shutdown.should_stop:
             sys.exit(EXIT_INTERRUPTED)
 
+        # v4-B3: --exit-code-on-partial permite personalizar el código de salida
+        partial_code = kwargs.get("exit_code_on_partial")
+        if partial_code is None:
+            partial_code = EXIT_PARTIAL
         exit_code = {
             "success": EXIT_SUCCESS,
-            "partial": EXIT_PARTIAL,
+            "partial": partial_code,
             "failed": EXIT_FAILED,
         }.get(state.status, EXIT_FAILED)
         sys.exit(exit_code)
@@ -714,6 +891,171 @@ def skill_remove(name: str) -> None:
         click.echo(f"Skill '{name}' eliminada")
     else:
         click.echo(f"Skill '{name}' no encontrada", err=True)
+
+
+# ── SESSION COMMANDS (v4-B1) ─────────────────────────────────────────────
+
+
+@main.command()
+@click.option(
+    "-c",
+    "--config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path al archivo de configuración YAML",
+)
+def sessions(config: Path | None) -> None:
+    """Lista sesiones guardadas."""
+    import os
+
+    try:
+        app_config = load_config(config_path=config)
+    except Exception:
+        app_config = None
+
+    workspace = str(Path(app_config.workspace.root).resolve()) if app_config else os.getcwd()
+    mgr = SessionManager(workspace)
+    session_list = mgr.list_sessions()
+
+    if not session_list:
+        click.echo("No hay sesiones guardadas.")
+        return
+
+    click.echo(f"Sesiones guardadas ({len(session_list)}):\n")
+    click.echo(f"  {'ID':<24s} {'Estado':<10s} {'Steps':<7s} {'Coste':<10s} Tarea")
+    click.echo(f"  {'─'*24} {'─'*10} {'─'*7} {'─'*10} {'─'*30}")
+    for s in session_list:
+        cost_str = f"${s['cost']:.4f}" if s["cost"] else "-"
+        click.echo(
+            f"  {s['id']:<24s} {s['status']:<10s} {s['steps']:<7d} {cost_str:<10s} {s['task']}"
+        )
+
+    click.echo(f"\nUsa 'architect run \"<tarea>\" --session <ID>' para reanudar.")
+
+
+@main.command()
+@click.argument("session_id")
+@click.option(
+    "-c",
+    "--config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path al archivo de configuración YAML",
+)
+def resume(session_id: str, config: Path | None) -> None:
+    """Reanuda una sesión interrumpida.
+
+    SESSION_ID: Identificador de la sesión a reanudar.
+    Se puede obtener con 'architect sessions'.
+    """
+    import os
+
+    try:
+        app_config = load_config(config_path=config)
+    except Exception:
+        app_config = None
+
+    workspace = str(Path(app_config.workspace.root).resolve()) if app_config else os.getcwd()
+    mgr = SessionManager(workspace)
+    session = mgr.load(session_id)
+
+    if session is None:
+        click.echo(f"Error: Sesión '{session_id}' no encontrada.", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    click.echo(f"Reanudando sesión: {session_id}")
+    click.echo(f"  Tarea: {session.task}")
+    click.echo(f"  Estado: {session.status}")
+    click.echo(f"  Steps: {session.steps_completed}")
+    click.echo(f"  Coste: ${session.total_cost:.4f}")
+    click.echo()
+
+    # Delegar al comando run con el session_id
+    # Esto es un shortcut — el usuario puede hacer lo mismo con:
+    #   architect run "<tarea>" --session <id>
+    from click.testing import CliRunner
+
+    runner = CliRunner()
+    args = ["run", session.task, "--session", session_id]
+    if config:
+        args.extend(["--config", str(config)])
+    result = runner.invoke(main, args, standalone_mode=False)
+    if isinstance(result, int):
+        sys.exit(result)
+    if result and hasattr(result, "exit_code"):
+        sys.exit(result.exit_code)
+
+
+@main.command()
+@click.option(
+    "--older-than",
+    "older_than_days",
+    default=7,
+    type=int,
+    help="Eliminar sesiones más antiguas que N días",
+)
+@click.option(
+    "-c",
+    "--config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path al archivo de configuración YAML",
+)
+def cleanup(older_than_days: int, config: Path | None) -> None:
+    """Limpia sesiones antiguas."""
+    import os
+
+    try:
+        app_config = load_config(config_path=config)
+    except Exception:
+        app_config = None
+
+    workspace = str(Path(app_config.workspace.root).resolve()) if app_config else os.getcwd()
+    mgr = SessionManager(workspace)
+    removed = mgr.cleanup(older_than_days=older_than_days)
+    click.echo(f"Sesiones eliminadas: {removed}")
+
+
+# ── HELPER FUNCTIONS (v4-B3) ────────────────────────────────────────────
+
+
+def _get_git_diff_context(ref: str) -> str | None:
+    """Obtiene el diff de git y lo formatea como contexto para el agente.
+
+    Args:
+        ref: Referencia git contra la que comparar (ej: origin/main).
+
+    Returns:
+        String con el diff formateado, o None si falla.
+    """
+    try:
+        stat_result = subprocess.run(
+            ["git", "diff", ref, "--stat"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        stat = stat_result.stdout
+
+        diff_result = subprocess.run(
+            ["git", "diff", ref],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        diff = diff_result.stdout
+
+        if not diff.strip():
+            return None
+
+        # Truncar si es muy largo
+        if len(diff) > 50000:
+            diff = diff[:50000] + "\n... (diff truncado)"
+
+        return (
+            f"## Cambios en este branch (vs {ref})\n\n"
+            f"### Resumen\n```\n{stat}\n```\n\n"
+            f"### Diff completo\n```diff\n{diff}\n```"
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
 
 
 def _build_hooks_registry(config) -> HooksRegistry:

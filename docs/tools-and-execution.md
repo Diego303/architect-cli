@@ -416,7 +416,10 @@ class ExecutionEngine:
         ✗ user cancela → return ToolResult(success=False, "Acción cancelada por usuario")
 
 6.  if dry_run:
+    → si dry_run_tracker: registrar acción (tool_name, args) en DryRunTracker
     → return ToolResult(success=True, "[DRY-RUN] Se ejecutaría: tool_name(args)")
+    Nota: solo tools de WRITE_TOOLS se registran en el tracker; READ_TOOLS se
+    ejecutan normalmente para que el agente pueda leer archivos y planificar.
 
 7.  tool.execute(**validated_args.model_dump())
     (tool.execute() no lanza — si hay excepción interna, la tool la captura)
@@ -645,7 +648,17 @@ ContextBuilder.append_tool_results(messages, [ToolCall(...)], [ToolResult(...)])
 
 El resultado de la tool (éxito o error) siempre vuelve al LLM como mensaje `tool`, incluyendo la salida de los hooks post-edición si aplican. El LLM decide qué hacer a continuación y puede auto-corregir errores detectados por los hooks.
 
-El pipeline completo con v4 Phase A:
+El pipeline completo con v4 Phase A + B:
 ```
-Guardrails (determinista) → Pre-hooks (shell) → Confirmación → Ejecución → Post-hooks → LLM
+Guardrails (determinista) → Pre-hooks (shell) → Confirmación → Dry-run check → Ejecución → Post-hooks → LLM
 ```
+
+### DryRunTracker (v4-B4)
+
+Cuando `--dry-run` está activo, las tools de escritura (`WRITE_TOOLS`: `write_file`, `edit_file`, `apply_patch`, `delete_file`, `run_command`) no se ejecutan. En su lugar:
+
+1. El `DryRunTracker` registra cada acción como `PlannedAction(tool_name, description, tool_input)`
+2. `_summarize_action(tool_name, tool_input)` genera una descripción legible
+3. Al final, `get_plan_summary()` genera el resumen completo de acciones planificadas
+
+Las tools de lectura (`READ_TOOLS`: `read_file`, `list_files`, `search_code`, `grep`, `find_files`) se ejecutan normalmente para que el agente pueda analizar el código y planificar.

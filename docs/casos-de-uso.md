@@ -1291,3 +1291,148 @@ hooks:
       file_patterns: ["*.py", "*.env", "*.yaml"]
       timeout: 5
 ```
+
+---
+
+## Sessions, Reports y Dry Run (v4-B)
+
+### Tareas largas con budget incremental
+
+Cuando una tarea es demasiado grande para un solo budget, usa sessions para continuar donde se quedó:
+
+```bash
+# Primera ejecución — se detiene por budget
+architect run "refactoriza toda la capa de datos" --mode yolo --budget 1.00
+
+# Ver sesiones
+architect sessions
+# 20260223-143022-a1b2   partial  15  $1.00   refactoriza toda la capa de datos
+
+# Continuar (restaura contexto completo: mensajes, archivos, coste)
+architect resume 20260223-143022-a1b2 --budget 2.00
+
+# Si se interrumpe por Ctrl+C, la sesión también se guarda
+# Continuar de nuevo
+architect resume 20260223-143022-a1b2 --budget 1.00
+```
+
+### Reportes en Pull Requests
+
+Genera reportes con secciones collapsible para GitHub:
+
+```yaml
+# .github/workflows/architect.yml
+name: AI Review with Report
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install
+        run: pip install git+https://github.com/Diego303/architect-cli.git@main
+
+      - name: AI Review con reporte
+        env:
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+        run: |
+          architect run "revisa los cambios del PR" \
+            --mode yolo --quiet \
+            --context-git-diff origin/${{ github.base_ref }} \
+            --report github --report-file pr-report.md \
+            --budget 1.00
+
+      - name: Publicar reporte
+        if: always()
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file pr-report.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+El reporte incluye:
+- Resumen: tarea, status, pasos, coste
+- Archivos modificados (collapsible)
+- Quality gates (si configurados)
+- Timeline de pasos (collapsible)
+- Git diff (collapsible)
+
+### Reportes JSON para CI pipelines
+
+```bash
+# GitLab CI — reporte como artefacto
+architect-audit:
+  script:
+    - architect run "auditoría de seguridad" \
+        --mode yolo --report json --report-file report.json \
+        --budget 0.50
+    - |
+      # Verificar resultado
+      STATUS=$(jq -r '.status' report.json)
+      FILES=$(jq '.files_modified | length' report.json)
+      echo "Status: $STATUS, Archivos: $FILES"
+  artifacts:
+    paths: [report.json]
+    expire_in: 1 week
+```
+
+### Dry Run para previsualizar cambios
+
+Antes de ejecutar una tarea grande en producción, previsualiza qué haría el agente:
+
+```bash
+# Ver qué haría sin ejecutar nada
+architect run "migra todos los tests de unittest a pytest" --dry-run
+
+# El agente lee archivos normalmente, pero las escrituras se simulan
+# Al final muestra un plan de acciones que ejecutaría:
+# Plan de acciones (dry-run):
+# 1. write_file → tests/test_auth.py
+# 2. edit_file → tests/test_utils.py
+# 3. run_command → pytest tests/ -x
+# ...
+
+# Si estás satisfecho con el plan, ejecutar de verdad
+architect run "migra todos los tests de unittest a pytest" --mode yolo
+```
+
+### CI con resume automático
+
+Pipeline que reintenta automáticamente si la ejecución queda parcial:
+
+```bash
+#!/bin/bash
+# scripts/ci-with-retry.sh
+
+architect run "$1" \
+  --mode yolo --quiet --json \
+  --budget 2.00 \
+  --exit-code-on-partial \
+  > result.json
+
+EXIT=$?
+if [ "$EXIT" -eq 2 ]; then
+  echo "Parcial — intentando reanudar..."
+  SESSION=$(jq -r '.session_id // empty' result.json)
+  if [ -n "$SESSION" ]; then
+    architect resume "$SESSION" --budget 1.00 --mode yolo --quiet --json > result2.json
+  fi
+fi
+```
+
+### Limpieza periódica de sesiones
+
+En CI, las sesiones se acumulan. Agrega limpieza periódica:
+
+```bash
+# Cron job semanal
+architect cleanup --older-than 7
+
+# O en el pipeline de CI
+architect cleanup --older-than 30
+```

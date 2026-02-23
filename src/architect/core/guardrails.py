@@ -33,6 +33,33 @@ __all__ = [
     "GuardrailsEngine",
 ]
 
+# Regex para detectar archivos destino de redirecciones shell
+# Captura: > file, >> file, >file, | tee file, | tee -a file
+_REDIRECT_RE = re.compile(
+    r">{1,2}\s*([^\s;|&]+)"        # > file o >> file
+    r"|"
+    r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"  # | tee file o | tee -a file
+)
+
+
+def _extract_redirect_targets(command: str) -> list[str]:
+    """Extrae los archivos destino de redirecciones shell.
+
+    Args:
+        command: Comando shell completo.
+
+    Returns:
+        Lista de paths de archivos a los que se redirige output.
+    """
+    targets: list[str] = []
+    for match in _REDIRECT_RE.finditer(command):
+        target = match.group(1) or match.group(2)
+        if target:
+            # Quitar comillas
+            target = target.strip("'\"")
+            targets.append(target)
+    return targets
+
 
 class GuardrailsEngine:
     """Evalúa guardrails antes de permitir acciones del agente.
@@ -84,6 +111,11 @@ class GuardrailsEngine:
     def check_command(self, command: str) -> tuple[bool, str]:
         """Verifica si un comando está bloqueado.
 
+        Comprueba dos cosas:
+        1. El comando contra la lista de blocked_commands (regex).
+        2. Si el comando redirige output a un archivo protegido
+           (shell redirection: >, >>, tee → protected_files).
+
         Args:
             command: Comando shell a verificar.
 
@@ -99,6 +131,26 @@ class GuardrailsEngine:
             except re.error:
                 self.log.warning("guardrail.invalid_regex", pattern=pattern)
                 continue
+
+        # Verificar que el comando no redirige output a archivos protegidos
+        if self.config.protected_files:
+            redirect_targets = _extract_redirect_targets(command)
+            for target in redirect_targets:
+                for pattern in self.config.protected_files:
+                    if fnmatch.fnmatch(target, pattern) or fnmatch.fnmatch(
+                        Path(target).name, pattern
+                    ):
+                        reason = (
+                            f"Comando bloqueado: intenta escribir en archivo protegido "
+                            f"'{target}' (patrón: {pattern})"
+                        )
+                        self.log.warning(
+                            "guardrail.command_redirect_blocked",
+                            command=command[:60],
+                            target=target,
+                            pattern=pattern,
+                        )
+                        return False, reason
 
         if (
             self.config.max_commands_executed is not None

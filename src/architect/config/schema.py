@@ -547,6 +547,27 @@ class SkillsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SessionsConfig(BaseModel):
+    """Configuración de persistencia de sesiones (v4-B1).
+
+    Controla si el agente guarda automáticamente el estado de cada sesión
+    para poder reanudarla después de una interrupción.
+    """
+
+    auto_save: bool = Field(
+        default=True,
+        description="Si True, guarda estado después de cada step automáticamente.",
+    )
+    cleanup_after_days: int = Field(
+        default=7,
+        ge=1,
+        le=365,
+        description="Días después de los cuales las sesiones se limpian automáticamente.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class AppConfig(BaseModel):
     """Configuración completa de la aplicación.
 
@@ -569,5 +590,6 @@ class AppConfig(BaseModel):
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)  # v4-A2
     memory: MemoryConfig = Field(default_factory=MemoryConfig)  # v4-A4
     skills: SkillsConfig = Field(default_factory=SkillsConfig)  # v4-A3
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)  # v4-B1
 
     model_config = {"extra": "forbid"}

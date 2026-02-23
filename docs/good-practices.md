@@ -646,8 +646,11 @@ indexer:
 1. Usar `--mode yolo` (sin terminal interactivo).
 2. Usar `--quiet --json` (salida parseable).
 3. Establecer `--budget` (control de costes).
-4. Verificar exit code (0=ok, 1=fallo, 2=parcial).
+4. Verificar exit code (0=ok, 1=fallo, 2=parcial, 3=config, 4=auth, 5=timeout).
 5. API key como secret del CI, nunca en código.
+6. Usar `--report github --report-file report.md` para publicar como PR comment.
+7. Usar `--context-git-diff origin/main` para dar contexto del PR al agente.
+8. Usar `--exit-code-on-partial` para que partial retorne exit 2.
 
 ```bash
 architect run "..." \
@@ -684,6 +687,31 @@ evaluation:
 costs:
   enabled: true
   budget_usd: 1.00
+
+sessions:
+  auto_save: true
+  cleanup_after_days: 30
+```
+
+### Ejemplo CI con reportes y sessions
+
+```bash
+architect run "revisa los cambios del PR" \
+  --mode yolo --quiet --json \
+  --budget 2.00 \
+  --context-git-diff origin/main \
+  --report github --report-file pr-report.md \
+  --exit-code-on-partial \
+  > result.json
+
+# Publicar reporte como PR comment
+gh pr comment $PR_NUMBER --body-file pr-report.md
+
+# Si quedó parcial, reanudar
+if [ $? -eq 2 ]; then
+  SESSION=$(jq -r '.session_id // empty' result.json)
+  [ -n "$SESSION" ] && architect resume "$SESSION" --budget 1.00
+fi
 ```
 
 ---
@@ -738,13 +766,24 @@ architect run "..." --timeout 600   # 10 minutos
 
 **Causa:** El coste acumulado superó el budget antes de completar la tarea.
 
-**Solución:** El agente genera un resumen de lo que hizo antes de parar. Puedes continuar desde donde lo dejó:
+**Solución:** El agente genera un resumen de lo que hizo antes de parar. Puedes usar `architect resume` para continuar exactamente donde se quedó:
 
 ```bash
 # Primera ejecución (se queda en partial)
+architect run "refactoriza todo el módulo auth" --budget 1.00
+
+# Ver sesiones guardadas
+architect sessions
+
+# Reanudar con más budget (restaura todo el contexto)
+architect resume 20260223-143022-a1b2 --budget 2.00
+```
+
+Si no usas sessions, puedes continuar manualmente:
+
+```bash
 architect run "refactoriza todo el módulo auth" --budget 1.00 --json > result1.json
 
-# Continuar si quedó parcial
 STATUS=$(jq -r '.status' result1.json)
 if [ "$STATUS" = "partial" ]; then
   OUTPUT=$(jq -r '.output' result1.json)
@@ -785,6 +824,10 @@ indexer:
 | Guardrails | Proteger archivos sensibles, limitar alcance, quality gates al final |
 | Skills | `.architect.md` en cada proyecto, skills con globs para contexto específico |
 | Memoria | Activar en proyectos recurrentes, revisar `.architect/memory.md` periódicamente |
+| Sessions | Activar `auto_save: true`, usar `resume` para tareas parciales, `cleanup` periódico |
+| Reports | `--report github` en PRs, `--report json` para CI, `--report-file` siempre en CI |
+| Dry run | `--dry-run` para previsualizar antes de ejecutar en producción |
 | Evaluación | `basic` para CI, `full` solo para tareas críticas |
 | Modo | `confirm-sensitive` en local, `yolo` en CI |
+| CI/CD | `--context-git-diff`, `--exit-code-on-partial`, `--report`, sessions para resume |
 | Seguridad | `allowed_only: true`, `allow_delete: false`, guardrails en CI |

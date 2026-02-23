@@ -92,6 +92,15 @@ def _make_loop(confirm_mode="yolo", max_steps=20, parallel_tools=True,
     loop.log = MagicMock()
     loop.hlog = MagicMock()
     loop.cost_tracker = None
+    loop.hook_executor = None
+    loop.guardrails = None
+    loop.skills_loader = None
+    loop.memory = None
+    loop.session_manager = None
+    loop.session_id = None
+    loop.dry_run_tracker = None
+    loop._files_touched = set()
+    loop._pending_context = []
 
     if has_context_manager:
         ctx_manager = MagicMock()

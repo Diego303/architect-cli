@@ -80,6 +80,12 @@ def run(prompt, stream=False, on_stream_chunk=None):
         messages = ctx.append_tool_results(messages, response.tool_calls, tool_results)
         state.steps.append(StepResult(step, response, tool_results))
 
+        # ── SESSION AUTO-SAVE (v4-B1) ────────────────────────────
+        # Si sessions.auto_save=true, se guarda el estado después de cada paso
+        # para permitir resume si la ejecución se interrumpe
+        if session_manager:
+            session_manager.save(session_state)
+
     # ── Log final ───────────────────────────────────────────────
     hlog.loop_complete(status=state.status, stop_reason=...,
                        total_steps=state.current_step,
@@ -586,6 +592,27 @@ with StepTimeout(60):          # 60 segundos
 
 ---
 
+## Mapeo StopReason → Exit Code (v4-B3)
+
+Tras completar el loop, la CLI mapea el `StopReason` y `status` del agente a un exit code:
+
+| StopReason | status | Exit Code | Constante |
+|------------|--------|:---------:|-----------|
+| `LLM_DONE` | `success` | 0 | `EXIT_SUCCESS` |
+| `LLM_DONE` + SelfEvaluator falla | `partial` | 2 | `EXIT_PARTIAL` |
+| `MAX_STEPS` | `partial` | 2 | `EXIT_PARTIAL` |
+| `BUDGET_EXCEEDED` | `partial` | 2 | `EXIT_PARTIAL` |
+| `CONTEXT_FULL` | `partial` | 2 | `EXIT_PARTIAL` |
+| `TIMEOUT` | `partial` / `failed` | 5 | `EXIT_TIMEOUT` |
+| `USER_INTERRUPT` | `partial` | 130 | `EXIT_INTERRUPTED` |
+| `LLM_ERROR` | `failed` | 1 | `EXIT_FAILED` |
+| Auth error | `failed` | 4 | `EXIT_AUTH_ERROR` |
+| Config error | — | 3 | `EXIT_CONFIG_ERROR` |
+
+`--exit-code-on-partial` (default en CI) asegura que `partial` retorne exit code 2 en lugar de 0.
+
+---
+
 ## Parámetros del constructor
 
 ```python
@@ -599,6 +626,8 @@ AgentLoop(
     context_manager: ContextManager | None = None,
     cost_tracker:    CostTracker | None = None,      # F14: tracking de costes
     timeout:         int | None = None,              # timeout total de ejecución
+    session_manager: SessionManager | None = None,   # v4-B1: persistencia de sesiones
+    dry_run_tracker: DryRunTracker | None = None,    # v4-B4: tracking de acciones en dry-run
 )
 ```
 

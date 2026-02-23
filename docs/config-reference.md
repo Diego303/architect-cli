@@ -53,6 +53,14 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--budget FLOAT` | `costs.budget_usd` |
 | `--cache` | `llm_cache.enabled = True` |
 | `--no-cache` | `llm_cache.enabled = False` |
+| `--json` | Salida JSON a stdout (desactiva streaming) |
+| `--dry-run` | Modo dry-run: simula sin ejecutar tools de escritura |
+| `--report FORMAT` | Formato reporte: `json`, `markdown`, `github` |
+| `--report-file PATH` | Escribir reporte a archivo (si no, stdout) |
+| `--session ID` | Reanudar sesión existente por ID |
+| `--confirm-mode MODE` | Override confirm mode (yolo/confirm-all/confirm-sensitive) |
+| `--context-git-diff REF` | Inyectar diff `git diff REF` como contexto adicional |
+| `--exit-code-on-partial` | Retornar exit code 2 si status=partial (default en CI) |
 
 ---
 
@@ -294,6 +302,13 @@ skills:
 memory:
   enabled: false              # true = activar detección de correcciones
   auto_detect_corrections: true  # detectar correcciones automáticamente en mensajes del usuario
+
+# ==============================================================================
+# Sessions — persistencia y resume (v4-B1)
+# ==============================================================================
+sessions:
+  auto_save: true             # guardar estado después de cada paso (default: true)
+  cleanup_after_days: 7       # días tras los cuales `architect cleanup` elimina sesiones
 ```
 
 ---
@@ -521,6 +536,43 @@ skills:
 memory:
   enabled: true
   auto_detect_corrections: true
+```
+
+### CI/CD con reportes y sessions (v4-B)
+
+```yaml
+llm:
+  model: gpt-4o-mini
+  stream: false
+  prompt_caching: true
+
+commands:
+  enabled: true
+  allowed_only: true
+
+costs:
+  enabled: true
+  budget_usd: 2.00
+
+sessions:
+  auto_save: true
+  cleanup_after_days: 30
+```
+
+```bash
+# Ejecución con reporte y contexto de diff del PR
+architect run "revisa los cambios del PR" \
+  --mode yolo --quiet \
+  --context-git-diff origin/main \
+  --report github --report-file pr-report.md \
+  --budget 2.00 \
+  -c ci/architect.yaml
+
+# Reanudar si quedó parcial
+architect resume SESSION_ID --budget 2.00
+
+# Limpiar sesiones antiguas en CI
+architect cleanup --older-than 30
 ```
 
 ### Config completa con self-eval

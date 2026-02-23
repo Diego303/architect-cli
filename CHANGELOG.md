@@ -7,6 +7,54 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [0.17.0] - 2026-02-23
+
+### v4 Phase B — Persistencia y Reporting
+
+Implementación completa de los 4 componentes de Phase B: sesiones persistentes con resume, reportes multi-formato para CI/CD, flags nativos de línea de comandos y modo dry-run/preview.
+
+#### Añadido
+
+**B1 — Session Resume y Persistencia**:
+- `SessionState` dataclass (13 campos) con serialización JSON completa (`to_dict()` / `from_dict()`)
+- `SessionManager` — save, load, list_sessions, cleanup, delete. Persistencia en `.architect/sessions/`
+- Truncación automática de mensajes (>50 → últimos 30, marca `truncated=True`)
+- `generate_session_id()` — formato `YYYYMMDD-HHMMSS-hexhex` con unicidad garantizada
+- Graceful handling de JSON corrupto, soporte UTF-8 completo
+
+**B2 — Reportes de Ejecución**:
+- `ExecutionReport` dataclass (13 campos) — datos completos de ejecución
+- `ReportGenerator` — tres formatos de salida:
+  - `to_json()` — JSON parseable por CI/CD
+  - `to_markdown()` — tablas, secciones de archivos, quality gates, errores, timeline
+  - `to_github_pr_comment()` — optimizado con `<details>` collapsible
+- `collect_git_diff(workspace_root)` — ejecuta `git diff HEAD`, trunca a 50KB
+- Status icons: success→"OK", partial→"WARN", failed→"FAIL"
+
+**B3 — CI/CD Native Flags**:
+- Flags de `architect run`: `--json`, `--dry-run`, `--report [json|markdown|github]`, `--report-file PATH`, `--session SESSION_ID`, `--confirm-mode [yolo|confirm-sensitive|confirm-all]`, `--context-git-diff REF`, `--exit-code-on-partial INT`, `--budget FLOAT`, `--timeout INT`
+- Nuevos comandos CLI: `architect sessions` (lista), `architect cleanup [--older-than N]` (limpieza), `architect resume SESSION_ID` (reanudación)
+- Exit codes estandarizados: SUCCESS(0), FAILED(1), PARTIAL(2), CONFIG_ERROR(3), AUTH_ERROR(4), TIMEOUT(5), INTERRUPTED(130)
+
+**B4 — Dry Run / Preview Mode**:
+- `DryRunTracker` — registra acciones de herramientas de escritura sin ejecutarlas
+- `PlannedAction` dataclass (step, tool, summary)
+- `WRITE_TOOLS` / `READ_TOOLS` frozensets (sin intersección)
+- `_summarize_action()` — resúmenes inteligentes por tipo de tool (path, command con truncación, fallback)
+- `get_plan_summary()` — plan formateado en Markdown
+
+**Nuevo módulo**: `src/architect/features/` (sessions.py, report.py, dryrun.py, __init__.py)
+
+**Tests**: 65 pytest tests (test_sessions: 22, test_reports: 20, test_dryrun: 23) + `scripts/test_phase_b.py` con 35 tests y 104 checks de integración cubriendo B1-B4 y tests combinados
+
+#### Corregido
+
+- **[MEDIUM] Guardrails bypass via shell redirection** — Comandos con `>`, `>>`, `| tee` podían escribir en archivos protegidos. Añadido `_extract_redirect_targets()` con detección de 5 patrones de redirección + 13 tests nuevos. (`src/architect/core/guardrails.py`)
+- **[LOW] Timeline duration -0.0** — Duración de steps con valor negativo por imprecisión float. Corregido con `max(0, duration)`.
+- **[LOW] Versión hardcoded en test scripts** — `test_phase12.py` y `test_phase11.py` usaban "0.16.1" literal. Cambiado a versión dinámica desde `architect.__version__`. (`scripts/test_phase12.py`, `scripts/test_phase11.py`)
+
+---
+
 ## [0.16.2] - 2026-02-23
 
 ### QA Round 2 — Testing Real End-to-End y Bugfixes Críticos

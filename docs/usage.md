@@ -33,6 +33,10 @@ Guía práctica de uso real: desde el caso más simple hasta configuraciones ava
 25. [Guardrails (v4-A2)](#25-guardrails-v4-a2)
 26. [Skills y .architect.md (v4-A3)](#26-skills-y-architectmd-v4-a3)
 27. [Memoria procedural (v4-A4)](#27-memoria-procedural-v4-a4)
+28. [Sessions y resume (v4-B1)](#28-sessions-y-resume-v4-b1)
+29. [Reports de ejecución (v4-B2)](#29-reports-de-ejecución-v4-b2)
+30. [Dry Run detallado (v4-B4)](#30-dry-run-detallado-v4-b4)
+31. [CI/CD flags avanzados (v4-B3)](#31-cicd-flags-avanzados-v4-b3)
 
 ---
 
@@ -45,7 +49,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.16.2
+architect --version   # architect, version 0.17.0
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -1347,6 +1351,30 @@ context:
 evaluation:
   mode: basic              # evaluar en CI
   confidence_threshold: 0.7  # más permisivo en CI
+
+sessions:
+  auto_save: true          # v4-B1: guardar sesión para resume
+  cleanup_after_days: 30   # limpiar sesiones viejas en CI
+```
+
+### GitHub Actions con reporte en PR (v4-B)
+
+```yaml
+- name: AI Review con reporte
+  env:
+    LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+  run: |
+    architect run "revisa los cambios del PR" \
+      --mode yolo --quiet \
+      --context-git-diff origin/${{ github.base_ref }} \
+      --report github --report-file pr-report.md \
+      --budget 1.00
+
+- name: Publicar reporte en PR
+  if: always()
+  run: gh pr comment ${{ github.event.pull_request.number }} --body-file pr-report.md
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### GitLab CI
@@ -1615,6 +1643,35 @@ architect skill install usuario/repo/path/to/skill
 architect skill remove nombre-skill
 ```
 
+### `architect sessions` — listar sesiones (v4-B1)
+
+```bash
+architect sessions
+# Salida de ejemplo:
+# ID                     Status       Steps  Cost    Task
+# 20260223-143022-a1b2   interrupted  12     $1.23   refactoriza todo el módulo de auth
+# 20260223-151045-d4e5   success      8      $0.45   añade tests a user.py
+```
+
+### `architect resume` — reanudar sesión (v4-B1)
+
+```bash
+architect resume 20260223-143022-a1b2
+# → Carga el estado completo y continúa donde se dejó
+
+# Con budget adicional
+architect resume 20260223-143022-a1b2 --budget 2.00
+```
+
+Si el ID no existe, sale con exit code 3 (`EXIT_CONFIG_ERROR`).
+
+### `architect cleanup` — limpiar sesiones antiguas (v4-B1)
+
+```bash
+architect cleanup                  # elimina sesiones > 7 días (default)
+architect cleanup --older-than 30  # elimina sesiones > 30 días
+```
+
 ---
 
 ## 24. Referencia rápida de flags
@@ -1667,6 +1724,14 @@ Costes y caché (F14)
 
 Hooks y guardrails (v4)
   (hooks y guardrails se configuran exclusivamente via YAML — sin flags de CLI)
+
+Sessions y reports (v4-B)
+  --session ID              Reanudar sesión existente por ID
+  --report FORMAT           json | markdown | github — formato de reporte
+  --report-file PATH        Escribir reporte a archivo (si no, a stdout)
+  --context-git-diff REF    Inyectar git diff REF como contexto adicional
+  --confirm-mode MODE       Override de confirm mode
+  --exit-code-on-partial    Exit code 2 si status=partial
 ```
 
 ### Combinaciones más comunes
@@ -1962,4 +2027,167 @@ El archivo `.architect/memory.md` es editable manualmente. Puedes añadir reglas
 - [2026-02-22] Patron: En este proyecto usamos pnpm, nunca npm ni yarn
 - [2026-02-22] Patron: Los tests van en __tests__/ al lado del código fuente
 - [2026-02-22] Patron: Usar zod para validación de schemas, no joi
+```
+
+---
+
+## 28. Sessions y resume (v4-B1)
+
+A partir de v0.17.0, architect guarda el estado del agente automáticamente después de cada paso. Si una ejecución se interrumpe (Ctrl+C, timeout, budget exceeded), puedes reanudarla.
+
+### Guardado automático
+
+Los archivos de sesión se guardan en `.architect/sessions/<session_id>.json`. Contienen: ID, tarea original, agente, modelo, status, pasos completados, mensajes (historial LLM), archivos modificados, coste acumulado, timestamps y razón de parada.
+
+### Uso básico
+
+```bash
+# Ejecutar una tarea con budget limitado
+architect run "refactoriza todo el módulo auth" --budget 1.00
+
+# Se detiene con status "partial" → sesión guardada automáticamente
+
+# Ver sesiones guardadas
+architect sessions
+# ID                     Status       Steps  Cost    Task
+# 20260223-143022-a1b2   partial      12     $1.00   refactoriza todo el módulo auth
+
+# Reanudar con más budget
+architect resume 20260223-143022-a1b2 --budget 2.00
+```
+
+### Truncación de mensajes
+
+Las sesiones con más de 50 mensajes se truncan automáticamente: se conservan los últimos 30 mensajes y se marca `truncated: true` en metadata. Esto evita que las sesiones crezcan indefinidamente en disco.
+
+### Limpieza
+
+```bash
+architect cleanup                  # elimina sesiones > 7 días (default)
+architect cleanup --older-than 30  # elimina sesiones > 30 días
+```
+
+### Configuración
+
+```yaml
+sessions:
+  auto_save: true           # default: true
+  cleanup_after_days: 7     # default: 7
+```
+
+Ver documentación completa: [`sessions.md`](sessions.md).
+
+---
+
+## 29. Reports de ejecución (v4-B2)
+
+A partir de v0.17.0, architect puede generar reportes detallados de cada ejecución en tres formatos: JSON (CI/CD), Markdown (documentación) y GitHub PR comment (con secciones collapsible).
+
+### Uso
+
+```bash
+# Reporte JSON — ideal para CI/CD
+architect run "añade tests" --mode yolo --report json
+
+# Reporte Markdown — documentación
+architect run "refactoriza utils" --mode yolo --report markdown --report-file report.md
+
+# GitHub PR comment — con <details> collapsible
+architect run "revisa cambios" --mode yolo --report github --report-file pr-comment.md
+```
+
+### Contenido del reporte
+
+Cada reporte incluye: tarea, agente, modelo, status, duración, pasos, coste, archivos modificados, quality gates, errores, git diff y timeline paso a paso.
+
+### Integración con GitHub Actions
+
+```yaml
+- name: Run architect con reporte
+  run: |
+    architect run "revisa los cambios del PR" \
+      --mode yolo \
+      --context-git-diff origin/main \
+      --report github --report-file pr-report.md \
+      --budget 2.00
+
+- name: Publicar reporte en PR
+  if: always()
+  run: gh pr comment ${{ github.event.pull_request.number }} --body-file pr-report.md
+```
+
+Ver documentación completa: [`reports.md`](reports.md).
+
+---
+
+## 30. Dry Run detallado (v4-B4)
+
+El flag `--dry-run` simula la ejecución sin realizar cambios reales. A partir de v0.17.0, el sistema registra cada acción planificada y genera un resumen.
+
+```bash
+architect run "refactoriza auth" --dry-run
+```
+
+El agente interactúa con el LLM y ejecuta las tools de lectura normalmente, pero las tools de escritura (`write_file`, `edit_file`, `apply_patch`, `delete_file`, `run_command`) retornan `[DRY-RUN]` sin ejecutar. Internamente, el `DryRunTracker` registra cada acción de escritura con la tool, sus argumentos y una descripción legible.
+
+El resumen de acciones planificadas se incluye en el output final del agente y en los reportes si `--report` está activo.
+
+---
+
+## 31. CI/CD flags avanzados (v4-B3)
+
+v0.17.0 añade flags específicos para integración con CI/CD:
+
+### `--context-git-diff REF`
+
+Inyecta el diff de `git diff REF` como contexto adicional en el prompt del agente. Útil en PRs:
+
+```bash
+architect run "revisa los cambios de este PR" \
+  --mode yolo --context-git-diff origin/main
+```
+
+### `--exit-code-on-partial`
+
+En modo CI, retorna exit code 2 si el status final es `partial` (en lugar de 0). Útil para pipelines que necesitan distinguir éxito total de parcial.
+
+### `--confirm-mode MODE`
+
+Override del modo de confirmación del agente seleccionado. En CI típicamente se usa `--mode yolo`, pero `--confirm-mode` permite sobreescribir sin cambiar de agente.
+
+### Exit codes
+
+| Código | Constante | Significado |
+|--------|-----------|-------------|
+| 0 | `EXIT_SUCCESS` | Éxito |
+| 1 | `EXIT_FAILED` | Fallo del agente |
+| 2 | `EXIT_PARTIAL` | Parcial (budget/timeout/self-eval) |
+| 3 | `EXIT_CONFIG_ERROR` | Error de configuración |
+| 4 | `EXIT_AUTH_ERROR` | Error de autenticación LLM |
+| 5 | `EXIT_TIMEOUT` | Timeout |
+| 130 | `EXIT_INTERRUPTED` | Interrumpido por Ctrl+C |
+
+### Ejemplo CI completo
+
+```bash
+architect run "revisa y corrige bugs en src/" \
+  --mode yolo \
+  --quiet --json \
+  --budget 2.00 \
+  --context-git-diff origin/main \
+  --report github --report-file report.md \
+  --exit-code-on-partial \
+  > result.json
+
+EXIT=$?
+if [ "$EXIT" -eq 0 ]; then
+  echo "Éxito"
+elif [ "$EXIT" -eq 2 ]; then
+  echo "Parcial — revisar manualmente"
+  # Opción: reanudar
+  SESSION=$(jq -r '.session_id // empty' result.json)
+  [ -n "$SESSION" ] && architect resume "$SESSION" --budget 1.00
+else
+  echo "Fallo: exit code $EXIT"
+fi
 ```

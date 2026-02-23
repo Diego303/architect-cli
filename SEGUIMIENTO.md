@@ -7,8 +7,8 @@ Este documento registra el progreso de implementación del proyecto architect
 ## Estado General
 
 - **Inicio**: 2026-02-18
-- **Fase Actual**: v4 Phase A Completada — Fundamentos de Extensibilidad
-- **Estado**: ✅ v0.16.2 — Phase A validada con QA, 5+5 bugs corregidos (2 rondas QA)
+- **Fase Actual**: v4 Phase B Completada — Persistencia y Reporting
+- **Estado**: ✅ v0.17.0 — Phase B implementada y validada, 4 bugs QA3 corregidos, 258 pytest + 104 script checks
 
 ---
 
@@ -1419,10 +1419,191 @@ Se realizó un QA integral de 11 pasos sobre toda la base de código (existente 
 
 ---
 
+### ✅ v0.16.2 — QA Round 2: Testing Real E2E (Completada: 2026-02-23)
+
+**Objetivo**: QA exhaustivo con ejecuciones reales contra LiteLLM proxy y servidores MCP.
+
+**Progreso**: 100%
+
+#### Bugs Corregidos (5)
+
+**BUG-1 [CRITICAL] — Costes no mostrados en modo streaming**:
+- `completion_stream()` no pasaba `stream_options={"include_usage": True}` a LiteLLM
+- Fix: añadido `stream_options` + fallback `_estimate_streaming_usage()` con `litellm.token_counter()`
+
+**BUG-2 [CRITICAL] — Yolo mode seguía pidiendo confirmación**:
+- `_should_confirm_command()` retornaba `True` para comandos "dangerous" incluso en yolo
+- Fix: yolo nunca pide confirmación (`src/architect/execution/engine.py`)
+
+**BUG-3 [CRITICAL] — MCP tools no expuestas al LLM**:
+- Agentes con `allowed_tools` explícito filtraban MCP tools al construir schemas
+- Fix: auto-inyección de MCP tools en `allowed_tools` post-discovery (`src/architect/cli.py`)
+
+**BUG-4 [MEDIUM] — `--timeout` CLI sobreescribía `llm.timeout`**:
+- `apply_cli_overrides()` mapeaba timeout de sesión a timeout per-request
+- Fix: separados los dos conceptos (`src/architect/config/loader.py`)
+
+**BUG-5 [MEDIUM] — `get_schemas()` crasheaba con tools no registradas**:
+- `filter_by_names()` lanzaba `ToolNotFoundError` si un nombre no existía
+- Fix: skip defensivo (`src/architect/tools/registry.py`)
+
+#### Entregable
+✅ v0.16.2 — 5 bugs críticos corregidos, 12 tests de integración E2E ejecutados.
+
+---
+
+### ✅ v0.17.0 — v4 Phase B: Persistencia y Reporting (Completada: 2026-02-23)
+
+**Objetivo**: Sesiones persistentes, reportes multi-formato, integración CI/CD nativa y modo dry-run/preview.
+
+**Progreso**: 100%
+
+#### B1 — Session Resume y Persistencia
+
+Gestión completa del ciclo de vida de sesiones del agente con persistencia en disco.
+
+- [x] `SessionState` dataclass — 13 campos serializables (session_id, task, agent, model, status, steps, messages, files_modified, total_cost, started_at, updated_at, stop_reason, metadata)
+- [x] `to_dict()` / `from_dict()` — serialización/deserialización JSON completa
+- [x] `SessionManager` — save, load, list_sessions, cleanup, delete
+- [x] Truncación de mensajes: >50 mensajes → guarda últimos 30, marca `truncated=True`
+- [x] `list_sessions()` — ordenado por fecha (newest first), retorna metadata resumida
+- [x] `cleanup(older_than_days)` — elimina sesiones antiguas con threshold configurable
+- [x] `generate_session_id()` — formato `YYYYMMDD-HHMMSS-hexhex`, unicidad garantizada
+- [x] Graceful handling de JSON corrupto (load → None)
+- [x] Soporte UTF-8 completo (unicode, caracteres especiales)
+- [x] Persistencia en `.architect/sessions/` como archivos JSON individuales
+
+**Archivos creados**: `src/architect/features/sessions.py` (214 líneas)
+
+#### B2 — Reportes de Ejecución
+
+Generación de reportes multi-formato para integración con CI/CD y revisión humana.
+
+- [x] `ExecutionReport` dataclass — 13 campos (task, agent, model, status, duration, steps, cost, files_modified, quality_gates, errors, git_diff, timeline, stop_reason)
+- [x] `ReportGenerator.to_json()` — formato JSON parseable por CI/CD
+- [x] `ReportGenerator.to_markdown()` — tablas, secciones de archivos, quality gates, errores, timeline
+- [x] `ReportGenerator.to_github_pr_comment()` — formato optimizado con `<details>` collapsible
+- [x] `collect_git_diff(workspace_root)` — ejecuta `git diff HEAD`, trunca a 50KB
+- [x] Status icons: success→"OK", partial→"WARN", failed→"FAIL"
+- [x] Secciones opcionales omitidas si colecciones vacías
+- [x] Manejo robusto de valores zero, paths largos, errores extensos
+
+**Archivos creados**: `src/architect/features/report.py` (196 líneas)
+
+#### B3 — CI/CD Native Flags
+
+Integración nativa con pipelines CI/CD mediante flags de línea de comandos y exit codes estandarizados.
+
+- [x] `--json` — output estructurado JSON (status, stop_reason, model, costs, tools_used, duration)
+- [x] `--dry-run` — simula ejecución sin cambios reales, muestra acciones planeadas
+- [x] `--report [json|markdown|github]` — genera reporte de ejecución en formato elegido
+- [x] `--report-file PATH` — guarda reporte en archivo en vez de stdout
+- [x] `--session SESSION_ID` — reanuda sesión guardada
+- [x] `--confirm-mode [yolo|confirm-sensitive|confirm-all]` — alias CI-friendly de política de confirmación
+- [x] `--context-git-diff REF` — inyecta diff de git (ej: `origin/main`) como contexto
+- [x] `--exit-code-on-partial INT` — exit code personalizado para status="partial"
+- [x] `--budget FLOAT` — límite de coste en USD
+- [x] `--timeout INT` — watchdog de sesión en segundos
+- [x] CLI: `architect sessions` — lista sesiones guardadas con tabla (ID, Status, Steps, Cost, Task)
+- [x] CLI: `architect cleanup [--older-than N]` — elimina sesiones antiguas
+- [x] CLI: `architect resume SESSION_ID` — reanuda sesión interrumpida (exit code 3 si no existe)
+- [x] Exit codes estandarizados: EXIT_SUCCESS(0), EXIT_FAILED(1), EXIT_PARTIAL(2), EXIT_CONFIG_ERROR(3), EXIT_AUTH_ERROR(4), EXIT_TIMEOUT(5), EXIT_INTERRUPTED(130)
+
+**Archivos modificados**: `src/architect/cli.py`
+
+#### B4 — Dry Run / Preview Mode
+
+Modo de simulación que registra operaciones de escritura planeadas sin ejecutarlas.
+
+- [x] `DryRunTracker` — registra acciones de herramientas de escritura
+- [x] `record(step, tool_name, tool_input)` — solo registra WRITE_TOOLS
+- [x] `get_plan_summary()` — plan formateado en Markdown o mensaje "No write actions planned"
+- [x] `PlannedAction` dataclass — step, tool, summary
+- [x] `WRITE_TOOLS` frozenset: write_file, edit_file, delete_file, apply_patch, run_command
+- [x] `READ_TOOLS` frozenset: read_file, search_code, grep, find_files, list_directory
+- [x] `_summarize_action()` — 3 code paths: path, command (trunca >60 chars), fallback keys
+- [x] WRITE_TOOLS ∩ READ_TOOLS = ∅ (validado por tests)
+
+**Archivos creados**: `src/architect/features/dryrun.py` (115 líneas)
+
+#### QA Round 3 — Bugs Corregidos (4)
+
+**BUG-1 [MEDIUM] — Guardrails bypass via shell redirection**:
+- Comandos con `>`, `>>`, `| tee` podían escribir en archivos protegidos evadiendo la lista de protected_files
+- Fix: `_extract_redirect_targets()` detecta 5 patrones de redirección shell + check contra protected_files
+- Añadidos 13 tests de redirect detection en `tests/test_guardrails/`
+
+**BUG-2 [LOW] — Timeline duration -0.0**:
+- Duración de steps podía mostrar `-0.0` por imprecisión de float
+- Fix: `max(0, duration)` en cálculo de timeline
+
+**BUG-3 [LOW] — Versión hardcoded en test scripts**:
+- `test_phase12.py` y `test_phase11.py` tenían "0.16.1" hardcoded
+- Fix: versión dinámica desde `architect.__version__`
+
+**BUG-4 [LOW] — Parallel execution regression**:
+- Tests de ejecución paralela fallaban tras cambios de v4
+- Fix: mocks actualizados para nueva API
+
+#### Tests Phase B — 169 tests totales
+
+**pytest (65 tests):**
+
+| Suite | Tests | Status |
+|-------|-------|--------|
+| test_sessions | 22 | ✅ PASS |
+| test_reports | 20 | ✅ PASS |
+| test_dryrun | 23 | ✅ PASS |
+| **Subtotal B** | **65** | **✅ ALL PASS** |
+
+**Script de integración (104 checks):**
+
+| Sección | Tests | Checks | Status |
+|---------|-------|--------|--------|
+| B1 — Sessions | 8 | ~24 | ✅ PASS |
+| B2 — Reports | 8 | ~24 | ✅ PASS |
+| B3 — CI/CD Flags | 5 | ~13 | ✅ PASS |
+| B4 — Dry Run | 6 | ~18 | ✅ PASS |
+| Combinados | 8 | ~25 | ✅ PASS |
+| **Total** | **35** | **104** | **✅ ALL PASS** |
+
+**Total acumulado proyecto:**
+
+| Categoría | Count | Status |
+|-----------|-------|--------|
+| pytest (todas las suites) | 258 | ✅ ALL PASS |
+| scripts/test_phase_b.py | 104 checks | ✅ ALL PASS |
+| scripts/test_phase{8-14}.py | ~600 checks | ✅ ALL PASS |
+| scripts/test_v3_m{1-6}.py | ~200 checks | ✅ ALL PASS |
+| **Total verificaciones** | **~1160** | **✅ ALL PASS** |
+
+#### Archivos Creados
+- `src/architect/features/__init__.py` — exports del módulo features
+- `src/architect/features/sessions.py` — SessionManager, SessionState, generate_session_id
+- `src/architect/features/report.py` — ExecutionReport, ReportGenerator, collect_git_diff
+- `src/architect/features/dryrun.py` — DryRunTracker, PlannedAction, WRITE_TOOLS, READ_TOOLS
+- `tests/test_sessions/` — 22 tests unitarios
+- `tests/test_reports/` — 20 tests unitarios
+- `tests/test_dryrun/` — 23 tests unitarios
+- `scripts/test_phase_b.py` — 35 tests de integración, 104 checks
+
+#### Archivos Modificados
+- `src/architect/cli.py` — 3 comandos nuevos (sessions, cleanup, resume) + 10 flags
+- `src/architect/core/state.py` — StopReason enum (7 valores), AgentState.to_output_dict()
+- `src/architect/core/guardrails.py` — `_extract_redirect_targets()` para detección de redirecciones
+- `scripts/test_phase12.py` — versión dinámica (no hardcoded)
+- `scripts/test_phase11.py` — labels de versión dinámicos
+- `tests/test_guardrails/test_guardrails.py` — 13 tests nuevos de redirect detection
+
+#### Entregable
+✅ v0.17.0 — Phase B completa. Sesiones persistentes con resume, reportes multi-formato (JSON/Markdown/GitHub), 10 flags CI/CD nativos, dry-run/preview mode. 65 tests unitarios + 104 checks de integración. 4 bugs QA3 corregidos.
+
+---
+
 ## Próximas Fases
 
-v4 Phase A completada y validada con QA en v0.16.1.
-Próxima fase: v4 Phase B (Persistencia y Reporting).
+v4 Phase B completada y validada con QA en v0.17.0.
+Próxima fase: v4 Phase C (UX y Experiencia de Desarrollo).
 
 ---
 
