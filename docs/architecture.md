@@ -22,6 +22,8 @@
 │     ├─ 7. ContextManager(config.ctx)  pruning 3 niveles (F11)           │
 │     ├─ 8. ContextBuilder(repo_index, context_manager)                  │
 │     ├─ 8b. PostEditHooks(config)      core/hooks.py — auto-verificación│
+│     ├─ 8c. SessionManager(workspace)  features/sessions.py (v4-B1)    │
+│     ├─ 8d. DryRunTracker()            features/dryrun.py (v4-B4)      │
 │     │                                                                   │
 │     ├─ 9a. AgentLoop (modo por defecto: build, o -a flag)              │
 │     │       ├─ ExecutionEngine(registry, config, confirm_mode,         │
@@ -37,6 +39,9 @@
 │                                                                         │
 │    10. SelfEvaluator (opcional, --self-eval basic|full, F12)           │
 │         └─ evaluate_basic() | evaluate_full(run_fn)                    │
+│                                                                         │
+│    11. ReportGenerator (opcional, --report json|markdown|github, B2)   │
+│         └─ to_json() | to_markdown() | to_github_pr_comment()         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,7 +81,12 @@ cli.py
  │                          costs/tracker.py (CostTracker)
  ├── core/evaluator.py ─── llm/adapter.py (LLMAdapter)
  │                          core/state.py (AgentState) — TYPE_CHECKING only
- └── agents/registry.py ── agents/prompts.py
+ ├── features/sessions.py ── core/state.py (StopReason)
+ │                            config/schema.py (SessionsConfig)
+ ├── features/report.py ──── core/state.py (AgentState)
+ │                            costs/tracker.py (CostTracker)
+ ├── features/dryrun.py ──── (standalone, minimal deps)
+ └── agents/registry.py ──── agents/prompts.py
                             config/schema.py (AgentConfig)
 ```
 
@@ -187,7 +197,11 @@ state.status = "success" | "partial"  (segun StopReason)
 si --json: stdout ← json.dumps(state.to_output_dict())
 si normal: stdout ← state.final_output
 
-sys.exit(0)
+[v4-B1] SessionManager.save(session_state)   ← guardar sesión final
+[v4-B2] si --report: ReportGenerator(report).to_{format}()
+        si --report-file: escribir a archivo; si no, stdout
+
+sys.exit(EXIT_CODE)  ← mapeo StopReason → exit code (0/1/2/3/4/5/130)
 ```
 
 ### Modo mixto (legacy, ya no es el default)

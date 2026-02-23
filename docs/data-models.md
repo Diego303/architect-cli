@@ -247,6 +247,7 @@ class AppConfig(BaseModel):
     guardrails: GuardrailsConfig = GuardrailsConfig() # v4-A2
     skills:     SkillsConfig     = SkillsConfig()     # v4-A3
     memory:     MemoryConfig     = MemoryConfig()     # v4-A4
+    sessions:   SessionsConfig   = SessionsConfig()   # v4-B1
 ```
 
 ---
@@ -819,6 +820,136 @@ class RepoIndex:
 ```
 
 El `RepoIndexer` construye el `RepoIndex` recorriendo el workspace con `os.walk()`, filtrando directorios y archivos excluidos. El `IndexCache` serializa/deserializa el índice en JSON con TTL de 5 minutos.
+
+---
+
+## Sessions (`features/sessions.py`) — v4-B1
+
+### `SessionsConfig`
+
+```python
+class SessionsConfig(BaseModel):
+    auto_save:          bool = True    # guardar estado después de cada paso
+    cleanup_after_days: int  = 7       # días tras los cuales `cleanup` elimina sesiones
+```
+
+### `SessionState` (dataclass)
+
+```python
+@dataclass
+class SessionState:
+    session_id:      str              # formato: YYYYMMDD-HHMMSS-hexhex
+    task:            str              # prompt original del usuario
+    agent:           str              # nombre del agente (build, plan, etc.)
+    model:           str              # modelo LLM usado
+    status:          str              # running, success, partial, failed
+    steps_completed: int              # pasos ejecutados
+    messages:        list[dict]       # historial de mensajes LLM
+    files_modified:  list[str]        # archivos tocados durante la sesión
+    total_cost:      float            # coste acumulado en USD
+    started_at:      str              # ISO 8601 timestamp
+    updated_at:      str              # ISO 8601 timestamp (se actualiza en cada save)
+    stop_reason:     str | None       # razón de parada (llm_done, timeout, etc.)
+    metadata:        dict             # datos adicionales arbitrarios
+```
+
+Métodos: `to_dict()` / `from_dict()` para serialización JSON.
+
+Las sesiones con más de 50 mensajes se truncan automáticamente: se conservan los últimos 30 mensajes y se marca `truncated: true` en metadata.
+
+### `SessionManager`
+
+```python
+class SessionManager:
+    def __init__(self, workspace_root: str): ...
+    def save(self, state: SessionState) -> None: ...
+    def load(self, session_id: str) -> SessionState | None: ...  # None si no existe o JSON corrupto
+    def list_sessions(self) -> list[dict]: ...                    # metadata resumida, newest first
+    def cleanup(self, older_than_days: int = 7) -> int: ...       # retorna count eliminados
+    def delete(self, session_id: str) -> bool: ...
+```
+
+### `generate_session_id`
+
+```python
+def generate_session_id() -> str:
+    # Formato: YYYYMMDD-HHMMSS-hexhex
+    # Ejemplo: 20260223-143022-a1b2c3
+```
+
+---
+
+## Reports (`features/report.py`) — v4-B2
+
+### `ExecutionReport` (dataclass)
+
+```python
+@dataclass
+class ExecutionReport:
+    task:             str
+    agent:            str
+    model:            str
+    status:           str                    # success, partial, failed
+    duration_seconds: float
+    steps:            int
+    total_cost:       float
+    stop_reason:      str | None = None
+    files_modified:   list[dict] = field(default_factory=list)
+    quality_gates:    list[dict] = field(default_factory=list)
+    errors:           list[str]  = field(default_factory=list)
+    git_diff:         str | None = None
+    timeline:         list[dict] = field(default_factory=list)
+```
+
+### `ReportGenerator`
+
+```python
+class ReportGenerator:
+    def __init__(self, report: ExecutionReport): ...
+    def to_json(self) -> str: ...                  # JSON completo, parseable por jq
+    def to_markdown(self) -> str: ...              # Markdown con tablas y secciones
+    def to_github_pr_comment(self) -> str: ...     # GitHub con <details> collapsible
+```
+
+### `collect_git_diff`
+
+```python
+def collect_git_diff(workspace_root: str) -> str | None:
+    # Ejecuta `git diff HEAD`, trunca a 50KB
+    # Retorna None si no es repo git o no hay cambios
+```
+
+Status icons: `success` → OK, `partial` → WARN, `failed` → FAIL.
+
+---
+
+## Dry Run (`features/dryrun.py`) — v4-B4
+
+### `PlannedAction` (dataclass)
+
+```python
+@dataclass
+class PlannedAction:
+    tool_name:   str
+    description: str
+    tool_input:  dict
+```
+
+### `DryRunTracker`
+
+```python
+class DryRunTracker:
+    actions: list[PlannedAction]
+
+    def record_action(self, tool_name: str, tool_input: dict) -> None: ...
+    def get_plan_summary(self) -> str: ...    # resumen formateado de todas las acciones
+    @property
+    def action_count(self) -> int: ...
+```
+
+Constantes: `WRITE_TOOLS` (frozenset) y `READ_TOOLS` (frozenset), disjuntos. Solo las acciones de `WRITE_TOOLS` se registran en el tracker.
+
+`_summarize_action(tool_name, tool_input)` genera descripciones legibles con 5 code paths (path, command, long command, fallback keys, empty dict).
 
 ---
 

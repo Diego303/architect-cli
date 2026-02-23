@@ -68,6 +68,7 @@ logs/
 architect-output/
 workspace/
 .claude/
+.architect/
 
 #Planes y informes
 plan-v4-features.md

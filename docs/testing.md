@@ -1,8 +1,10 @@
 # Testing — Resumen completo de cobertura
 
-Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.16.2.
+Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.17.0.
 
 ## Resultado global
+
+### Scripts de integración (`scripts/`)
 
 | Archivo | Tests | Estado | Requiere API key |
 |---|:---:|:---:|:---:|
@@ -30,12 +32,26 @@ Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test 
 | `test_phase16.py` | 24 | Passed | No |
 | `test_phase17.py` | 31 | Passed | No |
 | `test_phase18.py` | 32 | Passed | No |
+| `test_phase_b.py` | ~104 checks | Passed | No |
 | `test_integration.py` | 54 (47+7) | 47 passed, 7 esperados | 7 requieren key |
 | `test_config_loader.py` | 37 | Passed | No |
 | `test_mcp_internals.py` | 47 | Passed | No |
 | `test_streaming.py` | 33 | Passed | No |
 | `test_parallel_execution.py` | 29 | Passed | No |
-| **TOTAL** | **~713** | **Passed** | **7 esperados con key** |
+| **TOTAL scripts** | **~817** | **Passed** | **7 esperados con key** |
+
+### Tests unitarios pytest (`tests/`)
+
+| Directorio | Tests | Qué cubre |
+|---|:---:|---|
+| `tests/test_hooks/` | 29 | HookExecutor, HooksRegistry, HookEvent |
+| `tests/test_guardrails/` | 24 | GuardrailsEngine, quality gates, code rules |
+| `tests/test_skills/` | 31 | SkillsLoader, SkillInstaller |
+| `tests/test_memory/` | 32 | ProceduralMemory, correction patterns |
+| `tests/test_sessions/` | 22 | SessionManager, SessionState, generate_session_id |
+| `tests/test_reports/` | 20 | ExecutionReport, ReportGenerator, collect_git_diff |
+| `tests/test_dryrun/` | 23 | DryRunTracker, PlannedAction, WRITE_TOOLS/READ_TOOLS |
+| **TOTAL pytest** | **~181** | **v4 Phase A + Phase B** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -142,6 +158,15 @@ Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test 
 | `skills/memory.py` | `test_phase18` (32 tests) | ProceduralMemory — 6 CORRECTION_PATTERNS (direct, negation, clarification, should_be, wrong_approach, absolute_rule), detect_correction, add_correction (dedup), add_pattern, _load/_append_to_file, get_context, analyze_session_learnings |
 | `config/schema.py` | `test_phase15-18`, `test_config_loader` | HookItemConfig, HooksConfig (10 eventos + post_edit compat), GuardrailsConfig, QualityGateConfig, CodeRuleConfig, SkillsConfig, MemoryConfig — validación Pydantic, defaults, extra='forbid' |
 
+### v4 Phase B — Sessions, Reports, Dry Run, CI/CD Flags
+
+| Archivo fuente | Test file(s) | Qué se prueba |
+|---|---|---|
+| `features/sessions.py` | `test_phase_b` (B1, 8 tests), `tests/test_sessions/` (22 tests) | SessionManager — save/load/list/cleanup/delete, SessionState round-trip, generate_session_id (formato + unicidad), message truncation (>50 → últimos 30), JSON corrupto → None, ordenación newest-first, caracteres especiales, StopReason round-trip |
+| `features/report.py` | `test_phase_b` (B2, 8 tests), `tests/test_reports/` (20 tests) | ExecutionReport, ReportGenerator — to_json (parseable + todas las keys), to_markdown (tablas + secciones), to_github_pr_comment (`<details>` collapsible), status icons (OK/WARN/FAIL), valores zero, colecciones vacías, paths largos, collect_git_diff |
+| `features/dryrun.py` | `test_phase_b` (B4, 6 tests), `tests/test_dryrun/` (23 tests) | DryRunTracker — record_action, get_plan_summary, action_count, WRITE_TOOLS/READ_TOOLS disjuntos, _summarize_action (5 code paths), interleave read+write, tool_input complejo/truncación |
+| `cli.py` (B3 flags) | `test_phase_b` (B3, 5 tests) | CLI flags: --json, --dry-run, --report, --report-file, --session, --confirm-mode, --context-git-diff, --exit-code-on-partial; comandos: `architect sessions`, `architect cleanup`, `architect resume NONEXISTENT` → exit 3; exit code constants (0,1,2,3,4,5,130) |
+
 ---
 
 ## Tests de integración (`test_integration.py`)
@@ -194,6 +219,19 @@ Tras la implementación de v4 Phase A se realizó un proceso de QA completo:
    - `CommandTool` — referencia incorrecta a `args.timeout` vs `args.timeout_seconds`
 3. Se actualizaron 5 scripts de test para usar `EXPECTED_VERSION = "0.16.1"`
 4. Resultado final: **713 tests passing**, 7 expected failures (requieren API key)
+
+## QA — v0.17.0
+
+Tras la implementación de v4 Phase B:
+
+1. Se creó `scripts/test_phase_b.py` con ~35 tests y ~104 checks
+2. Se crearon tests unitarios pytest: `tests/test_sessions/` (22), `tests/test_reports/` (20), `tests/test_dryrun/` (23)
+3. Se detectaron y corrigieron 4 bugs (QA3):
+   - `GuardrailsEngine.check_command()` — redirect output no debería bloquearse
+   - `ReportGenerator.to_markdown()` — duración en timeline no calculada
+   - Version hardcoded en tests — ahora se lee dinámicamente desde `__init__.py`
+   - `_execute_tool_calls_batch` — parallel execution timeout en CI
+4. Resultado final: **~817+ tests passing** (scripts) + **~181 tests pytest** (unitarios)
 
 ---
 

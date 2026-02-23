@@ -617,20 +617,18 @@ def _():
 
 # ── Tests de consistencia de versiones ────────────────────────────────────────
 
-@test("Versión: architect.__init__ == 0.16.1")
+@test("Versión: architect.__init__ coincide con pyproject.toml")
 def _():
     import architect
-    assert_eq(architect.__version__, "0.16.1")
+    expected = architect.__version__
+    assert expected, "__version__ no debe estar vacío"
 
-
-@test("Versión: pyproject.toml == 0.16.1")
-def _():
     import re
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     content = pyproject.read_text()
     match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
     assert match, "No se encontró version en pyproject.toml"
-    assert_eq(match.group(1), "0.16.1")
+    assert_eq(match.group(1), expected)
 
 
 @test("SelfEvaluator y EvalResult exportados desde core.__init__")

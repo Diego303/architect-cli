@@ -31,6 +31,8 @@ from .timeout import StepTimeout, StepTimeoutError
 
 if TYPE_CHECKING:
     from ..costs.tracker import CostTracker
+    from ..features.dryrun import DryRunTracker
+    from ..features.sessions import SessionManager
     from ..llm.adapter import ToolCall
     from ..skills.loader import SkillsLoader
     from ..skills.memory import ProceduralMemory
@@ -94,6 +96,9 @@ class AgentLoop:
         guardrails: "GuardrailsEngine | None" = None,
         skills_loader: "SkillsLoader | None" = None,
         memory: "ProceduralMemory | None" = None,
+        session_manager: "SessionManager | None" = None,
+        session_id: str | None = None,
+        dry_run_tracker: "DryRunTracker | None" = None,
     ):
         """Inicializa el agent loop.
 
@@ -111,6 +116,9 @@ class AgentLoop:
             guardrails: GuardrailsEngine para seguridad determinista (v4-A2)
             skills_loader: SkillsLoader para contexto de proyecto y skills (v4-A3)
             memory: ProceduralMemory para persistir correcciones (v4-A4)
+            session_manager: SessionManager para persistir sesiones (v4-B1)
+            session_id: ID de sesión para resume. None genera uno nuevo.
+            dry_run_tracker: DryRunTracker para registrar acciones en modo dry-run (v4-B4)
         """
         self.llm = llm
         self.engine = engine
@@ -125,8 +133,12 @@ class AgentLoop:
         self.guardrails = guardrails
         self.skills_loader = skills_loader
         self.memory = memory
+        self.session_manager = session_manager
+        self.session_id = session_id
+        self.dry_run_tracker = dry_run_tracker
         self._start_time: float = 0.0
         self._pending_context: list[str] = []
+        self._files_touched: set[str] = set()
         self.log = logger.bind(component="agent_loop")
         self.hlog = HumanLog(self.log)
 
@@ -147,6 +159,11 @@ class AgentLoop:
             AgentState final con el resultado de la ejecución
         """
         self._start_time = time.time()
+
+        # v4-B1: Generar session_id si no se proporcionó
+        if not self.session_id and self.session_manager:
+            from ..features.sessions import generate_session_id
+            self.session_id = generate_session_id()
 
         # Inicializar estado
         state = AgentState()
@@ -325,6 +342,9 @@ class AgentLoop:
                     state.final_output = response.content
                     state.status = "success"
                     state.stop_reason = StopReason.LLM_DONE
+
+                    # v4-B1: Guardar sesión final
+                    self._save_session(state, prompt, step)
                     break
 
                 # ── EL LLM PIDIÓ TOOLS → EJECUTAR ────────────────────────────
@@ -350,6 +370,16 @@ class AgentLoop:
                     llm_response=response,
                     tool_calls_made=tool_results,
                 ))
+
+                # v4-B1: Registrar archivos tocados para la sesión
+                for tc in tool_results:
+                    if tc.tool_name in ("write_file", "edit_file", "apply_patch", "delete_file"):
+                        path = tc.args.get("path", "")
+                        if path:
+                            self._files_touched.add(path)
+
+                # v4-B1: Guardar sesión después de cada step
+                self._save_session(state, prompt, step)
 
         finally:
             # ── SESSION END HOOK (v4-A1) — siempre se ejecuta ─────────────
@@ -403,6 +433,42 @@ class AgentLoop:
                     self._pending_context.append(result.additional_context)
         except Exception as e:
             self.log.warning("hooks.lifecycle_error", event=event_name, error=str(e))
+
+    # ── SESSION PERSISTENCE (v4-B1) ──────────────────────────────────────
+
+    def _save_session(self, state: AgentState, task: str, step: int) -> None:
+        """Guarda el estado de la sesión actual a disco (si está configurado).
+
+        Args:
+            state: Estado actual del agente.
+            task: Prompt/tarea original.
+            step: Número de step actual.
+        """
+        if not self.session_manager or not self.session_id:
+            return
+
+        try:
+            from ..features.sessions import SessionState
+
+            session_state = SessionState(
+                session_id=self.session_id,
+                task=task,
+                agent="build",
+                model=self.llm.config.model,
+                status=state.status,
+                steps_completed=step,
+                messages=state.messages[-30:],  # Últimos 30 para no explotar
+                files_modified=sorted(self._files_touched),
+                total_cost=(
+                    self.cost_tracker.total_cost_usd if self.cost_tracker else 0.0
+                ),
+                started_at=self._start_time,
+                updated_at=time.time(),
+                stop_reason=state.stop_reason.value if state.stop_reason else None,
+            )
+            self.session_manager.save(session_state)
+        except Exception as e:
+            self.log.warning("session.save_error", error=str(e))
 
     # ── SAFETY NETS ───────────────────────────────────────────────────────
 
@@ -495,6 +561,10 @@ class AgentLoop:
                 )
 
         state.status = "partial"
+
+        # v4-B1: Guardar sesión con estado parcial
+        self._save_session(state, state.messages[1]["content"] if len(state.messages) > 1 else "", state.current_step)
+
         self.log.info(
             "agent.loop.complete",
             status=state.status,
@@ -611,6 +681,10 @@ class AgentLoop:
 
         # ── EJECUTAR TOOL ────────────────────────────────────────────────
         result = self.engine.execute_tool_call(tool_name, tool_args)
+
+        # ── DRY-RUN TRACKER (v4-B4) ─────────────────────────────────────
+        if self.dry_run_tracker:
+            self.dry_run_tracker.record(step, tool_name, tool_args)
 
         # ── POST-EXECUTION CODE RULES (v4-A2) ──────────────────────────
         code_rule_messages = self.engine.check_code_rules(tool_name, tool_args)

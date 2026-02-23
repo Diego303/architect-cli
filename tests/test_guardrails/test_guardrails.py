@@ -126,6 +126,77 @@ class TestCheckCommand:
         assert not allowed
         assert "Límite" in reason
 
+    def test_redirect_to_env_blocked(self, engine: GuardrailsEngine):
+        """Redirección shell a .env debe ser bloqueada."""
+        allowed, reason = engine.check_command("echo 'SECRET=123' > .env")
+        assert not allowed
+        assert ".env" in reason
+
+    def test_append_redirect_to_env_blocked(self, engine: GuardrailsEngine):
+        """Redirección append (>>) a .env debe ser bloqueada."""
+        allowed, reason = engine.check_command("echo 'MORE=456' >> .env")
+        assert not allowed
+        assert ".env" in reason
+
+    def test_tee_to_env_blocked(self, engine: GuardrailsEngine):
+        """Pipe a tee hacia .env debe ser bloqueado."""
+        allowed, reason = engine.check_command("echo 'data' | tee .env")
+        assert not allowed
+        assert ".env" in reason
+
+    def test_tee_append_to_pem_blocked(self, engine: GuardrailsEngine):
+        """Pipe a tee -a hacia archivo .pem debe ser bloqueado."""
+        allowed, reason = engine.check_command("cat data | tee -a server.pem")
+        assert not allowed
+        assert "server.pem" in reason
+
+    def test_redirect_to_safe_file_allowed(self, engine: GuardrailsEngine):
+        """Redirección a archivo no protegido debe permitirse."""
+        allowed, reason = engine.check_command("echo 'hello' > output.txt")
+        assert allowed
+
+    def test_redirect_to_env_with_path_blocked(self, engine: GuardrailsEngine):
+        """Redirección a config/.env (basename .env) debe ser bloqueada."""
+        allowed, reason = engine.check_command("echo 'x' > config/.env")
+        assert not allowed
+
+
+# ── Tests: _extract_redirect_targets ─────────────────────────────────
+
+
+class TestExtractRedirectTargets:
+    """Tests para la función _extract_redirect_targets."""
+
+    def test_simple_redirect(self):
+        from architect.core.guardrails import _extract_redirect_targets
+        targets = _extract_redirect_targets("echo hello > file.txt")
+        assert "file.txt" in targets
+
+    def test_append_redirect(self):
+        from architect.core.guardrails import _extract_redirect_targets
+        targets = _extract_redirect_targets("echo hello >> file.txt")
+        assert "file.txt" in targets
+
+    def test_tee_redirect(self):
+        from architect.core.guardrails import _extract_redirect_targets
+        targets = _extract_redirect_targets("echo hello | tee file.txt")
+        assert "file.txt" in targets
+
+    def test_tee_append(self):
+        from architect.core.guardrails import _extract_redirect_targets
+        targets = _extract_redirect_targets("echo hello | tee -a file.txt")
+        assert "file.txt" in targets
+
+    def test_no_redirect(self):
+        from architect.core.guardrails import _extract_redirect_targets
+        targets = _extract_redirect_targets("echo hello")
+        assert targets == []
+
+    def test_quoted_target(self):
+        from architect.core.guardrails import _extract_redirect_targets
+        targets = _extract_redirect_targets("echo hello > '.env'")
+        assert ".env" in targets
+
 
 # ── Tests: check_edit_limits ─────────────────────────────────────────
 

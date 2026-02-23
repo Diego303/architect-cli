@@ -265,6 +265,45 @@ memory:
 
 ---
 
+## Sessions y resume (v4-B)
+
+Architect guarda el estado automáticamente. Si una ejecución se interrumpe, puedes reanudarla.
+
+```bash
+# Ejecutar con budget limitado (se detiene al exceder)
+architect run "refactoriza auth" --budget 1.00
+
+# Ver sesiones guardadas
+architect sessions
+
+# Reanudar donde se quedó
+architect resume 20260223-143022-a1b2 --budget 2.00
+
+# Limpiar sesiones antiguas
+architect cleanup --older-than 30
+```
+
+---
+
+## Reports (v4-B)
+
+Genera reportes de ejecución para CI/CD o documentación.
+
+```bash
+# JSON para CI
+architect run "..." --mode yolo --report json > report.json
+
+# Markdown para docs
+architect run "..." --mode yolo --report markdown --report-file report.md
+
+# GitHub PR comment con secciones collapsible
+architect run "..." --mode yolo \
+  --context-git-diff origin/main \
+  --report github --report-file pr-comment.md
+```
+
+---
+
 ## Verbose y debugging
 
 ```bash
@@ -311,6 +350,14 @@ Cache:
   --no-cache                Desactivar cache
   --cache-clear             Limpiar cache antes de ejecutar
 
+Sessions y reports (v4-B):
+  --session ID              Reanudar sesión existente por ID
+  --report FORMAT           json | markdown | github
+  --report-file PATH        Guardar reporte en archivo
+  --context-git-diff REF    Inyectar git diff como contexto
+  --confirm-mode MODE       Override de confirm mode
+  --exit-code-on-partial    Exit code 2 si status=partial
+
 Config:
   -c, --config PATH         Archivo YAML de configuración
   -w, --workspace PATH      Directorio de trabajo
@@ -355,8 +402,15 @@ costs:
   enabled: true
   budget_usd: 5.00
   warn_at_usd: 2.00
+
+sessions:
+  auto_save: true
+  cleanup_after_days: 7
 ```
 
 ```bash
 architect run "implementa feature X" -c config.yaml --mode yolo --show-costs
+
+# Con reporte para CI/CD
+architect run "..." --mode yolo --report github --report-file report.md
 ```

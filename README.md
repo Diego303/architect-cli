@@ -84,7 +84,7 @@ architect run PROMPT [opciones]
 | `--no-stream` | Desactivar streaming |
 | `--timeout N` | Tiempo máximo total de ejecución en segundos (watchdog global) |
 
-**Opciones de output**:
+**Opciones de output y reportes**:
 
 | Opción | Descripción |
 |--------|-------------|
@@ -95,6 +95,17 @@ architect run PROMPT [opciones]
 | `--quiet` | Modo silencioso (solo resultado final en stdout) |
 | `--max-steps N` | Límite máximo de pasos del agente |
 | `--budget N` | Límite de coste en USD (detiene el agente si se supera) |
+| `--report FORMAT` | Genera reporte de ejecución: `json`, `markdown`, `github` |
+| `--report-file PATH` | Guarda el reporte en archivo en vez de stdout |
+
+**Opciones de sesiones y CI/CD**:
+
+| Opción | Descripción |
+|--------|-------------|
+| `--session ID` | Reanuda una sesión guardada previamente |
+| `--confirm-mode MODE` | Alias CI-friendly: `yolo`, `confirm-sensitive`, `confirm-all` |
+| `--context-git-diff REF` | Inyecta `git diff REF` como contexto (ej: `origin/main`) |
+| `--exit-code-on-partial N` | Exit code personalizado para status `partial` (default: 2) |
 
 **Opciones de evaluación**:
 
@@ -107,6 +118,35 @@ architect run PROMPT [opciones]
 | Opción | Descripción |
 |--------|-------------|
 | `--disable-mcp` | Desactivar conexión a servidores MCP |
+
+---
+
+### `architect sessions` — listar sesiones guardadas
+
+```bash
+architect sessions
+```
+
+Muestra una tabla con todas las sesiones guardadas: ID, status, pasos, coste y tarea.
+
+---
+
+### `architect resume` — reanudar sesión
+
+```bash
+architect resume SESSION_ID [opciones]
+```
+
+Reanuda una sesión interrumpida. Carga el estado completo (mensajes, archivos modificados, coste acumulado) y continúa donde se dejó. Si el ID no existe, termina con exit code 3.
+
+---
+
+### `architect cleanup` — limpiar sesiones antiguas
+
+```bash
+architect cleanup                  # elimina sesiones > 7 días
+architect cleanup --older-than 30  # elimina sesiones > 30 días
+```
 
 ---
 
@@ -508,10 +548,55 @@ architect run "analiza el proyecto" --disable-mcp
 
 ---
 
+## Sesiones y Resume
+
+El agente guarda su estado automáticamente después de cada paso. Si una ejecución se interrumpe (Ctrl+C, timeout, error), puedes reanudarla:
+
+```bash
+# Ejecutar una tarea larga
+architect run "refactoriza todo el módulo de auth" --budget 5.0
+# → Interrumpido por timeout o Ctrl+C
+
+# Ver sesiones guardadas
+architect sessions
+# ID                     Status       Steps  Cost    Task
+# 20260223-143022-a1b2   interrupted  12     $1.23   refactoriza todo el módulo de auth
+
+# Reanudar donde se quedó
+architect resume 20260223-143022-a1b2
+
+# Limpiar sesiones antiguas
+architect cleanup --older-than 7
+```
+
+Las sesiones se guardan en `.architect/sessions/` como archivos JSON. Mensajes largos (>50) se truncan automáticamente a los últimos 30 para mantener el tamaño manejable.
+
+---
+
+## Reportes de ejecución
+
+Genera reportes detallados de lo que hizo el agente, en tres formatos:
+
+```bash
+# Reporte JSON (ideal para CI/CD)
+architect run "añade tests" --mode yolo --report json
+
+# Reporte Markdown (para documentación)
+architect run "refactoriza utils" --mode yolo --report markdown --report-file report.md
+
+# Comentario GitHub PR (con secciones collapsible)
+architect run "revisa los cambios" --mode yolo --report github --report-file pr-comment.md
+```
+
+El reporte incluye: resumen (tarea, agente, modelo, status, duración, pasos, coste), archivos modificados con líneas añadidas/eliminadas, quality gates ejecutados, errores encontrados, timeline de cada paso y git diff.
+
+---
+
 ## Uso en CI/CD
 
+### Ejemplo básico — GitHub Actions
+
 ```yaml
-# GitHub Actions
 - name: Refactorizar código
   run: |
     architect run "actualiza los imports obsoletos en src/" \
@@ -531,8 +616,36 @@ architect run "analiza el proyecto" --disable-mcp
     fi
 ```
 
+### Ejemplo avanzado — con reportes, dry-run y git diff
+
 ```yaml
-# config para CI (ci/architect.yaml)
+- name: Dry run primero (ver qué haría)
+  run: |
+    architect run "añade docstrings a todas las funciones" \
+      --dry-run \
+      --confirm-mode yolo \
+      --json
+
+- name: Ejecutar con contexto del PR
+  run: |
+    architect run "revisa y mejora los cambios de este PR" \
+      --confirm-mode yolo \
+      --context-git-diff origin/main \
+      --report github \
+      --report-file pr-report.md \
+      --budget 5.0 \
+      --timeout 600 \
+      --exit-code-on-partial 0
+
+- name: Comentar en PR
+  if: always()
+  run: gh pr comment $PR_NUMBER --body-file pr-report.md
+```
+
+### Config para CI
+
+```yaml
+# ci/architect.yaml
 llm:
   model: gpt-4o-mini
   api_key_env: OPENAI_API_KEY
@@ -604,6 +717,8 @@ architect run PROMPT
     ├── SkillsLoader           .architect.md + skills por glob
     ├── ProceduralMemory       correcciones del usuario entre sesiones
     ├── CostTracker            coste acumulado + watchdog de presupuesto
+    ├── SessionManager         persistencia de sesiones (save/load/resume)
+    ├── DryRunTracker          registro de acciones sin ejecutar (--dry-run)
     │
     └── AgentLoop (while True — el LLM decide cuándo parar)
             │
@@ -660,3 +775,4 @@ architect run PROMPT
 | v0.16.0 | **v4 Phase A** — hooks lifecycle (10 eventos, exit code protocol), guardrails deterministas, skills ecosystem (.architect.md), memoria procedural |
 | v0.16.1 | **QA Phase A** — 228 verificaciones, 5 bugs corregidos (ToolResult import, CostTracker.total, YAML off, schema shadowing), 24 scripts alineados |
 | v0.16.2 | **QA2** — `--show-costs` funciona con streaming, `--mode yolo` nunca pide confirmación (ni para `dangerous`), `--timeout` es watchdog de sesión (no sobreescribe `llm.timeout`), MCP tools auto-inyectadas en `allowed_tools`, `get_schemas` defensivo |
+| v0.17.0 | **v4 Phase B** — sesiones persistentes con resume, reportes multi-formato (JSON/Markdown/GitHub PR), 10 flags CI/CD nativos (`--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`), dry-run/preview mode, 3 nuevos comandos (`sessions`, `resume`, `cleanup`) |
