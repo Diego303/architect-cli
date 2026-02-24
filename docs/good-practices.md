@@ -20,6 +20,10 @@ Guía de buenas prácticas para sacar el máximo partido a `architect`, evitar e
 - [Modos de confirmación](#modos-de-confirmación)
 - [Configuración del workspace](#configuración-del-workspace)
 - [Uso en CI/CD](#uso-en-cicd)
+- [Ralph Loop](#ralph-loop)
+- [Pipelines](#pipelines)
+- [Ejecución paralela](#ejecución-paralela)
+- [Auto-review](#auto-review)
 - [Errores comunes y cómo evitarlos](#errores-comunes-y-cómo-evitarlos)
 
 ---
@@ -716,6 +720,160 @@ fi
 
 ---
 
+## Ralph Loop
+
+### Cuándo usarlo
+
+El Ralph Loop es ideal cuando la tarea tiene una **condición de éxito verificable** automáticamente: tests que pasan, lint sin errores, build que compila, etc.
+
+### Buenas prácticas con Ralph Loop
+
+**Usa checks concretos y rápidos.** Cada check se ejecuta entre iteraciones. Un check que tarda 2 minutos multiplica el tiempo total por el número de iteraciones.
+
+```bash
+# Bien — check rápido y específico
+architect loop "..." --check "pytest tests/test_auth.py -x"
+
+# Peor — check lento que ejecuta toda la suite
+architect loop "..." --check "pytest tests/ --cov=src"
+```
+
+**Establece siempre `--max-iterations` y `--max-cost`.** Sin límites, el loop puede iterar indefinidamente si la tarea es ambigua o imposible.
+
+```bash
+architect loop "..." \
+  --check "pytest tests/" \
+  --max-iterations 10 \
+  --max-cost 5.0
+```
+
+**Usa múltiples checks para verificación completa.** Todos los checks deben pasar para que la iteración sea exitosa.
+
+```bash
+architect loop "..." \
+  --check "pytest tests/ -x" \
+  --check "ruff check src/" \
+  --check "mypy src/"
+```
+
+**El contexto limpio es una ventaja.** El agente de cada iteración no hereda errores o suposiciones de iteraciones anteriores. Solo ve: tarea + checks que fallaron + su output.
+
+---
+
+## Pipelines
+
+### Cuándo usarlos
+
+Los pipelines son ideales para workflows repetibles de múltiples pasos: implement → test → review, o workflows de CI/CD más complejos.
+
+### Buenas prácticas con pipelines
+
+**Usa checkpoints en pasos críticos.** Si un paso posterior falla, puedes hacer rollback al checkpoint del paso anterior.
+
+```yaml
+steps:
+  - name: implement
+    prompt: "..."
+    checkpoint: true    # punto de restauración
+  - name: test
+    prompt: "..."
+    checks:
+      - "pytest tests/"
+```
+
+**Usa `output_var` para pasar contexto entre pasos.** El output de un paso se captura y se puede usar como `{{variable}}` en pasos posteriores.
+
+```yaml
+steps:
+  - name: plan
+    prompt: "Planifica cómo implementar X"
+    agent: plan
+    output_var: plan
+  - name: implement
+    prompt: "Implementa según este plan: {{plan}}"
+    agent: build
+```
+
+**Usa condiciones para pasos opcionales.** Un paso con `condition` solo se ejecuta si el comando retorna exit 0.
+
+```yaml
+- name: fix-lint
+  prompt: "Corrige errores de lint"
+  condition: "ruff check src/ 2>&1 | grep -q 'error'"
+```
+
+**Usa `--from-step` para reanudar tras correcciones manuales.** Si un paso falla y corriges manualmente, reanuda desde ese paso.
+
+```bash
+architect pipeline workflow.yaml --from-step test
+```
+
+---
+
+## Ejecución paralela
+
+### Cuándo usarla
+
+La ejecución paralela es ideal para: comparar resultados de diferentes modelos, dividir trabajo independiente, o experimentar con múltiples enfoques.
+
+### Buenas prácticas con parallel
+
+**Usa `--budget-per-worker` siempre.** Sin límite, N workers pueden consumir N veces el coste esperado.
+
+```bash
+architect parallel "..." --workers 3 --budget-per-worker 1.0
+```
+
+**Limpia worktrees tras inspeccionar.** Los worktrees ocupan espacio en disco (copia completa del repo por worker).
+
+```bash
+# Inspeccionar resultados
+cd .architect-parallel-1 && git diff HEAD~1
+
+# Limpiar cuando estés satisfecho
+architect parallel-cleanup
+```
+
+**Usa round-robin de modelos para competición.** Es una forma efectiva de evaluar qué modelo produce mejores resultados para tu tipo de tarea.
+
+```bash
+architect parallel "optimiza el rendimiento" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat
+```
+
+**Tareas independientes se dividen mejor.** La ejecución paralela funciona mejor cuando las tareas no dependen entre sí (no tocan los mismos archivos).
+
+---
+
+## Auto-review
+
+### Cuándo usarlo
+
+El auto-review es útil como quality gate automático: el reviewer tiene contexto limpio (solo ve el diff) y puede detectar problemas que el builder pasó por alto.
+
+### Buenas prácticas con auto-review
+
+**Usa un modelo diferente para el reviewer.** Un modelo distinto al del builder puede aportar una perspectiva diferente.
+
+```yaml
+auto_review:
+  enabled: true
+  review_model: claude-sonnet-4-6    # diferente al builder
+  max_fix_passes: 1
+```
+
+**Usa `max_fix_passes: 0` para solo reportar.** Si no quieres que el builder intente corregir automáticamente, solo obtén el reporte.
+
+```yaml
+auto_review:
+  enabled: true
+  max_fix_passes: 0    # solo reportar, no corregir
+```
+
+**Combina con guardrails para máxima seguridad.** Los guardrails previenen acciones peligrosas; el auto-review detecta problemas lógicos.
+
+---
+
 ## Errores comunes y cómo evitarlos
 
 ### 1. El agente se queda colgado esperando confirmación
@@ -831,3 +989,7 @@ indexer:
 | Modo | `confirm-sensitive` en local, `yolo` en CI |
 | CI/CD | `--context-git-diff`, `--exit-code-on-partial`, `--report`, sessions para resume |
 | Seguridad | `allowed_only: true`, `allow_delete: false`, guardrails en CI |
+| Ralph Loop | Checks rápidos, `--max-iterations` + `--max-cost` siempre, múltiples checks |
+| Pipelines | Checkpoints en pasos críticos, `output_var` para contexto, condiciones para opcionales |
+| Parallel | `--budget-per-worker`, limpiar worktrees, tareas independientes |
+| Auto-review | Modelo diferente para el reviewer, `max_fix_passes: 0` para solo reportar |

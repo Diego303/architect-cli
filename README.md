@@ -150,6 +150,139 @@ architect cleanup --older-than 30  # elimina sesiones > 30 días
 
 ---
 
+### `architect loop` — iteración automática (Ralph Loop)
+
+```
+architect loop PROMPT --check CMD [opciones]
+```
+
+Ejecuta un agente en bucle hasta que todos los checks (comandos shell) pasen. Cada iteración recibe un contexto limpio: solo la spec original, el diff acumulado, errores de la iteración anterior, y un progress.md auto-generado.
+
+```bash
+# Loop hasta que tests y lint pasen
+architect loop "implementa la feature X" \
+  --check "pytest tests/" \
+  --check "ruff check src/" \
+  --max-iterations 10 \
+  --max-cost 5.0
+
+# Con spec file y worktree aislado
+architect loop "refactoriza el módulo auth" \
+  --spec spec.md \
+  --check "pytest" \
+  --worktree \
+  --model gpt-4o
+```
+
+| Opción | Descripción |
+|--------|-------------|
+| `--check CMD` | Comando de verificación (repetible, requerido) |
+| `--spec PATH` | Archivo de especificación (se usa en vez del prompt) |
+| `--max-iterations N` | Máximo de iteraciones (default: 25) |
+| `--max-cost N` | Límite de coste en USD |
+| `--max-time N` | Límite de tiempo en segundos |
+| `--completion-tag TAG` | Tag que el agente emite al terminar (default: `COMPLETE`) |
+| `--agent NAME` | Agente a usar (default: `build`) |
+| `--model MODEL` | Modelo LLM |
+| `--worktree` | Ejecutar en un git worktree aislado |
+| `--quiet` | Solo resultado final |
+
+---
+
+### `architect pipeline` — ejecutar workflow YAML
+
+```
+architect pipeline FILE [opciones]
+```
+
+Ejecuta un workflow multi-step definido en YAML. Cada paso puede tener su propio agente, modelo, checks, condiciones y variables.
+
+```bash
+# Ejecutar pipeline
+architect pipeline ci/pipeline.yaml --var project=myapp --var env=staging
+
+# Ver plan sin ejecutar
+architect pipeline ci/pipeline.yaml --dry-run
+
+# Reanudar desde un step
+architect pipeline ci/pipeline.yaml --from-step deploy
+```
+
+| Opción | Descripción |
+|--------|-------------|
+| `--var KEY=VALUE` | Variable para el pipeline (repetible) |
+| `--from-step NAME` | Reanudar desde un step específico |
+| `--dry-run` | Mostrar plan sin ejecutar |
+| `-c, --config PATH` | Archivo de configuración YAML |
+| `--quiet` | Solo resultado final |
+
+**Formato del YAML de pipeline**:
+
+```yaml
+name: mi-pipeline
+steps:
+  - name: analyze
+    agent: plan
+    prompt: "Analiza el proyecto {{project}} en entorno {{env}}"
+    output_var: analysis
+
+  - name: implement
+    agent: build
+    prompt: "Implementa: {{analysis}}"
+    model: gpt-4o
+    checks:
+      - "pytest tests/"
+      - "ruff check src/"
+    checkpoint: true
+
+  - name: deploy
+    agent: build
+    prompt: "Deploy a {{env}}"
+    condition: "env == 'production'"
+```
+
+---
+
+### `architect parallel` — ejecución paralela
+
+```
+architect parallel --task CMD [opciones]
+```
+
+Ejecuta múltiples tareas en paralelo, cada una en un git worktree aislado.
+
+```bash
+# Tres tareas en paralelo
+architect parallel \
+  --task "añade tests a auth.py" \
+  --task "añade tests a users.py" \
+  --task "añade tests a billing.py" \
+  --workers 3
+
+# Con modelos diferentes por worker
+architect parallel \
+  --task "optimiza queries" \
+  --task "mejora logging" \
+  --models gpt-4o,claude-sonnet-4-6
+```
+
+| Opción | Descripción |
+|--------|-------------|
+| `--task CMD` | Tarea a ejecutar (repetible) |
+| `--workers N` | Número de workers paralelos (default: 3) |
+| `--models LIST` | Modelos separados por coma (round-robin entre workers) |
+| `--agent NAME` | Agente a usar (default: `build`) |
+| `--budget-per-worker N` | Límite de coste por worker |
+| `--timeout-per-worker N` | Límite de tiempo por worker |
+| `--quiet` | Solo resultado final |
+
+```bash
+# Limpiar worktrees después de ejecutar
+architect parallel-cleanup
+```
+
+---
+
 ### `architect agents` — listar agentes
 
 ```bash
@@ -592,6 +725,146 @@ El reporte incluye: resumen (tarea, agente, modelo, status, duración, pasos, co
 
 ---
 
+## Ralph Loop (Iteración Automática)
+
+El Ralph Loop ejecuta un agente iterativamente hasta que todos los checks pasen. Cada iteración usa un **contexto limpio** — el agente recibe solamente:
+
+1. La spec original (archivo o prompt)
+2. El diff acumulado de todas las iteraciones anteriores
+3. Los errores de checks de la iteración anterior
+4. Un `progress.md` auto-generado con el historial
+
+```bash
+# Iterar hasta que tests y lint pasen
+architect loop "implementa autenticación JWT" \
+  --check "pytest tests/test_auth.py" \
+  --check "ruff check src/auth/" \
+  --max-iterations 5 \
+  --max-cost 3.0
+
+# Con spec file detallado
+architect loop "implementar según spec" \
+  --spec requirements/auth-spec.md \
+  --check "pytest" \
+  --worktree
+```
+
+**Safety nets**: El loop se detiene si se agotan las iteraciones (`max_iterations`), el coste (`max_cost`) o el tiempo (`max_time`). El resultado indica el motivo de parada.
+
+**Worktree**: Con `--worktree`, el loop ejecuta en un git worktree aislado. Si todos los checks pasan, el resultado incluye la ruta al worktree para inspección o merge.
+
+---
+
+## Pipeline Mode (Workflows Multi-Step)
+
+Los pipelines definen workflows secuenciales donde cada paso puede tener su propio agente, modelo, checks y configuración.
+
+**Características**:
+- **Variables**: `{{nombre}}` en prompts, sustituidas desde `--var` o desde `output_var` de steps anteriores
+- **Condiciones**: `condition` evalúa una expresión; el step se salta si es falsa
+- **Output variables**: `output_var` captura la salida de un step como variable para los siguientes
+- **Checks**: comandos shell post-step que verifican el resultado
+- **Checkpoints**: `checkpoint: true` crea un git commit automático al completar el step
+- **Resume**: `--from-step` permite reanudar un pipeline desde un step específico
+- **Dry-run**: `--dry-run` muestra el plan sin ejecutar agentes
+
+```yaml
+# pipeline.yaml
+name: feature-pipeline
+steps:
+  - name: plan
+    agent: plan
+    prompt: "Planifica cómo implementar {{feature}}"
+    output_var: plan_output
+
+  - name: implement
+    agent: build
+    prompt: "Ejecuta este plan: {{plan_output}}"
+    model: gpt-4o
+    checks:
+      - "pytest tests/ -q"
+    checkpoint: true
+
+  - name: review
+    agent: review
+    prompt: "Revisa la implementación de {{feature}}"
+    condition: "run_review == 'true'"
+```
+
+```bash
+architect pipeline pipeline.yaml \
+  --var feature="user auth" \
+  --var run_review=true
+```
+
+---
+
+## Ejecución Paralela
+
+Ejecuta múltiples tareas en paralelo, cada una en un git worktree aislado con `ProcessPoolExecutor`.
+
+```bash
+architect parallel \
+  --task "añade tests unitarios a auth.py" \
+  --task "añade tests unitarios a users.py" \
+  --task "añade tests unitarios a billing.py" \
+  --workers 3 \
+  --budget-per-worker 2.0
+```
+
+Cada worker:
+- Se ejecuta en un git worktree independiente (aislamiento total)
+- Puede usar un modelo diferente (con `--models` se asignan round-robin)
+- Tiene su propio budget y timeout
+- El resultado incluye archivos modificados, coste, duración y ruta al worktree
+
+```bash
+# Limpiar worktrees después
+architect parallel-cleanup
+```
+
+---
+
+## Checkpoints y Rollback
+
+Los checkpoints son git commits con prefijo especial (`architect:checkpoint`) que permiten restaurar el workspace a un punto anterior. Se crean automáticamente en pipelines (con `checkpoint: true`) y pueden usarse en el Ralph Loop.
+
+```bash
+# Los checkpoints se crean automáticamente en pipelines con checkpoint: true
+# Para ver checkpoints creados:
+git log --oneline --grep="architect:checkpoint"
+```
+
+El `CheckpointManager` permite:
+- **Crear** checkpoints (stage all + commit con prefijo)
+- **Listar** checkpoints existentes parseando `git log`
+- **Rollback** a un checkpoint específico (por step o commit hash)
+- **Verificar** si hay cambios desde un checkpoint
+
+---
+
+## Auto-Review
+
+Después de una ejecución de build, un reviewer con **contexto limpio** puede inspeccionar los cambios. El reviewer recibe solo el diff y la tarea original — sin historial del builder — y tiene acceso exclusivo a tools de lectura.
+
+```yaml
+# Activar auto-review en config
+auto_review:
+  enabled: true
+  model: gpt-4o
+```
+
+El reviewer busca:
+- Bugs y errores lógicos
+- Problemas de seguridad
+- Violaciones de convenciones del proyecto
+- Mejoras de rendimiento o legibilidad
+- Tests faltantes
+
+Si encuentra issues, genera un prompt de corrección que puede alimentar al builder para un fix-pass.
+
+---
+
 ## Uso en CI/CD
 
 ### Ejemplo básico — GitHub Actions
@@ -719,6 +992,15 @@ architect run PROMPT
     ├── CostTracker            coste acumulado + watchdog de presupuesto
     ├── SessionManager         persistencia de sesiones (save/load/resume)
     ├── DryRunTracker          registro de acciones sin ejecutar (--dry-run)
+    ├── CheckpointManager      git commits con rollback (architect:checkpoint)
+    │
+    ├── RalphLoop              iteración automática hasta que checks pasen
+    │       └── agent_factory() → AgentLoop fresco por iteración (contexto limpio)
+    ├── PipelineRunner         workflows YAML multi-step con variables/condiciones
+    │       └── agent_factory() → AgentLoop fresco por step
+    ├── ParallelRunner         ejecución paralela en git worktrees aislados
+    │       └── ProcessPoolExecutor → workers con `architect run` en worktrees
+    ├── AutoReviewer           review post-build con contexto limpio (solo diff + tarea)
     │
     └── AgentLoop (while True — el LLM decide cuándo parar)
             │
@@ -776,3 +1058,4 @@ architect run PROMPT
 | v0.16.1 | **QA Phase A** — 228 verificaciones, 5 bugs corregidos (ToolResult import, CostTracker.total, YAML off, schema shadowing), 24 scripts alineados |
 | v0.16.2 | **QA2** — `--show-costs` funciona con streaming, `--mode yolo` nunca pide confirmación (ni para `dangerous`), `--timeout` es watchdog de sesión (no sobreescribe `llm.timeout`), MCP tools auto-inyectadas en `allowed_tools`, `get_schemas` defensivo |
 | v0.17.0 | **v4 Phase B** — sesiones persistentes con resume, reportes multi-formato (JSON/Markdown/GitHub PR), 10 flags CI/CD nativos (`--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`), dry-run/preview mode, 3 nuevos comandos (`sessions`, `resume`, `cleanup`) |
+| v0.18.0 | **v4 Phase C** — Ralph Loop (iteración automática con checks), Pipeline Mode (workflows YAML multi-step con variables, condiciones, checkpoints), ejecución paralela en worktrees git, checkpoints con rollback, auto-review post-build con contexto limpio, 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |

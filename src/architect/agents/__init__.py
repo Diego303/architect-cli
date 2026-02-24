@@ -18,6 +18,7 @@ from .registry import (
     list_available_agents,
     resolve_agents_from_yaml,
 )
+from .reviewer import REVIEW_SYSTEM_PROMPT, AutoReviewer, ReviewResult
 
 __all__ = [
     # Prompts
@@ -32,4 +33,8 @@ __all__ = [
     "list_available_agents",
     "resolve_agents_from_yaml",
     "AgentNotFoundError",
+    # Reviewer (v4-C5)
+    "REVIEW_SYSTEM_PROMPT",
+    "AutoReviewer",
+    "ReviewResult",
 ]

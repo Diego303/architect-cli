@@ -1,6 +1,6 @@
 # Testing — Resumen completo de cobertura
 
-Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.17.0.
+Documento actualizado el 2026-02-24. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.18.0.
 
 ## Resultado global
 
@@ -33,12 +33,13 @@ Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test 
 | `test_phase17.py` | 31 | Passed | No |
 | `test_phase18.py` | 32 | Passed | No |
 | `test_phase_b.py` | ~104 checks | Passed | No |
+| `test_phase_c_e2e.py` | 31 | Passed | No |
 | `test_integration.py` | 54 (47+7) | 47 passed, 7 esperados | 7 requieren key |
 | `test_config_loader.py` | 37 | Passed | No |
 | `test_mcp_internals.py` | 47 | Passed | No |
 | `test_streaming.py` | 33 | Passed | No |
 | `test_parallel_execution.py` | 29 | Passed | No |
-| **TOTAL scripts** | **~817** | **Passed** | **7 esperados con key** |
+| **TOTAL scripts** | **~848** | **Passed** | **7 esperados con key** |
 
 ### Tests unitarios pytest (`tests/`)
 
@@ -51,7 +52,12 @@ Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test 
 | `tests/test_sessions/` | 22 | SessionManager, SessionState, generate_session_id |
 | `tests/test_reports/` | 20 | ExecutionReport, ReportGenerator, collect_git_diff |
 | `tests/test_dryrun/` | 23 | DryRunTracker, PlannedAction, WRITE_TOOLS/READ_TOOLS |
-| **TOTAL pytest** | **~181** | **v4 Phase A + Phase B** |
+| `tests/test_ralph/` | 90 | RalphLoop, RalphConfig, LoopIteration, RalphLoopResult |
+| `tests/test_pipelines/` | 83 | PipelineRunner, PipelineConfig, PipelineStep, variables, conditions |
+| `tests/test_checkpoints/` | 48 | CheckpointManager, Checkpoint, create/list/rollback |
+| `tests/test_reviewer/` | 47 | AutoReviewer, ReviewResult, build_fix_prompt, get_recent_diff |
+| `tests/test_parallel/` | 43 | ParallelRunner, ParallelConfig, WorkerResult, worktrees |
+| **TOTAL pytest** | **~504** | **v4 Phase A + Phase B + Phase C** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -167,6 +173,17 @@ Documento actualizado el 2026-02-23. Refleja el estado actual de todos los test 
 | `features/dryrun.py` | `test_phase_b` (B4, 6 tests), `tests/test_dryrun/` (23 tests) | DryRunTracker — record_action, get_plan_summary, action_count, WRITE_TOOLS/READ_TOOLS disjuntos, _summarize_action (5 code paths), interleave read+write, tool_input complejo/truncación |
 | `cli.py` (B3 flags) | `test_phase_b` (B3, 5 tests) | CLI flags: --json, --dry-run, --report, --report-file, --session, --confirm-mode, --context-git-diff, --exit-code-on-partial; comandos: `architect sessions`, `architect cleanup`, `architect resume NONEXISTENT` → exit 3; exit code constants (0,1,2,3,4,5,130) |
 
+### v4 Phase C — Ralph Loop, Parallel, Pipelines, Checkpoints, Auto-Review
+
+| Archivo fuente | Test file(s) | Qué se prueba |
+|---|---|---|
+| `features/ralph.py` | `tests/test_ralph/` (90 tests) | RalphLoop — iteración completa, contexto limpio por iteración, safety nets (max_iterations, max_cost, max_time), _run_checks (subprocess, exit codes), _build_iteration_prompt (con checks fallidos y outputs), RalphConfig dataclass, LoopIteration, RalphLoopResult, stop_reason (5 valores), worktree isolation, agent_factory pattern |
+| `features/pipelines.py` | `tests/test_pipelines/` (83 tests) | PipelineRunner — ejecución secuencial, _substitute_variables ({{name}}), _check_condition (shell exit code), _run_checks, _create_checkpoint, from_step resume, dry_run mode, PipelineConfig/PipelineStep dataclasses, PipelineStepResult, output_var captura, pasos condicionados, YAML parsing |
+| `features/parallel.py` | `tests/test_parallel/` (43 tests) | ParallelRunner — _create_worktrees, _run_worker (subprocess), cleanup_worktrees, round-robin de tareas y modelos, WorkerResult dataclass, ParallelConfig, WORKTREE_PREFIX, ProcessPoolExecutor, error handling por worker |
+| `features/checkpoints.py` | `tests/test_checkpoints/` (48 tests) | CheckpointManager — create (git add + commit), list_checkpoints (git log --grep, format %H\|%s\|%at), rollback (git reset --hard), get_latest, has_changes_since, Checkpoint dataclass (frozen), short_hash, CHECKPOINT_PREFIX, no-changes → None |
+| `agents/reviewer.py` | `tests/test_reviewer/` (47 tests) | AutoReviewer — review_changes (contexto limpio, agent_factory), build_fix_prompt, get_recent_diff (subprocess git diff), ReviewResult dataclass, REVIEW_SYSTEM_PROMPT, detección "sin issues" (case-insensitive), error handling (LLM failure → ReviewResult con error), AutoReviewConfig |
+| `cli.py` (C commands) | `test_phase_c_e2e.py` (31 tests) | CLI: `architect loop`, `architect pipeline`, `architect parallel`, `architect parallel-cleanup`; integración ralph+checks, pipeline+variables+conditions, parallel+worktrees, checkpoints+list+rollback, auto-review flow |
+
 ---
 
 ## Tests de integración (`test_integration.py`)
@@ -232,6 +249,18 @@ Tras la implementación de v4 Phase B:
    - Version hardcoded en tests — ahora se lee dinámicamente desde `__init__.py`
    - `_execute_tool_calls_batch` — parallel execution timeout en CI
 4. Resultado final: **~817+ tests passing** (scripts) + **~181 tests pytest** (unitarios)
+
+## QA — v0.18.0
+
+Tras la implementación de v4 Phase C:
+
+1. Se crearon tests unitarios pytest: `tests/test_ralph/` (90), `tests/test_pipelines/` (83), `tests/test_checkpoints/` (48), `tests/test_reviewer/` (47), `tests/test_parallel/` (43)
+2. Se creó `scripts/test_phase_c_e2e.py` con 31 tests E2E (C1-C5 + combinados)
+3. Se detectaron y corrigieron 3 bugs (QA4):
+   - **BUG-1**: `RalphLoop` ejecutaba iteraciones compartiendo contexto — corregido para crear agente FRESCO por iteración via `agent_factory`
+   - **BUG-2**: `ParallelRunner._create_worktrees()` no aislaba correctamente — corregido para usar git worktree con branches dedicadas
+   - **BUG-3**: `CheckpointManager.list_checkpoints()` parseaba incorrecto el formato de `git log` — corregido formato pipe-separated `%H|%s|%at`
+4. Resultado final: **~848 tests passing** (scripts) + **504 tests pytest** (unitarios) + **31 E2E** (Phase C)
 
 ---
 

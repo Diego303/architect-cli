@@ -62,6 +62,15 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--context-git-diff REF` | Inyectar diff `git diff REF` como contexto adicional |
 | `--exit-code-on-partial` | Retornar exit code 2 si status=partial (default en CI) |
 
+**Comandos adicionales (v4-C):**
+
+| Comando | Descripción |
+|---------|-------------|
+| `architect loop TASK --check CMD` | Ralph Loop: iterar hasta que checks pasen |
+| `architect pipeline FILE` | Pipeline: ejecutar workflow YAML multi-step |
+| `architect parallel TASK --models CSV` | Parallel: ejecutar en worktrees paralelos |
+| `architect parallel-cleanup` | Limpiar worktrees de ejecuciones paralelas |
+
 ---
 
 ## Schema YAML completo
@@ -309,6 +318,41 @@ memory:
 sessions:
   auto_save: true             # guardar estado después de cada paso (default: true)
   cleanup_after_days: 7       # días tras los cuales `architect cleanup` elimina sesiones
+
+# ==============================================================================
+# Ralph Loop — iteración automática con checks (v4-C1)
+# ==============================================================================
+ralph:
+  max_iterations: 25           # máximo de iteraciones (1-100)
+  max_cost: null               # coste máximo total en USD (null = sin límite)
+  max_time: null               # tiempo máximo total en segundos (null = sin límite)
+  completion_tag: COMPLETE     # tag que el agente emite al declarar completado
+  agent: build                 # agente a usar en cada iteración
+
+# ==============================================================================
+# Parallel Runs — ejecución paralela en git worktrees (v4-C2)
+# ==============================================================================
+parallel:
+  workers: 3                   # número de workers paralelos (1-10)
+  agent: build                 # agente a usar en cada worker
+  max_steps: 50                # máximo de pasos por worker
+  budget_per_worker: null      # USD por worker (null = sin límite)
+  timeout_per_worker: null     # segundos por worker (null = 600s)
+
+# ==============================================================================
+# Checkpoints — puntos de restauración git (v4-C4)
+# ==============================================================================
+checkpoints:
+  enabled: false               # true = activar checkpoints automáticos en el AgentLoop
+  every_n_steps: 5             # crear checkpoint cada N pasos (1-50)
+
+# ==============================================================================
+# Auto-Review — revisión automática post-build (v4-C5)
+# ==============================================================================
+auto_review:
+  enabled: false               # true = activar auto-review tras completar
+  review_model: null           # modelo para el reviewer (null = mismo que builder)
+  max_fix_passes: 1            # pases de corrección (0 = solo reportar, 1-3 = corregir)
 ```
 
 ---
@@ -605,4 +649,122 @@ evaluation:
 ```bash
 # O usar solo el flag de CLI (ignora evaluation.mode del YAML)
 architect run "genera tests para src/auth.py" -a build --self-eval full
+```
+
+### Ralph Loop con checks (v4-C1)
+
+```yaml
+ralph:
+  max_iterations: 10
+  max_cost: 5.0
+  agent: build
+```
+
+```bash
+# Iterar hasta que los tests pasen
+architect loop "corrige los tests que fallan en src/auth.py" \
+  --check "pytest tests/test_auth.py -x" \
+  --max-iterations 10
+
+# Con múltiples checks
+architect loop "implementa validación de email" \
+  --check "pytest tests/" \
+  --check "ruff check src/" \
+  --max-cost 2.0
+```
+
+### Ejecución paralela (v4-C2)
+
+```yaml
+parallel:
+  workers: 3
+  agent: build
+  budget_per_worker: 1.0
+  timeout_per_worker: 300
+```
+
+```bash
+# Misma tarea con diferentes modelos
+architect parallel "optimiza las queries SQL" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat
+
+# Tareas diferentes en paralelo
+architect parallel \
+  --task "tests para auth" \
+  --task "tests para users" \
+  --task "tests para billing" \
+  --workers 3 --budget-per-worker 1.0
+
+# Limpiar worktrees después
+architect parallel-cleanup
+```
+
+### Pipeline YAML multi-step (v4-C3)
+
+```yaml
+# pipeline.yaml
+name: implement-and-test
+steps:
+  - name: implement
+    prompt: "Implementa la feature descrita en {{task}}"
+    agent: build
+    checkpoint: true
+
+  - name: test
+    prompt: "Genera tests para los cambios del paso anterior"
+    agent: build
+    checks:
+      - "pytest tests/ -x"
+    checkpoint: true
+
+  - name: review
+    prompt: "Revisa los cambios realizados"
+    agent: review
+    output_var: review_result
+
+variables:
+  task: "añadir autenticación JWT"
+```
+
+```bash
+# Ejecutar pipeline
+architect pipeline pipeline.yaml
+
+# Ejecutar desde un paso específico
+architect pipeline pipeline.yaml --from-step test
+
+# Dry-run del pipeline
+architect pipeline pipeline.yaml --dry-run
+```
+
+### Checkpoints y rollback (v4-C4)
+
+```yaml
+checkpoints:
+  enabled: true
+  every_n_steps: 5
+```
+
+```bash
+# Ver checkpoints creados
+git log --oneline --grep="architect:checkpoint"
+
+# Rollback manual a un checkpoint
+git reset --hard <commit_hash>
+```
+
+### Auto-review post-build (v4-C5)
+
+```yaml
+auto_review:
+  enabled: true
+  review_model: claude-sonnet-4-6
+  max_fix_passes: 1
+```
+
+```bash
+# El auto-review se activa automáticamente al completar una tarea
+# con auto_review.enabled: true. No requiere flags de CLI adicionales.
+architect run "implementa feature X" --mode yolo -c config.yaml
+# → Build completa → Review automática → Fix-pass si hay issues
 ```

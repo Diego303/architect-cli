@@ -27,6 +27,11 @@
 | [`sessions.md`](sessions.md) | **Sessions**: persistencia y resume — guardar, listar, reanudar y limpiar sesiones entre ejecuciones |
 | [`reports.md`](reports.md) | **Reports**: reportes de ejecución en JSON, Markdown y GitHub PR comment para CI/CD |
 | [`dryrun.md`](dryrun.md) | **Dry Run**: simulación de ejecución — DryRunTracker, WRITE_TOOLS/READ_TOOLS, plan de acciones |
+| [`ralph-loop.md`](ralph-loop.md) | **Ralph Loop**: iteración automática con checks — RalphConfig, RalphLoop, contexto limpio, worktrees, safety nets |
+| [`pipelines.md`](pipelines.md) | **Pipelines**: workflows YAML multi-step — variables {{nombre}}, condiciones, output_var, checkpoints, dry-run, from-step |
+| [`parallel.md`](parallel.md) | **Parallel**: ejecución paralela en git worktrees — ParallelRunner, workers, round-robin de modelos |
+| [`checkpoints.md`](checkpoints.md) | **Checkpoints**: puntos de restauración git — CheckpointManager, rollback, integración con pipelines |
+| [`auto-review.md`](auto-review.md) | **Auto-Review**: revisión post-build con contexto limpio — AutoReviewer, ReviewResult, fix-pass |
 
 ---
 
@@ -48,6 +53,12 @@ architect run "refactoriza main.py" -a build --mode yolo
          ├─ ProceduralMemory      correcciones del usuario → .architect/memory.md
          ├─ SessionManager        persistencia de sesiones en .architect/sessions/
          ├─ DryRunTracker         registro de acciones en modo --dry-run
+         ├─ CheckpointManager     git commits con rollback (architect:checkpoint)
+         │
+         ├─ RalphLoop             iteración automática hasta que checks pasen (v4-C1)
+         ├─ PipelineRunner        workflows YAML multi-step con variables (v4-C3)
+         ├─ ParallelRunner        ejecución paralela en git worktrees (v4-C2)
+         ├─ AutoReviewer          review post-build con contexto limpio (v4-C5)
          │
          ├─ AgentLoop (build por defecto)        while True + safety nets
          │       │
@@ -75,11 +86,11 @@ architect run "refactoriza main.py" -a build --mode yolo
 
 **Stack**: Python 3.12+, Click, Pydantic v2, LiteLLM, httpx, structlog, tenacity.
 
-**Versión actual**: 0.17.0
+**Versión actual**: 0.18.0
 
 ---
 
-## Novedades recientes (v0.9–v0.15)
+## Novedades recientes (v0.9–v0.18)
 
 | Versión | Funcionalidad |
 |---------|---------------|
@@ -96,3 +107,4 @@ architect run "refactoriza main.py" -a build --mode yolo
 | v0.16.1 | QA Phase A: 5 bug fixes, 116 nuevos tests (713 total), scripts actualizados |
 | v0.16.2 | QA2: streaming costs fix, yolo mode fix, timeout separation, MCP tools auto-injection, defensive get_schemas |
 | v0.17.0 | **v4 Phase B**: `SessionManager` (save/load/resume/cleanup), `ReportGenerator` (JSON/Markdown/GitHub PR), `DryRunTracker` (plan de acciones), CI/CD flags (`--report`, `--session`, `--context-git-diff`, `--exit-code-on-partial`), exit codes (0-5, 130), nuevos comandos (`sessions`, `resume`, `cleanup`) |
+| v0.18.0 | **v4 Phase C**: `RalphLoop` (iteración automática con checks, contexto limpio, worktrees), `PipelineRunner` (workflows YAML multi-step con variables, condiciones, checkpoints), `ParallelRunner` (ejecución paralela en git worktrees), `CheckpointManager` (git commits con rollback), `AutoReviewer` (review post-build con contexto limpio), 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |

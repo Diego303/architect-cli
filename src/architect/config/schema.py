@@ -568,6 +568,125 @@ class SessionsConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+# ── Phase C Config Schemas ─────────────────────────────────────────────
+
+
+class RalphLoopConfig(BaseModel):
+    """Configuración del Ralph Loop nativo (v4-C1).
+
+    El Ralph Loop ejecuta iteraciones del agente hasta que todos los checks
+    pasen. Cada iteración usa un agente con contexto LIMPIO.
+    """
+
+    max_iterations: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description="Número máximo de iteraciones del loop.",
+    )
+    max_cost: float | None = Field(
+        default=None,
+        description="Coste máximo total en USD. None = sin límite.",
+    )
+    max_time: int | None = Field(
+        default=None,
+        ge=1,
+        description="Tiempo máximo total en segundos. None = sin límite.",
+    )
+    completion_tag: str = Field(
+        default="COMPLETE",
+        description="Tag que el agente emite cuando declara completado.",
+    )
+    agent: str = Field(
+        default="build",
+        description="Agente a usar en cada iteración.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class ParallelRunsConfig(BaseModel):
+    """Configuración de ejecuciones paralelas con worktrees (v4-C2).
+
+    Ejecuta múltiples agentes en paralelo, cada uno en un git worktree
+    separado para aislamiento total.
+    """
+
+    workers: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Número de workers paralelos.",
+    )
+    agent: str = Field(
+        default="build",
+        description="Agente a usar en cada worker.",
+    )
+    max_steps: int = Field(
+        default=50,
+        ge=1,
+        description="Máximo de pasos por worker.",
+    )
+    budget_per_worker: float | None = Field(
+        default=None,
+        description="Presupuesto en USD por worker. None = sin límite.",
+    )
+    timeout_per_worker: int | None = Field(
+        default=None,
+        ge=1,
+        description="Timeout en segundos por worker. None = 600s.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class CheckpointsConfig(BaseModel):
+    """Configuración de checkpoints y rollback (v4-C4).
+
+    Checkpoints son git commits con prefijo especial que permiten
+    restaurar el estado del workspace a un punto anterior.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, activa checkpoints automáticos.",
+    )
+    every_n_steps: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Crear checkpoint cada N pasos del agente.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class AutoReviewConfig(BaseModel):
+    """Configuración de auto-review writer/reviewer (v4-C5).
+
+    Cuando está activo, al completar una tarea el agente reviewer
+    inspecciona los cambios y, si encuentra problemas, el builder
+    realiza un fix-pass.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, activa auto-review tras completar.",
+    )
+    review_model: str | None = Field(
+        default=None,
+        description="Modelo LLM para el reviewer. None = usa el mismo que el builder.",
+    )
+    max_fix_passes: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description="Máximo de fix-passes tras review. 0 = solo reportar.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class AppConfig(BaseModel):
     """Configuración completa de la aplicación.
 
@@ -591,5 +710,9 @@ class AppConfig(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)  # v4-A4
     skills: SkillsConfig = Field(default_factory=SkillsConfig)  # v4-A3
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)  # v4-B1
+    ralph: RalphLoopConfig = Field(default_factory=RalphLoopConfig)  # v4-C1
+    parallel: ParallelRunsConfig = Field(default_factory=ParallelRunsConfig)  # v4-C2
+    checkpoints: CheckpointsConfig = Field(default_factory=CheckpointsConfig)  # v4-C4
+    auto_review: AutoReviewConfig = Field(default_factory=AutoReviewConfig)  # v4-C5
 
     model_config = {"extra": "forbid"}
