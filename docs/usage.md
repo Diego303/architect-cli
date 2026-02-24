@@ -2,6 +2,8 @@
 
 Guía práctica de uso real: desde el caso más simple hasta configuraciones avanzadas para CI/CD, múltiples proyectos y equipos. Incluye todos los flags, combinaciones de logging y patrones de automatización.
 
+> **Nota sobre versiones**: Las referencias `(v4-A1)`, `(v4-B1)`, `(v4-C1)`, etc. en los títulos de secciones se refieren a fases del plan de desarrollo interno (Plan base v4). La versión 1.0.0 es la primera release oficial y contiene todas estas funcionalidades.
+
 ---
 
 ## Índice
@@ -42,6 +44,11 @@ Guía práctica de uso real: desde el caso más simple hasta configuraciones ava
 34. [Ejecución paralela en worktrees (v4-C2)](#34-ejecución-paralela-en-worktrees-v4-c2)
 35. [Checkpoints y rollback (v4-C4)](#35-checkpoints-y-rollback-v4-c4)
 36. [Auto-review post-build (v4-C5)](#36-auto-review-post-build-v4-c5)
+37. [Evaluación competitiva — architect eval (v1.0.0)](#37-evaluación-competitiva--architect-eval-v100)
+38. [Code Health — architect health (v1.0.0)](#38-code-health--architect-health-v100)
+39. [Presets — architect init (v1.0.0)](#39-presets--architect-init-v100)
+40. [Sub-agentes — dispatch_subagent (v1.0.0)](#40-sub-agentes--dispatch_subagent-v100)
+41. [OpenTelemetry — trazas distribuidas (v1.0.0)](#41-opentelemetry--trazas-distribuidas-v100)
 
 ---
 
@@ -54,7 +61,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.18.0
+architect --version   # architect, version 1.0.0
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -1041,7 +1048,7 @@ print(f\"Tokens: {costs.get('total_tokens', 0):,}\")
 
 ## 18. Hooks del lifecycle (v4-A1)
 
-A partir de v0.16.0, architect soporta un sistema completo de hooks en **10 eventos del lifecycle**. El sistema es retrocompatible con los `post_edit` hooks de v0.15.x.
+A partir de v0.16.0 (Plan base v4 Phase A), architect soporta un sistema completo de hooks en **10 eventos del lifecycle**. El sistema es retrocompatible con los `post_edit` hooks anteriores.
 
 ### Eventos disponibles
 
@@ -1677,6 +1684,42 @@ architect cleanup                  # elimina sesiones > 7 días (default)
 architect cleanup --older-than 30  # elimina sesiones > 30 días
 ```
 
+### `architect eval` — evaluación competitiva (v1.0.0)
+
+```bash
+# Comparar modelos en una tarea
+architect eval "optimiza las queries SQL" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat
+
+# Con budget y timeout
+architect eval "implementa auth JWT" \
+  --models gpt-4o,claude-sonnet-4-6 \
+  --budget-per-model 1.0 \
+  --timeout-per-model 300
+```
+
+### `architect init` — generar configuración desde preset (v1.0.0)
+
+```bash
+# Listar presets
+architect init
+
+# Generar config.yaml desde preset
+architect init python
+architect init ci
+architect init paranoid
+```
+
+### `architect health` — métricas de calidad del código (v1.0.0)
+
+```bash
+# Analizar workspace actual
+architect health
+
+# Output JSON para CI
+architect health --json
+```
+
 ---
 
 ## 24. Referencia rápida de flags
@@ -1739,7 +1782,10 @@ Sessions y reports (v4-B)
   --exit-code-on-partial    Exit code 2 si status=partial
 ```
 
-### Comandos adicionales (v4-C)
+Health y evaluación (v1.0.0)
+  --health                  Mostrar delta de métricas de código al final
+
+### Comandos adicionales (Plan base v4 Phase C)
 
 ```
 architect loop TASK [OPTIONS]     Ralph Loop: iterar hasta que checks pasen
@@ -1765,6 +1811,21 @@ architect parallel TASK [OPTIONS] Parallel: ejecutar en git worktrees
   --timeout-per-worker INT        Timeout en segundos por worker
 
 architect parallel-cleanup        Limpiar worktrees de ejecuciones paralelas
+
+Comandos adicionales (v1.0.0)
+
+architect eval PROMPT [OPTIONS]  Evaluación competitiva multi-modelo
+  --models CSV                    Modelos separados por coma
+  --budget-per-model FLOAT        USD por modelo
+  --timeout-per-model INT         Timeout por modelo en segundos
+
+architect init [PRESET]          Generar config.yaml desde preset
+  Presets: python, node-react, ci, paranoid, yolo
+
+architect health [OPTIONS]       Métricas de calidad del código
+  -c, --config PATH               Archivo YAML de configuración
+  -w, --workspace PATH            Directorio de trabajo
+  --json                          Output JSON
 ```
 
 ### Combinaciones más comunes
@@ -1812,7 +1873,7 @@ architect run "PROMPT" --mode yolo --allow-commands --budget 1.0 --quiet --json
 
 ## 25. Guardrails (v4-A2)
 
-A partir de v0.16.0, architect incluye un motor de **guardrails deterministas** que se evalúan ANTES de los hooks. Son reglas de seguridad que no pueden ser desactivadas por el LLM.
+A partir de v0.16.0 (Plan base v4 Phase A), architect incluye un motor de **guardrails deterministas** que se evalúan ANTES de los hooks. Son reglas de seguridad que no pueden ser desactivadas por el LLM.
 
 ### Configurar en YAML
 
@@ -1917,7 +1978,7 @@ guardrails:
 
 ## 26. Skills y .architect.md (v4-A3)
 
-A partir de v0.16.0, architect soporta un sistema de **skills** de dos niveles para inyectar contexto específico del proyecto en el system prompt del agente.
+A partir de v0.16.0 (Plan base v4 Phase A), architect soporta un sistema de **skills** de dos niveles para inyectar contexto específico del proyecto en el system prompt del agente.
 
 ### Nivel 1: Contexto del proyecto (siempre activo)
 
@@ -2009,7 +2070,7 @@ skills:
 
 ## 27. Memoria procedural (v4-A4)
 
-A partir de v0.16.0, architect puede detectar correcciones del usuario y almacenarlas como **memoria procedural** que persiste entre sesiones.
+A partir de v0.16.0 (Plan base v4 Phase A), architect puede detectar correcciones del usuario y almacenarlas como **memoria procedural** que persiste entre sesiones.
 
 ### Cómo funciona
 
@@ -2066,7 +2127,7 @@ El archivo `.architect/memory.md` es editable manualmente. Puedes añadir reglas
 
 ## 28. Sessions y resume (v4-B1)
 
-A partir de v0.17.0, architect guarda el estado del agente automáticamente después de cada paso. Si una ejecución se interrumpe (Ctrl+C, timeout, budget exceeded), puedes reanudarla.
+A partir de v0.17.0 (Plan base v4 Phase B), architect guarda el estado del agente automáticamente después de cada paso. Si una ejecución se interrumpe (Ctrl+C, timeout, budget exceeded), puedes reanudarla.
 
 ### Guardado automático
 
@@ -2114,7 +2175,7 @@ Ver documentación completa: [`sessions.md`](sessions.md).
 
 ## 29. Reports de ejecución (v4-B2)
 
-A partir de v0.17.0, architect puede generar reportes detallados de cada ejecución en tres formatos: JSON (CI/CD), Markdown (documentación) y GitHub PR comment (con secciones collapsible).
+A partir de v0.17.0 (Plan base v4 Phase B), architect puede generar reportes detallados de cada ejecución en tres formatos: JSON (CI/CD), Markdown (documentación) y GitHub PR comment (con secciones collapsible).
 
 ### Uso
 
@@ -2155,7 +2216,7 @@ Ver documentación completa: [`reports.md`](reports.md).
 
 ## 30. Dry Run detallado (v4-B4)
 
-El flag `--dry-run` simula la ejecución sin realizar cambios reales. A partir de v0.17.0, el sistema registra cada acción planificada y genera un resumen.
+El flag `--dry-run` simula la ejecución sin realizar cambios reales. A partir de v0.17.0 (Plan base v4 Phase B), el sistema registra cada acción planificada y genera un resumen.
 
 ```bash
 architect run "refactoriza auth" --dry-run
@@ -2169,7 +2230,7 @@ El resumen de acciones planificadas se incluye en el output final del agente y e
 
 ## 31. CI/CD flags avanzados (v4-B3)
 
-v0.17.0 añade flags específicos para integración con CI/CD:
+v0.17.0 (Plan base v4 Phase B) añade flags específicos para integración con CI/CD:
 
 ### `--context-git-diff REF`
 
@@ -2229,7 +2290,7 @@ fi
 
 ## 32. Ralph Loop — iteración automática (v4-C1)
 
-A partir de v0.18.0, architect incluye el **Ralph Loop**: un modo de iteración automática que ejecuta el agente repetidamente hasta que un conjunto de checks (comandos shell) pasen. Cada iteración usa un agente con **contexto limpio** — sin historial de iteraciones anteriores.
+A partir de v0.18.0 (Plan base v4 Phase C), architect incluye el **Ralph Loop**: un modo de iteración automática que ejecuta el agente repetidamente hasta que un conjunto de checks (comandos shell) pasen. Cada iteración usa un agente con **contexto limpio** — sin historial de iteraciones anteriores.
 
 ### Uso básico
 
@@ -2280,7 +2341,7 @@ Ver documentación completa: [`ralph-loop.md`](ralph-loop.md).
 
 ## 33. Pipeline Mode — workflows YAML (v4-C3)
 
-A partir de v0.18.0, architect soporta **pipelines**: workflows YAML multi-step donde cada paso es una ejecución del agente con su propio prompt, agente y configuración.
+A partir de v0.18.0 (Plan base v4 Phase C), architect soporta **pipelines**: workflows YAML multi-step donde cada paso es una ejecución del agente con su propio prompt, agente y configuración.
 
 ### Uso básico
 
@@ -2341,7 +2402,7 @@ Ver documentación completa: [`pipelines.md`](pipelines.md).
 
 ## 34. Ejecución paralela en worktrees (v4-C2)
 
-A partir de v0.18.0, architect soporta **ejecución paralela** de múltiples agentes, cada uno en un git worktree aislado.
+A partir de v0.18.0 (Plan base v4 Phase C), architect soporta **ejecución paralela** de múltiples agentes, cada uno en un git worktree aislado.
 
 ### Uso básico
 
@@ -2395,7 +2456,7 @@ Ver documentación completa: [`parallel.md`](parallel.md).
 
 ## 35. Checkpoints y rollback (v4-C4)
 
-A partir de v0.18.0, architect puede crear **checkpoints**: git commits con el prefijo `architect:checkpoint` que permiten volver a un estado anterior del workspace.
+A partir de v0.18.0 (Plan base v4 Phase C), architect puede crear **checkpoints**: git commits con el prefijo `architect:checkpoint` que permiten volver a un estado anterior del workspace.
 
 ### Uso en pipelines
 
@@ -2434,7 +2495,7 @@ Ver documentación completa: [`checkpoints.md`](checkpoints.md).
 
 ## 36. Auto-review post-build (v4-C5)
 
-A partir de v0.18.0, architect puede ejecutar automáticamente una **revisión post-build** con un agente reviewer que tiene contexto limpio (solo ve el diff y la tarea original).
+A partir de v0.18.0 (Plan base v4 Phase C), architect puede ejecutar automáticamente una **revisión post-build** con un agente reviewer que tiene contexto limpio (solo ve el diff y la tarea original).
 
 ### Configuración
 
@@ -2456,3 +2517,176 @@ auto_review:
 El reviewer busca: bugs lógicos, problemas de seguridad, violaciones de convenciones, oportunidades de simplificación y tests faltantes.
 
 Ver documentación completa: [`auto-review.md`](auto-review.md).
+
+---
+
+## 37. Evaluación competitiva — architect eval (v1.0.0)
+
+Compara múltiples modelos LLM ejecutando la misma tarea y puntuando los resultados.
+
+```bash
+# Comparar 3 modelos en la misma tarea
+architect eval "refactoriza utils.py para usar dataclasses" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat
+
+# Con budget y timeout por modelo
+architect eval "implementa autenticación JWT" \
+  --models gpt-4o,claude-sonnet-4-6 \
+  --budget-per-model 1.0 \
+  --timeout-per-model 300
+```
+
+### Scoring
+
+Cada modelo se puntúa en 4 dimensiones (total = 100):
+
+| Dimensión | Peso | Qué mide |
+|-----------|------|----------|
+| Correctness | 40 | ¿Completa la tarea correctamente? |
+| Quality | 30 | ¿Código limpio, mantenible? |
+| Efficiency | 20 | ¿Coste y pasos razonables? |
+| Style | 10 | ¿Sigue convenciones del proyecto? |
+
+El resultado incluye ranking, coste y tiempo por modelo. Formato JSON disponible con `--json`.
+
+Ver documentación completa: [`eval.md`](eval.md).
+
+---
+
+## 38. Code Health — architect health (v1.0.0)
+
+Analiza métricas de calidad del código (complejidad ciclomática, líneas, funciones, etc.) y muestra un delta respecto a la ejecución anterior.
+
+```bash
+# Analizar el workspace actual
+architect health
+
+# Con output JSON para CI
+architect health --json
+
+# Usar durante una sesión de build para ver impacto
+architect run "refactoriza el módulo auth" --mode yolo --health
+```
+
+### Métricas capturadas
+
+| Métrica | Fuente |
+|---------|--------|
+| Complejidad ciclomática | `radon` (requiere instalación: `pip install radon`) |
+| Total de líneas | Parser AST estándar |
+| Funciones/métodos | Parser AST estándar |
+| Clases | Parser AST estándar |
+
+El flag `--health` en `architect run` muestra el delta de métricas antes/después de la ejecución.
+
+### Configuración
+
+```yaml
+health:
+  enabled: true
+  include_patterns: ["*.py"]    # archivos a analizar
+  exclude_patterns: ["tests/*"] # archivos a excluir
+```
+
+Ver documentación completa: [`health.md`](health.md).
+
+---
+
+## 39. Presets — architect init (v1.0.0)
+
+Genera un archivo `config.yaml` a partir de presets predefinidos.
+
+```bash
+# Listar presets disponibles
+architect init
+
+# Generar config para proyecto Python
+architect init python
+
+# Otros presets
+architect init node-react    # Node.js + React
+architect init ci            # CI/CD headless
+architect init paranoid      # máxima seguridad
+architect init yolo          # sin restricciones
+```
+
+### Presets disponibles
+
+| Preset | Modelo | Mode | Budget | Descripción |
+|--------|--------|------|--------|-------------|
+| `python` | `gpt-4o` | `confirm-sensitive` | $2.0 | Python con ruff, mypy, pytest |
+| `node-react` | `gpt-4o` | `confirm-sensitive` | $2.0 | Node.js + ESLint |
+| `ci` | `gpt-4o` | `yolo` | $1.0 | Headless para CI/CD |
+| `paranoid` | `gpt-4o` | `confirm-all` | $0.5 | Guardrails estrictos, archivos protegidos |
+| `yolo` | `gpt-4o` | `yolo` | — | Sin restricciones, sin budget |
+
+Cada preset genera un `config.yaml` completo y documentado. El archivo se puede personalizar después de generarlo.
+
+Ver documentación completa: [`presets.md`](presets.md).
+
+---
+
+## 40. Sub-agentes — dispatch_subagent (v1.0.0)
+
+El agente `build` puede delegar sub-tareas a agentes especializados con contexto aislado mediante la tool `dispatch_subagent`.
+
+```bash
+# El agente build puede usar dispatch_subagent automáticamente
+# No requiere configuración especial
+architect run "refactoriza el módulo de pagos, primero investiga cómo funciona" \
+  --mode yolo
+```
+
+### Tipos de sub-agente
+
+| Tipo | Propósito | Tools |
+|------|-----------|-------|
+| `explore` | Investigar código | Solo lectura |
+| `test` | Ejecutar tests y verificar | Lectura + `run_command` |
+| `review` | Revisar código | Solo lectura |
+
+Los sub-agentes nunca modifican archivos. Su resultado se devuelve como `ToolResult` al agente padre.
+
+Ver documentación completa: [`dispatch-subagent.md`](dispatch-subagent.md).
+
+---
+
+## 41. OpenTelemetry — trazas distribuidas (v1.0.0)
+
+Architect puede emitir trazas OpenTelemetry para observabilidad en entornos de producción y CI/CD.
+
+### Configuración
+
+```yaml
+telemetry:
+  enabled: true
+  exporter: otlp              # otlp, console, json_file
+  endpoint: http://jaeger:4318
+  service_name: architect-cli  # nombre del servicio en trazas
+```
+
+### Exporters disponibles
+
+| Exporter | Destino | Uso |
+|----------|---------|-----|
+| `otlp` | Jaeger, Grafana Tempo, OTEL Collector | Producción |
+| `console` | stderr | Debug local |
+| `json_file` | Archivo JSON | CI/análisis offline |
+
+### Ejemplo con Jaeger
+
+```bash
+# Iniciar Jaeger (all-in-one)
+docker run -d --name jaeger -p 16686:16686 -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+
+# Ejecutar architect con trazas
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+architect run "analiza el proyecto" -c config-telemetry.yaml
+
+# Ver trazas en http://localhost:16686
+```
+
+Las trazas incluyen spans para: sesión completa, cada llamada al LLM, cada tool call, y compresión de contexto.
+
+Ver documentación completa: [`telemetry.md`](telemetry.md).

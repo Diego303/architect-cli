@@ -53,6 +53,8 @@ class ParallelConfig:
     budget_per_worker: float | None = None
     timeout_per_worker: int | None = None
     base_branch: str | None = None
+    config_path: str | None = None
+    api_base: str | None = None
 
 
 class ParallelRunner:
@@ -111,6 +113,8 @@ class ParallelRunner:
                         max_steps=self.config.max_steps,
                         budget=self.config.budget_per_worker,
                         timeout=self.config.timeout_per_worker,
+                        config_path=self.config.config_path,
+                        api_base=self.config.api_base,
                     )
                     futures[future] = i + 1
 
@@ -312,6 +316,8 @@ def _run_worker_process(
     max_steps: int,
     budget: float | None,
     timeout: int | None,
+    config_path: str | None = None,
+    api_base: str | None = None,
 ) -> WorkerResult:
     """Ejecuta un worker en un worktree. Función top-level para ProcessPoolExecutor.
 
@@ -327,6 +333,8 @@ def _run_worker_process(
         max_steps: Máximo de pasos.
         budget: Presupuesto USD. None = sin límite.
         timeout: Timeout en segundos. None = 600.
+        config_path: Path al archivo de configuración. None = default.
+        api_base: URL base de la API del LLM. None = default.
 
     Returns:
         WorkerResult con métricas de la ejecución.
@@ -346,6 +354,10 @@ def _run_worker_process(
         cmd.extend(["--budget", str(budget)])
     if timeout:
         cmd.extend(["--timeout", str(timeout)])
+    if config_path:
+        cmd.extend(["--config", config_path])
+    if api_base:
+        cmd.extend(["--api-base", api_base])
 
     effective_timeout = timeout or 600
 

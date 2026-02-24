@@ -631,4 +631,6 @@ AgentLoop(
 )
 ```
 
+A partir de v1.0.0, el agente `build` también tiene acceso a `dispatch_subagent` como tool adicional, que permite delegar sub-tareas a agentes con contexto aislado. Ver [`tools-and-execution.md`](tools-and-execution.md) para detalles.
+
 El loop no crea sus dependencias — las recibe como parámetros (inyección de dependencias). Internamente crea `self.hlog = HumanLog(logger)` para emitir logs de trazabilidad.

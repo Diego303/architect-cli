@@ -3,9 +3,11 @@ Features avanzadas de architect — módulos post-core.
 
 Fase B: Sessions, Reports, CI/CD flags, Dry Run.
 Fase C: Ralph Loop, Parallel Runs, Pipelines, Checkpoints.
+Fase D: Competitive Eval.
 """
 
 from .checkpoints import Checkpoint, CheckpointManager
+from .competitive import CompetitiveConfig, CompetitiveEval, CompetitiveResult
 from .dryrun import DryRunTracker
 from .parallel import ParallelConfig, ParallelRunner, WorkerResult
 from .pipelines import PipelineConfig, PipelineRunner, PipelineStep, PipelineStepResult
@@ -34,4 +36,8 @@ __all__ = [
     "RalphLoop",
     "RalphLoopResult",
     "WorkerResult",
+    # Phase D
+    "CompetitiveConfig",
+    "CompetitiveEval",
+    "CompetitiveResult",
 ]

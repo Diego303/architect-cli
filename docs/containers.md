@@ -54,6 +54,8 @@ Architect **no** requiere:
 | `ARCHITECT_LOG_LEVEL` | Override del nivel de logging | `debug`, `info`, `human`, `warn` |
 | `ARCHITECT_WORKSPACE` | Override del workspace root | `/workspace` |
 | `HOME` | Directorio home del usuario (afecta a `~/.architect/`) | `/tmp`, `/home/architect` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint OTLP para trazas OpenTelemetry | `http://jaeger:4318` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Headers adicionales para OTLP | `Authorization=Bearer token` |
 
 ### Para contenedores non-root (OpenShift)
 
@@ -424,6 +426,14 @@ data:
       budget_usd: 2.0
       warn_at_usd: 1.0
 
+    telemetry:
+      enabled: false
+      exporter: otlp
+      endpoint: http://jaeger:4318
+
+    health:
+      enabled: false
+
 ---
 # ── Deployment ─────────────────────────────────────────────────────
 apiVersion: apps/v1
@@ -654,6 +664,14 @@ data:
       enabled: true
       budget_usd: 2.0
 
+    telemetry:
+      enabled: false
+      exporter: otlp
+      endpoint: http://jaeger:4318
+
+    health:
+      enabled: false
+
 ---
 # ── DeploymentConfig / Deployment ──────────────────────────────────
 apiVersion: apps/v1
@@ -850,6 +868,18 @@ llm_cache:
   enabled: false
   dir: ~/.architect/cache
   ttl_hours: 24
+
+telemetry:
+  # OpenTelemetry trazas (v1.0.0)
+  # Habilitar si hay un colector OTLP accesible desde el contenedor
+  enabled: false
+  exporter: otlp          # otlp, console, json_file
+  endpoint: ""            # http://jaeger:4318 o http://otel-collector:4318
+  # endpoint: http://jaeger:4318
+
+health:
+  # Code health metrics (v1.0.0)
+  enabled: false
 
 hooks:
   post_edit: []

@@ -1,5 +1,7 @@
 # Referencia de configuración
 
+> **Nota**: Las referencias `(v4-A1)`, `(v4-B1)`, etc. se refieren a fases del plan de desarrollo interno (Plan base v4). Todas están incluidas en la v1.0.0.
+
 ## Sistema de capas
 
 La configuración se resuelve en 4 capas (menor a mayor prioridad):
@@ -62,14 +64,17 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--context-git-diff REF` | Inyectar diff `git diff REF` como contexto adicional |
 | `--exit-code-on-partial` | Retornar exit code 2 si status=partial (default en CI) |
 
-**Comandos adicionales (v4-C):**
+**Comandos adicionales:**
 
 | Comando | Descripción |
 |---------|-------------|
 | `architect loop TASK --check CMD` | Ralph Loop: iterar hasta que checks pasen |
 | `architect pipeline FILE` | Pipeline: ejecutar workflow YAML multi-step |
-| `architect parallel TASK --models CSV` | Parallel: ejecutar en worktrees paralelos |
+| `architect parallel --task CMD` | Parallel: ejecutar en worktrees paralelos |
 | `architect parallel-cleanup` | Limpiar worktrees de ejecuciones paralelas |
+| `architect eval TASK --models CSV --check CMD` | Evaluación competitiva multi-modelo |
+| `architect init --preset NAME` | Inicializar proyecto con preset de configuración |
+| `--health` (en `architect run`) | Análisis de salud del código antes/después |
 
 ---
 
@@ -347,12 +352,34 @@ checkpoints:
   every_n_steps: 5             # crear checkpoint cada N pasos (1-50)
 
 # ==============================================================================
-# Auto-Review — revisión automática post-build (v4-C5)
+# Auto-Review — revisión automática post-build
 # ==============================================================================
 auto_review:
   enabled: false               # true = activar auto-review tras completar
   review_model: null           # modelo para el reviewer (null = mismo que builder)
   max_fix_passes: 1            # pases de corrección (0 = solo reportar, 1-3 = corregir)
+
+# ==============================================================================
+# Telemetry — OpenTelemetry traces (v1.0.0)
+# ==============================================================================
+telemetry:
+  enabled: false               # true = activar trazas OpenTelemetry
+  exporter: console            # "otlp" | "console" | "json-file"
+  endpoint: http://localhost:4317  # endpoint gRPC para OTLP
+  trace_file: null             # path del archivo para json-file (ej: .architect/traces.json)
+
+# ==============================================================================
+# Health — análisis de salud del código (v1.0.0)
+# ==============================================================================
+health:
+  enabled: false               # true = análisis automático (sin necesidad de --health flag)
+  include_patterns:            # patrones glob de archivos a analizar
+    - "**/*.py"
+  exclude_dirs:                # directorios a excluir del análisis
+    - .git
+    - venv
+    - __pycache__
+    - node_modules
 ```
 
 ---
@@ -753,7 +780,58 @@ git log --oneline --grep="architect:checkpoint"
 git reset --hard <commit_hash>
 ```
 
-### Auto-review post-build (v4-C5)
+### Evaluación competitiva (v1.0.0)
+
+```bash
+# Comparar modelos en la misma tarea
+architect eval "optimiza las queries SQL" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat \
+  --check "pytest tests/test_queries.py -q" \
+  --check "ruff check src/" \
+  --budget-per-model 1.0 \
+  --report-file eval_report.md
+```
+
+### Inicialización con presets (v1.0.0)
+
+```bash
+# Generar config para proyecto Python
+architect init --preset python
+
+# Config máxima seguridad
+architect init --preset paranoid --overwrite
+```
+
+### Telemetry con Jaeger (v1.0.0)
+
+```yaml
+telemetry:
+  enabled: true
+  exporter: otlp
+  endpoint: http://localhost:4317
+```
+
+```bash
+# Ejecutar con tracing
+architect run "implementa feature" -c config.yaml --mode yolo
+# → Traces visibles en Jaeger UI: http://localhost:16686
+```
+
+### Health delta (v1.0.0)
+
+```yaml
+health:
+  enabled: true
+  include_patterns: ["**/*.py"]
+```
+
+```bash
+# O usar el flag directamente
+architect run "refactoriza utils.py" --health --mode yolo
+# → Muestra tabla markdown con delta de métricas
+```
+
+### Auto-review post-build
 
 ```yaml
 auto_review:

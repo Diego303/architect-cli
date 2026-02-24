@@ -6,6 +6,7 @@ Exporta todas las tools, el registry y los componentes base.
 
 from .base import BaseTool, ToolResult
 from .commands import RunCommandTool
+from .dispatch import DispatchSubagentArgs, DispatchSubagentTool
 from .filesystem import DeleteFileTool, EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
 from .patch import ApplyPatchTool, PatchError
 from .registry import DuplicateToolError, ToolNotFoundError, ToolRegistry
@@ -22,7 +23,7 @@ from .schemas import (
     WriteFileArgs,
 )
 from .search import FindFilesTool, GrepTool, SearchCodeTool
-from .setup import register_all_tools, register_command_tools, register_filesystem_tools, register_search_tools
+from .setup import register_all_tools, register_command_tools, register_dispatch_tool, register_filesystem_tools, register_search_tools
 
 __all__ = [
     # Base
@@ -47,6 +48,9 @@ __all__ = [
     "FindFilesTool",
     # Command tool (F13)
     "RunCommandTool",
+    # Dispatch tool (D1)
+    "DispatchSubagentTool",
+    "DispatchSubagentArgs",
     # Schemas
     "ReadFileArgs",
     "WriteFileArgs",
@@ -62,5 +66,6 @@ __all__ = [
     "register_filesystem_tools",
     "register_search_tools",
     "register_command_tools",
+    "register_dispatch_tool",
     "register_all_tools",
 ]

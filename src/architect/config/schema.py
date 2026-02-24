@@ -687,6 +687,61 @@ class AutoReviewConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+# ── Phase D Config Schemas ─────────────────────────────────────────────
+
+
+class TelemetryConfig(BaseModel):
+    """Configuración de OpenTelemetry (v4-D4).
+
+    Cuando está habilitado, emite trazas distribuidas para sesiones,
+    llamadas LLM y ejecuciones de tools. Requiere dependencias opcionales:
+    opentelemetry-api, opentelemetry-sdk.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, activa la emisión de trazas OpenTelemetry.",
+    )
+    exporter: Literal["otlp", "console", "json-file"] = Field(
+        default="console",
+        description="Tipo de exporter: otlp (gRPC), console (stderr), json-file.",
+    )
+    endpoint: str = Field(
+        default="http://localhost:4317",
+        description="Endpoint para el exporter OTLP.",
+    )
+    trace_file: str | None = Field(
+        default=None,
+        description="Path del archivo para el exporter json-file.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class HealthConfig(BaseModel):
+    """Configuración de Code Health Delta (v4-D2).
+
+    Cuando está habilitado, analiza métricas de salud del código antes y
+    después de la sesión del agente, generando un delta report.
+    Requiere dependencia opcional: radon (para complejidad ciclomática).
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Si True, ejecuta análisis de salud antes/después de la sesión.",
+    )
+    include_patterns: list[str] = Field(
+        default_factory=lambda: ["**/*.py"],
+        description="Patrones glob de archivos a analizar.",
+    )
+    exclude_dirs: list[str] = Field(
+        default_factory=list,
+        description="Directorios adicionales a excluir del análisis.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class AppConfig(BaseModel):
     """Configuración completa de la aplicación.
 
@@ -714,5 +769,7 @@ class AppConfig(BaseModel):
     parallel: ParallelRunsConfig = Field(default_factory=ParallelRunsConfig)  # v4-C2
     checkpoints: CheckpointsConfig = Field(default_factory=CheckpointsConfig)  # v4-C4
     auto_review: AutoReviewConfig = Field(default_factory=AutoReviewConfig)  # v4-C5
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)  # v4-D4
+    health: HealthConfig = Field(default_factory=HealthConfig)  # v4-D2
 
     model_config = {"extra": "forbid"}

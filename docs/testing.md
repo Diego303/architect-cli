@@ -1,6 +1,6 @@
 # Testing — Resumen completo de cobertura
 
-Documento actualizado el 2026-02-24. Refleja el estado actual de todos los test scripts en `scripts/`. Versión: v0.18.0.
+Documento actualizado el 2026-02-24. Refleja el estado actual de todos los tests. Versión: v1.0.0.
 
 ## Resultado global
 
@@ -57,7 +57,13 @@ Documento actualizado el 2026-02-24. Refleja el estado actual de todos los test 
 | `tests/test_checkpoints/` | 48 | CheckpointManager, Checkpoint, create/list/rollback |
 | `tests/test_reviewer/` | 47 | AutoReviewer, ReviewResult, build_fix_prompt, get_recent_diff |
 | `tests/test_parallel/` | 43 | ParallelRunner, ParallelConfig, WorkerResult, worktrees |
-| **TOTAL pytest** | **~504** | **v4 Phase A + Phase B + Phase C** |
+| `tests/test_dispatch/` | 36 | DispatchSubagentTool, DispatchSubagentArgs, tipos, tools |
+| `tests/test_health/` | 28 | CodeHealthAnalyzer, HealthSnapshot, HealthDelta, FunctionMetric |
+| `tests/test_competitive/` | 19 | CompetitiveEval, CompetitiveConfig, CompetitiveResult, ranking |
+| `tests/test_telemetry/` | 20 (9 skip) | ArchitectTracer, NoopTracer, NoopSpan, create_tracer, SERVICE_VERSION |
+| `tests/test_presets/` | 37 | PresetManager, AVAILABLE_PRESETS, apply, list_presets |
+| `tests/test_bugfixes/` | 41 | Validación BUG-3 a BUG-7 (code_rules, dispatch, telemetry, health, parallel) |
+| **TOTAL pytest** | **687** | **Phases A + B + C + D + Bugfixes** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -173,7 +179,7 @@ Documento actualizado el 2026-02-24. Refleja el estado actual de todos los test 
 | `features/dryrun.py` | `test_phase_b` (B4, 6 tests), `tests/test_dryrun/` (23 tests) | DryRunTracker — record_action, get_plan_summary, action_count, WRITE_TOOLS/READ_TOOLS disjuntos, _summarize_action (5 code paths), interleave read+write, tool_input complejo/truncación |
 | `cli.py` (B3 flags) | `test_phase_b` (B3, 5 tests) | CLI flags: --json, --dry-run, --report, --report-file, --session, --confirm-mode, --context-git-diff, --exit-code-on-partial; comandos: `architect sessions`, `architect cleanup`, `architect resume NONEXISTENT` → exit 3; exit code constants (0,1,2,3,4,5,130) |
 
-### v4 Phase C — Ralph Loop, Parallel, Pipelines, Checkpoints, Auto-Review
+### Plan base v4 Phase C — Ralph Loop, Parallel, Pipelines, Checkpoints, Auto-Review
 
 | Archivo fuente | Test file(s) | Qué se prueba |
 |---|---|---|
@@ -183,6 +189,17 @@ Documento actualizado el 2026-02-24. Refleja el estado actual de todos los test 
 | `features/checkpoints.py` | `tests/test_checkpoints/` (48 tests) | CheckpointManager — create (git add + commit), list_checkpoints (git log --grep, format %H\|%s\|%at), rollback (git reset --hard), get_latest, has_changes_since, Checkpoint dataclass (frozen), short_hash, CHECKPOINT_PREFIX, no-changes → None |
 | `agents/reviewer.py` | `tests/test_reviewer/` (47 tests) | AutoReviewer — review_changes (contexto limpio, agent_factory), build_fix_prompt, get_recent_diff (subprocess git diff), ReviewResult dataclass, REVIEW_SYSTEM_PROMPT, detección "sin issues" (case-insensitive), error handling (LLM failure → ReviewResult con error), AutoReviewConfig |
 | `cli.py` (C commands) | `test_phase_c_e2e.py` (31 tests) | CLI: `architect loop`, `architect pipeline`, `architect parallel`, `architect parallel-cleanup`; integración ralph+checks, pipeline+variables+conditions, parallel+worktrees, checkpoints+list+rollback, auto-review flow |
+
+### Plan base v4 Phase D — Dispatch, Health, Eval, Telemetry, Presets
+
+| Archivo fuente | Test file(s) | Qué se prueba |
+|---|---|---|
+| `tools/dispatch.py` | `tests/test_dispatch/` (36 tests) | DispatchSubagentTool — DispatchSubagentArgs validación, VALID_SUBAGENT_TYPES (explore/test/review), SUBAGENT_ALLOWED_TOOLS per tipo, SUBAGENT_MAX_STEPS=15, SUBAGENT_SUMMARY_MAX_CHARS=1000, execute con agent_factory mock, error handling |
+| `core/health.py` | `tests/test_health/` (28 tests) | CodeHealthAnalyzer — take_before/after_snapshot, compute_delta, FunctionMetric (frozen dataclass), HealthSnapshot campos, HealthDelta.to_report() markdown, LONG_FUNCTION_THRESHOLD (50), DUPLICATE_BLOCK_SIZE (6), análisis AST sin radon |
+| `features/competitive.py` | `tests/test_competitive/` (19 tests) | CompetitiveEval — CompetitiveConfig, CompetitiveResult, run() con ParallelRunner mock, _run_checks_in_worktree, _rank_results (score compuesto), generate_report markdown |
+| `telemetry/otel.py` | `tests/test_telemetry/` (20 tests, 9 skip) | ArchitectTracer — start_session context manager, trace_llm_call, trace_tool, NoopTracer/NoopSpan, create_tracer factory (enabled/disabled), SERVICE_NAME/SERVICE_VERSION constants. 9 tests skip si OpenTelemetry no está instalado |
+| `config/presets.py` | `tests/test_presets/` (37 tests) | PresetManager — AVAILABLE_PRESETS (5), apply() genera .architect.md + config.yaml, list_presets(), overwrite behavior, preset content validation |
+| (bugfixes) | `tests/test_bugfixes/` (41 tests) | BUG-3: code_rules pre-execution (11), BUG-4: dispatch wiring (5), BUG-5: telemetry wiring (8), BUG-6: health wiring (6), BUG-7: parallel config propagation (11) |
 
 ---
 
@@ -250,9 +267,9 @@ Tras la implementación de v4 Phase B:
    - `_execute_tool_calls_batch` — parallel execution timeout en CI
 4. Resultado final: **~817+ tests passing** (scripts) + **~181 tests pytest** (unitarios)
 
-## QA — v0.18.0
+## QA — v0.18.0 (Plan base v4 Phase C)
 
-Tras la implementación de v4 Phase C:
+Tras la implementación de Phase C:
 
 1. Se crearon tests unitarios pytest: `tests/test_ralph/` (90), `tests/test_pipelines/` (83), `tests/test_checkpoints/` (48), `tests/test_reviewer/` (47), `tests/test_parallel/` (43)
 2. Se creó `scripts/test_phase_c_e2e.py` con 31 tests E2E (C1-C5 + combinados)
@@ -261,6 +278,22 @@ Tras la implementación de v4 Phase C:
    - **BUG-2**: `ParallelRunner._create_worktrees()` no aislaba correctamente — corregido para usar git worktree con branches dedicadas
    - **BUG-3**: `CheckpointManager.list_checkpoints()` parseaba incorrecto el formato de `git log` — corregido formato pipe-separated `%H|%s|%at`
 4. Resultado final: **~848 tests passing** (scripts) + **504 tests pytest** (unitarios) + **31 E2E** (Phase C)
+
+## QA — v0.19.0 / v1.0.0 (Plan base v4 Phase D)
+
+Tras la implementación de Phase D:
+
+1. Se crearon tests unitarios pytest: `tests/test_dispatch/` (36), `tests/test_health/` (28), `tests/test_competitive/` (19), `tests/test_telemetry/` (20, 9 skip), `tests/test_presets/` (37)
+2. Se detectaron y corrigieron 7 bugs (QA-D):
+   - **BUG-1 (CRITICAL)**: `@cli.command` → `@main.command` para `eval` e `init` — rompía importación del módulo CLI
+   - **BUG-2 (MEDIUM)**: Versión inconsistente entre `pyproject.toml`, `__init__.py` y `cli.py`
+   - **BUG-3 (HIGH)**: `code_rules` severity:block no prevenía escrituras — se ejecutaba DESPUÉS de write. Fix: movido a pre-ejecución
+   - **BUG-4 (MEDIUM)**: `dispatch_subagent` tool existía pero no se registraba en CLI run
+   - **BUG-5 (MEDIUM)**: `TelemetryConfig` parseada pero `create_tracer()` nunca llamado
+   - **BUG-6 (MEDIUM)**: `HealthConfig` parseada pero `CodeHealthAnalyzer` nunca invocado
+   - **BUG-7 (MEDIUM)**: Workers paralelos no propagaban `--config` ni `--api-base`
+3. Se crearon 41 tests específicos de validación de bugs en `tests/test_bugfixes/test_bugfixes.py`
+4. Resultado final: **687 pytest passed**, 9 skipped, 0 failures + **31 E2E** + **~848 scripts**
 
 ---
 

@@ -183,7 +183,11 @@ class ExecutionEngine:
                     error=f"Error interno de la tool: {e}",
                 )
 
-            # 6. Loggear resultado
+            # 6. Record edit for guardrails tracking
+            if result.success and self.guardrails and tool_name in ("write_file", "edit_file"):
+                self.guardrails.record_edit()
+
+            # 7. Loggear resultado
             self.log.info(
                 "tool.call.complete",
                 tool=tool_name,
@@ -256,7 +260,7 @@ class ExecutionEngine:
     def check_code_rules(
         self, tool_name: str, tool_input: dict[str, Any]
     ) -> list[str]:
-        """Escanea contenido escrito contra code_rules DESPUÉS de ejecutar (v4-A2).
+        """Escanea contenido contra code_rules ANTES de ejecutar (v4-A2).
 
         Args:
             tool_name: Nombre del tool ejecutado.
@@ -284,9 +288,6 @@ class ExecutionEngine:
                 messages.append(f"BLOQUEADO por code rule: {msg}")
             else:
                 messages.append(f"Aviso code rule: {msg}")
-
-        if tool_name in ("write_file", "edit_file"):
-            self.guardrails.record_edit()
 
         return messages
 

@@ -5,9 +5,11 @@ Funciones de conveniencia para registrar las tools estándar del sistema.
 """
 
 from pathlib import Path
+from typing import Any, Callable
 
 from ..config.schema import CommandsConfig, WorkspaceConfig
 from .commands import RunCommandTool
+from .dispatch import DispatchSubagentTool
 from .filesystem import DeleteFileTool, EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool
 from .patch import ApplyPatchTool
 from .registry import ToolRegistry
@@ -115,3 +117,22 @@ def register_all_tools(
     if commands_config is None:
         commands_config = CommandsConfig()
     register_command_tools(registry, workspace_config, commands_config)
+
+
+def register_dispatch_tool(
+    registry: ToolRegistry,
+    workspace_config: WorkspaceConfig,
+    agent_factory: Callable[..., Any],
+) -> None:
+    """Registra la tool dispatch_subagent (D1).
+
+    Se registra por separado porque requiere un agent_factory que solo
+    está disponible después de configurar el AgentLoop.
+
+    Args:
+        registry: ToolRegistry donde registrar la tool.
+        workspace_config: Configuración del workspace.
+        agent_factory: Callable que crea un AgentLoop configurado.
+    """
+    workspace_root = str(Path(workspace_config.root).resolve())
+    registry.register(DispatchSubagentTool(agent_factory, workspace_root))

@@ -107,11 +107,12 @@ architect run PROMPT [opciones]
 | `--context-git-diff REF` | Inyecta `git diff REF` como contexto (ej: `origin/main`) |
 | `--exit-code-on-partial N` | Exit code personalizado para status `partial` (default: 2) |
 
-**Opciones de evaluación**:
+**Opciones de análisis y evaluación**:
 
 | Opción | Descripción |
 |--------|-------------|
 | `--self-eval off\|basic\|full` | Auto-evaluación del resultado: `off` (sin coste extra), `basic` (una llamada extra, marca como `partial` si falla), `full` (reintenta con prompt de corrección hasta `max_retries` veces) |
+| `--health` | Ejecutar análisis de salud del código antes/después — muestra delta de complejidad, funciones largas y duplicados |
 
 **Opciones MCP**:
 
@@ -274,12 +275,103 @@ architect parallel \
 | `--agent NAME` | Agente a usar (default: `build`) |
 | `--budget-per-worker N` | Límite de coste por worker |
 | `--timeout-per-worker N` | Límite de tiempo por worker |
+| `--config PATH` | Archivo de configuración YAML para workers |
+| `--api-base URL` | URL base de la API LLM para workers |
 | `--quiet` | Solo resultado final |
 
 ```bash
+# Con configuración y API personalizadas
+architect parallel \
+  --task "optimiza queries" \
+  --config ci/architect.yaml \
+  --api-base http://proxy.internal:8000
+
 # Limpiar worktrees después de ejecutar
 architect parallel-cleanup
 ```
+
+---
+
+### `architect eval` — evaluación competitiva multi-modelo
+
+```
+architect eval PROMPT [opciones]
+```
+
+Ejecuta la misma tarea con múltiples modelos en paralelo y genera un ranking comparativo. Cada modelo se ejecuta en un git worktree aislado con los mismos checks de validación.
+
+```bash
+# Comparar tres modelos
+architect eval "implementa autenticación JWT" \
+  --models gpt-4o,claude-sonnet-4-6,gemini-2.0-flash \
+  --check "pytest tests/test_auth.py -q" \
+  --check "ruff check src/" \
+  --budget-per-model 1.0 \
+  --report-file eval_report.md
+
+# Con timeout y agente personalizado
+architect eval "refactoriza utils.py" \
+  --models gpt-4o,claude-sonnet-4-6 \
+  --check "pytest" \
+  --timeout-per-model 300 \
+  --agent build \
+  --max-steps 30
+```
+
+| Opción | Descripción |
+|--------|-------------|
+| `--models LIST` | Modelos separados por coma (requerido) |
+| `--check CMD` | Comando de verificación (repetible, requerido) |
+| `--agent NAME` | Agente a usar (default: `build`) |
+| `--max-steps N` | Máximo de pasos por modelo (default: 50) |
+| `--budget-per-model N` | Límite de coste por modelo en USD |
+| `--timeout-per-model N` | Límite de tiempo por modelo en segundos |
+| `--report-file PATH` | Guardar reporte en archivo |
+| `--config PATH` | Archivo de configuración YAML |
+| `--api-base URL` | URL base de la API LLM |
+
+**Sistema de puntuación** (100 puntos):
+- Checks pasados: 40 pts (proporcional)
+- Status: 30 pts (success=30, partial=15, timeout=5, failed=0)
+- Eficiencia: 20 pts (menos pasos = mayor puntuación)
+- Coste: 10 pts (menor coste = mayor puntuación)
+
+---
+
+### `architect init` — inicializar proyecto con presets
+
+```
+architect init [opciones]
+```
+
+Genera configuración inicial (`.architect.md` + `config.yaml`) a partir de presets predefinidos.
+
+```bash
+# Ver presets disponibles
+architect init --list-presets
+
+# Inicializar proyecto Python
+architect init --preset python
+
+# Modo máxima seguridad (overwrite si ya existe)
+architect init --preset paranoid --overwrite
+```
+
+| Opción | Descripción |
+|--------|-------------|
+| `--preset NAME` | Preset a aplicar: `python`, `node-react`, `ci`, `paranoid`, `yolo` |
+| `--list-presets` | Mostrar presets disponibles |
+| `--overwrite` | Sobreescribir archivos existentes |
+
+**Presets disponibles**:
+
+| Preset | Descripción |
+|--------|-------------|
+| `python` | Proyecto Python estándar — pytest, ruff, mypy, black, PEP 8, type hints |
+| `node-react` | Proyecto Node.js/React — TypeScript strict, ESLint, Prettier, Jest/Vitest |
+| `ci` | Modo headless CI/CD — yolo, sin streaming, autónomo |
+| `paranoid` | Máxima seguridad — confirm-all, guardrails estrictos, code rules, max 20 steps |
+| `yolo` | Sin restricciones — yolo, 100 steps, sin guardrails |
 
 ---
 
@@ -312,7 +404,7 @@ El agente por defecto es **`build`** (se usa automáticamente si no se especific
 
 | Agente | Descripción | Tools | Confirmación | Pasos |
 |--------|-------------|-------|-------------|-------|
-| `build` | Planifica y ejecuta modificaciones | todas (edición, búsqueda, lectura, `run_command`) | `confirm-sensitive` | 50 |
+| `build` | Planifica y ejecuta modificaciones | todas (edición, búsqueda, lectura, `run_command`, `dispatch_subagent`) | `confirm-sensitive` | 50 |
 | `plan` | Analiza y genera un plan detallado | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
 | `resume` | Lee y resume información | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 |
 | `review` | Revisión de código y mejoras | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
@@ -865,6 +957,116 @@ Si encuentra issues, genera un prompt de corrección que puede alimentar al buil
 
 ---
 
+## Code Health Delta
+
+Análisis automático de métricas de calidad del código antes y después de una ejecución. Muestra un delta de complejidad ciclomática, funciones largas, duplicados y más.
+
+```bash
+# Activar con flag
+architect run "refactoriza el módulo de auth" --health
+
+# O activar permanentemente en config
+```
+
+```yaml
+health:
+  enabled: true
+  include_patterns: ["**/*.py"]
+  exclude_dirs: [".git", "venv", "__pycache__"]
+```
+
+**Métricas analizadas**:
+- Complejidad ciclomática (requiere `radon` instalado, fallback a AST si no)
+- Líneas por función
+- Funciones nuevas/eliminadas
+- Bloques de código duplicado (ventana de 6 líneas, hash MD5)
+- Funciones largas (>50 líneas)
+- Funciones complejas (>10 de complejidad)
+
+El reporte se muestra en stderr al finalizar la ejecución como tabla markdown con indicadores de mejora/degradación.
+
+---
+
+## Evaluación Competitiva
+
+La evaluación competitiva ejecuta la misma tarea con múltiples modelos y genera un ranking basado en calidad, eficiencia y coste.
+
+```bash
+architect eval "implementa autenticación JWT" \
+  --models gpt-4o,claude-sonnet-4-6 \
+  --check "pytest tests/" \
+  --check "ruff check src/" \
+  --budget-per-model 1.0
+```
+
+Cada modelo se ejecuta en un git worktree aislado (reutiliza la infraestructura de `ParallelRunner`). Después de la ejecución, se corren los checks en cada worktree y se genera un ranking comparativo.
+
+**Reporte generado**: tabla con status, pasos, coste, tiempo, checks pasados y puntuación compuesta. Los worktrees permanecen para inspección manual.
+
+---
+
+## Sub-Agentes (Dispatch)
+
+El agente principal puede delegar sub-tareas especializadas mediante la tool `dispatch_subagent`. Cada sub-agente se ejecuta con un `AgentLoop` fresco con contexto aislado y tools limitadas.
+
+**Tipos de sub-agente**:
+
+| Tipo | Tools disponibles | Uso |
+|------|-------------------|-----|
+| `explore` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | Investigar código, buscar patrones |
+| `test` | Explore + `run_command` | Ejecutar tests, verificar comportamiento |
+| `review` | Explore (solo lectura) | Revisar código, análisis de calidad |
+
+Cada sub-agente tiene un máximo de 15 pasos y su resumen se trunca a 1000 caracteres para evitar contaminar el contexto del agente principal.
+
+---
+
+## OpenTelemetry Traces
+
+Trazabilidad opcional con OpenTelemetry para monitorear sesiones, llamadas LLM y ejecución de tools.
+
+```yaml
+telemetry:
+  enabled: true
+  exporter: otlp          # otlp | console | json-file
+  endpoint: http://localhost:4317
+  trace_file: .architect/traces.json  # para json-file
+```
+
+**Exportadores soportados**:
+- **otlp**: Envía spans vía gRPC (compatible con Jaeger, Grafana Tempo, etc.)
+- **console**: Imprime spans en stderr (debugging)
+- **json-file**: Escribe spans en archivo JSON
+
+**Atributos semánticos** (GenAI Semantic Conventions):
+- `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cost`
+- `architect.task`, `architect.agent`, `architect.session_id`, `architect.tool_name`
+
+**Dependencias opcionales**: `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp`. Si no están instaladas, se usa un `NoopTracer` transparente sin impacto en rendimiento.
+
+---
+
+## Presets de configuración
+
+Los presets generan `.architect.md` y `config.yaml` con configuraciones predefinidas según el tipo de proyecto.
+
+```bash
+# Ver presets disponibles
+architect init --list-presets
+
+# Inicializar para proyecto Python
+architect init --preset python
+# → Crea .architect.md (convenciones) + config.yaml (hooks: ruff, mypy)
+
+# Modo paranoid (máxima seguridad)
+architect init --preset paranoid
+# → confirm-all, max 20 steps, code rules estrictos, quality gates
+```
+
+Los archivos generados son editables — sirven como punto de partida. Con `--overwrite` se reemplazan archivos existentes.
+
+---
+
 ## Uso en CI/CD
 
 ### Ejemplo básico — GitHub Actions
@@ -993,6 +1195,8 @@ architect run PROMPT
     ├── SessionManager         persistencia de sesiones (save/load/resume)
     ├── DryRunTracker          registro de acciones sin ejecutar (--dry-run)
     ├── CheckpointManager      git commits con rollback (architect:checkpoint)
+    ├── ArchitectTracer        OpenTelemetry spans (session/llm/tool) o NoopTracer
+    ├── CodeHealthAnalyzer     métricas de calidad antes/después (--health)
     │
     ├── RalphLoop              iteración automática hasta que checks pasen
     │       └── agent_factory() → AgentLoop fresco por iteración (contexto limpio)
@@ -1000,7 +1204,10 @@ architect run PROMPT
     │       └── agent_factory() → AgentLoop fresco por step
     ├── ParallelRunner         ejecución paralela en git worktrees aislados
     │       └── ProcessPoolExecutor → workers con `architect run` en worktrees
+    ├── CompetitiveEval        evaluación comparativa multi-modelo sobre ParallelRunner
     ├── AutoReviewer           review post-build con contexto limpio (solo diff + tarea)
+    ├── PresetManager          generación de .architect.md + config.yaml desde presets
+    ├── DispatchSubagentTool   delegación de sub-tareas (explore/test/review)
     │
     └── AgentLoop (while True — el LLM decide cuándo parar)
             │
@@ -1059,3 +1266,5 @@ architect run PROMPT
 | v0.16.2 | **QA2** — `--show-costs` funciona con streaming, `--mode yolo` nunca pide confirmación (ni para `dangerous`), `--timeout` es watchdog de sesión (no sobreescribe `llm.timeout`), MCP tools auto-inyectadas en `allowed_tools`, `get_schemas` defensivo |
 | v0.17.0 | **v4 Phase B** — sesiones persistentes con resume, reportes multi-formato (JSON/Markdown/GitHub PR), 10 flags CI/CD nativos (`--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`), dry-run/preview mode, 3 nuevos comandos (`sessions`, `resume`, `cleanup`) |
 | v0.18.0 | **v4 Phase C** — Ralph Loop (iteración automática con checks), Pipeline Mode (workflows YAML multi-step con variables, condiciones, checkpoints), ejecución paralela en worktrees git, checkpoints con rollback, auto-review post-build con contexto limpio, 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
+| v0.19.0 | **v4 Phase D** — Evaluación competitiva multi-modelo (`architect eval`), inicialización por presets (`architect init` con 5 presets), análisis de salud del código (`--health` con delta de complejidad/duplicados), sub-agentes delegados (`dispatch_subagent` con tipos explore/test/review), trazabilidad OpenTelemetry (session/llm/tool spans), 7 bugfixes de QA (code_rules pre-ejecución, dispatch wiring, telemetry wiring, health wiring, parallel config propagation) |
+| **v1.0.0** | **Release estable** — Primera versión pública. Culminación de Plan V4 (Phases A+B+C+D) sobre core v3. 15 comandos CLI, 11+ tools, 4 agentes, hooks + guardrails + skills + memoria, sesiones + reportes + CI/CD, Ralph Loop + pipelines + parallel + checkpoints + auto-review, sub-agentes + health + eval + telemetry + presets. 687 tests, 31 E2E checks. |

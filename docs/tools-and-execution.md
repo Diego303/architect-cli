@@ -46,6 +46,7 @@ El `get_schema()` produce el formato que LiteLLM/OpenAI espera para tool calling
 | `grep` | `GrepTool` | No | `search.py` | Busca texto literal (usa rg/grep del sistema si está disponible) |
 | `find_files` | `FindFilesTool` | No | `search.py` | Encuentra archivos por nombre o patrón glob |
 | `run_command` | `RunCommandTool` | **Dinámico** | `commands.py` | Ejecuta comandos del sistema con 4 capas de seguridad (F13) |
+| `dispatch_subagent` | `DispatchSubagentTool` | No | `dispatch.py` | Delega sub-tareas a agentes especializados con contexto aislado (v1.0.0) |
 
 ---
 
@@ -281,6 +282,47 @@ Si `commands.allowed_only: true`, los comandos clasificados como `dangerous` se 
 # Ejemplo con allowed_only=True:
 run_command(command="npm install --global malicious-pkg")
 # → ToolResult(success=False, "Comando clasificado como 'dangerous' y allowed_only=True")
+```
+
+---
+
+## Tool `dispatch_subagent` — delegación a sub-agentes (v1.0.0)
+
+Vive en `tools/dispatch.py`. Disponible solo para el agente `build` por defecto. Permite delegar sub-tareas a agentes especializados que se ejecutan con **contexto aislado** (sin acceso al historial del agente padre).
+
+```
+DispatchSubagentArgs:
+  task:       str            # descripción de la sub-tarea
+  agent_type: str            # "explore", "test", o "review"
+  context:    str | None     # contexto adicional para el sub-agente
+```
+
+### Tipos de sub-agente
+
+| Tipo | Tools disponibles | Propósito |
+|------|------------------|-----------|
+| `explore` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | Investigar y explorar código |
+| `test` | `read_file`, `list_files`, `search_code`, `grep`, `find_files`, `run_command` | Ejecutar tests y verificar |
+| `review` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | Revisar código, buscar problemas |
+
+### Seguridad
+
+- Los sub-agentes **nunca** pueden modificar archivos (no tienen `write_file`, `edit_file`, `apply_patch`)
+- Se ejecutan con `confirm_mode="yolo"` (sin confirmación interactiva)
+- Heredan el `workspace_root` del agente padre
+- El resultado se devuelve como `ToolResult` al agente padre para que tome decisiones
+
+### Cuándo usarlo
+
+El agente `build` puede delegar tareas cuando necesita información sin contaminar su propio contexto:
+
+```python
+# Ejemplo: el agente build delega exploración
+dispatch_subagent(
+    task="Busca todos los archivos que importan jwt y lista los patrones de uso",
+    agent_type="explore",
+)
+# → ToolResult con el resumen de la exploración
 ```
 
 ---

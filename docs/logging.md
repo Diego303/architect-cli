@@ -265,6 +265,21 @@ Los logs HUMAN se muestran **siempre** (excepto `--quiet` / `--json`), independi
 
 ---
 
+## Relación con OpenTelemetry (v1.0.0)
+
+A partir de v1.0.0, architect soporta trazas OpenTelemetry como complemento al logging estructurado. Las trazas y los logs son **sistemas independientes**:
+
+| Sistema | Propósito | Configuración |
+|---------|-----------|---------------|
+| **Logging (structlog)** | Eventos del agente, debugging, human output | `logging:` en config + `-v` flags |
+| **Telemetry (OpenTelemetry)** | Spans de sesión/LLM/tool para observabilidad | `telemetry:` en config |
+
+Los logs van a stderr (human/técnico) y archivo JSON. Las trazas van a OTLP, console o archivo JSON separado. No se mezclan.
+
+Ver [`telemetry.md`](telemetry.md) para configuración de OpenTelemetry.
+
+---
+
 ## Archivos del módulo
 
 | Archivo | Contenido |
@@ -272,3 +287,4 @@ Los logs HUMAN se muestran **siempre** (excepto `--quiet` / `--json`), independi
 | `logging/levels.py` | Definición de `HUMAN = 25` |
 | `logging/human.py` | `HumanFormatter`, `HumanLogHandler`, `HumanLog`, `_summarize_args` |
 | `logging/setup.py` | `configure_logging()`, `configure_logging_basic()`, `get_logger()` |
+| `telemetry/otel.py` | `ArchitectTracer`, `NoopTracer` (sistema independiente) |

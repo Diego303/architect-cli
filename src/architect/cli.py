@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import click
 
@@ -25,6 +25,7 @@ from .llm import LLMAdapter, LocalLLMCache
 from .logging import configure_logging
 from .mcp import MCPDiscovery
 from .tools import ToolRegistry, register_all_tools
+from .tools.setup import register_dispatch_tool
 
 # v4-A1: Sistema de hooks completo
 from .core.hooks import HookConfig, HookEvent, HookExecutor, HooksRegistry
@@ -48,6 +49,14 @@ from .features.pipelines import PipelineRunner
 from .features.checkpoints import CheckpointManager
 # v4-C5: Auto-Review
 from .agents.reviewer import AutoReviewer
+# v4-D3: Competitive Eval
+from .features.competitive import CompetitiveConfig, CompetitiveEval
+# v4-D2: Code Health Delta
+from .core.health import CodeHealthAnalyzer
+# v4-D4: Telemetry
+from .telemetry.otel import create_tracer
+# v4-D5: Preset Configs
+from .config.presets import AVAILABLE_PRESETS, PresetManager
 
 # Códigos de salida
 EXIT_SUCCESS = 0
@@ -59,7 +68,7 @@ EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
 # Versión actual
-_VERSION = "0.18.0"
+_VERSION = "1.0.0"
 
 
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
@@ -278,6 +287,13 @@ def main() -> None:
     type=int,
     default=None,
     help="Exit code si el resultado es parcial (default: 2)",
+)
+@click.option(
+    "--health",
+    "health_check",
+    is_flag=True,
+    default=False,
+    help="Ejecutar análisis de salud del código antes/después (v4-D2)",
 )
 def run(prompt: str, **kwargs) -> None:  # type: ignore
     """Ejecuta una tarea usando un agente de IA.
@@ -552,6 +568,14 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         if kwargs.get("dry_run"):
             dry_run_tracker = DryRunTracker()
 
+        # v4-D4: Crear tracer de telemetría
+        tracer = create_tracer(
+            enabled=config.telemetry.enabled,
+            exporter=config.telemetry.exporter,
+            endpoint=config.telemetry.endpoint,
+            trace_file=config.telemetry.trace_file,
+        )
+
         # Crear agent loop (v3-M1: while True + timeout, v4-A1: hooks, v4-A2: guardrails, v4-A3: skills, v4-B1: sessions)
         loop = AgentLoop(
             llm,
@@ -572,6 +596,28 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
             dry_run_tracker=dry_run_tracker,
         )
 
+        # v4-D1: Registrar dispatch_subagent tool con agent_factory
+        def _subagent_factory(agent: str = "build", max_steps: int = 15, allowed_tools: list[str] | None = None, **kw: Any) -> AgentLoop:
+            """Crea un AgentLoop fresco para sub-agentes."""
+            from .agents import get_agent as _get_agent
+            sub_agent_config = _get_agent(agent, config.agents, {"max_steps": max_steps})
+            if allowed_tools:
+                sub_agent_config.allowed_tools = list(allowed_tools)
+            sub_engine = ExecutionEngine(
+                registry, config,
+                confirm_mode="yolo",
+                guardrails=guardrails_engine,
+            )
+            sub_ctx = ContextBuilder(repo_index=repo_index, context_manager=ContextManager(config.context))
+            return AgentLoop(
+                llm, sub_engine, sub_agent_config, sub_ctx,
+                shutdown=shutdown, step_timeout=0,
+                context_manager=ContextManager(config.context),
+                cost_tracker=cost_tracker,
+            )
+
+        register_dispatch_tool(registry, config.workspace, _subagent_factory)
+
         # v4-B1/B3: Enriquecer prompt con contexto adicional
         effective_prompt = prompt
         if resume_session:
@@ -585,8 +631,33 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
         if git_diff_context:
             effective_prompt = effective_prompt + "\n\n" + git_diff_context
 
-        # Ejecutar
-        state = loop.run(effective_prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
+        # v4-D2: Health analysis — before snapshot
+        health_analyzer: CodeHealthAnalyzer | None = None
+        if kwargs.get("health_check") or config.health.enabled:
+            health_analyzer = CodeHealthAnalyzer(
+                workspace_root=str(Path(config.workspace.root).resolve()),
+                include_patterns=config.health.include_patterns,
+                exclude_dirs=config.health.exclude_dirs or None,
+            )
+            health_analyzer.take_before_snapshot()
+            if not kwargs.get("quiet"):
+                click.echo("Health: snapshot 'antes' capturado", err=True)
+
+        # Ejecutar (con tracing de telemetría v4-D4)
+        with tracer.start_session(
+            task=effective_prompt[:200],
+            agent=agent_name,
+            model=config.llm.model,
+            session_id=session_id or "",
+        ):
+            state = loop.run(effective_prompt, stream=use_stream, on_stream_chunk=on_stream_chunk)
+
+        # v4-D2: Health analysis — after snapshot + delta
+        if health_analyzer:
+            health_analyzer.take_after_snapshot()
+            delta = health_analyzer.compute_delta()
+            if delta and not kwargs.get("quiet"):
+                click.echo("\n" + delta.to_report(), err=True)
 
         # run_fn para evaluate_full
         def run_fn(correction_prompt: str):  # type: ignore[misc]
@@ -735,6 +806,9 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
                     f"Tool calls: {state.total_tool_calls}",
                     err=True,
                 )
+
+        # v4-D4: Shutdown tracer (flush pending spans)
+        tracer.shutdown()
 
         # Código de salida
         if shutdown.should_stop:
@@ -1248,6 +1322,8 @@ def loop_cmd(
 @click.option("--agent", default="build", help="Agente a usar")
 @click.option("--budget-per-worker", type=float, help="Presupuesto USD por worker")
 @click.option("--timeout-per-worker", type=int, help="Timeout segundos por worker")
+@click.option("-c", "--config", "config_path", type=click.Path(exists=True), default=None, help="Path al archivo de configuración YAML")
+@click.option("--api-base", default=None, help="URL base de la API del LLM")
 @click.option("--quiet", is_flag=True, help="Modo silencioso")
 def parallel_cmd(
     task: str | None,
@@ -1257,6 +1333,8 @@ def parallel_cmd(
     agent: str,
     budget_per_worker: float | None,
     timeout_per_worker: int | None,
+    config_path: str | None,
+    api_base: str | None,
     quiet: bool,
 ) -> None:
     """Ejecuta múltiples agentes en paralelo con worktrees.
@@ -1289,6 +1367,9 @@ def parallel_cmd(
     model_list = models.split(",") if models else None
     workspace = os.getcwd()
 
+    # Resolver config_path a absoluto para que funcione desde worktrees
+    resolved_config = str(Path(config_path).resolve()) if config_path else None
+
     config = ParallelConfig(
         tasks=task_list,
         workers=workers,
@@ -1296,6 +1377,8 @@ def parallel_cmd(
         agent=agent,
         budget_per_worker=budget_per_worker,
         timeout_per_worker=timeout_per_worker,
+        config_path=resolved_config,
+        api_base=api_base,
     )
 
     if not quiet:
@@ -1557,6 +1640,138 @@ def history_cmd() -> None:
         )
 
     click.echo(f"\nUsa 'architect rollback --to-step N' para restaurar.")
+
+
+# ── v4-D3: COMPETITIVE EVAL ────────────────────────────────────────────
+
+
+@main.command("eval")
+@click.argument("task")
+@click.option(
+    "--models", required=True,
+    help="Modelos separados por coma (ej: gpt-4o,claude-sonnet-4-20250514,gemini-2.0-flash)",
+)
+@click.option("--check", "checks", multiple=True, help="Comando de verificación (repetible)")
+@click.option("--agent", default="build", help="Agente a usar en cada modelo")
+@click.option("--max-steps", default=50, type=int, help="Máximo de pasos por modelo")
+@click.option("--budget-per-model", type=float, help="Presupuesto USD por modelo")
+@click.option("--timeout-per-model", type=int, help="Timeout en segundos por modelo")
+@click.option(
+    "--report-file", type=click.Path(),
+    help="Archivo donde guardar el reporte markdown",
+)
+def eval_cmd(
+    task: str,
+    models: str,
+    checks: tuple[str, ...],
+    agent: str,
+    max_steps: int,
+    budget_per_model: float | None,
+    timeout_per_model: int | None,
+    report_file: str | None,
+) -> None:
+    """Evaluación competitiva: ejecuta la misma tarea con múltiples modelos.
+
+    Compara el resultado de diferentes modelos LLM ejecutando la misma tarea
+    en worktrees git aislados. Genera un reporte con ranking y métricas.
+
+    Ejemplo:
+
+        architect eval "Implementa auth JWT" --models gpt-4o,claude-sonnet-4-20250514 --check "pytest tests/"
+    """
+    import os
+
+    model_list = [m.strip() for m in models.split(",") if m.strip()]
+    if len(model_list) < 2:
+        click.echo("Error: Se necesitan al menos 2 modelos para comparar.", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    config = CompetitiveConfig(
+        task=task,
+        models=model_list,
+        checks=list(checks),
+        agent=agent,
+        max_steps=max_steps,
+        budget_per_model=budget_per_model,
+        timeout_per_model=timeout_per_model,
+    )
+
+    click.echo(f"Evaluación competitiva: {len(model_list)} modelos")
+    click.echo(f"  Modelos: {', '.join(model_list)}")
+    click.echo(f"  Tarea: {task[:80]}...")
+    if checks:
+        click.echo(f"  Checks: {', '.join(checks)}")
+    click.echo()
+
+    evaluator = CompetitiveEval(config, os.getcwd())
+    results = evaluator.run()
+
+    # Generar y mostrar reporte
+    report = evaluator.generate_report(results)
+
+    if report_file:
+        Path(report_file).write_text(report, encoding="utf-8")
+        click.echo(f"\nReporte guardado en: {report_file}")
+    else:
+        click.echo(report)
+
+    # Exit code: 0 si al menos un modelo tuvo éxito
+    any_success = any(r.status == "success" for r in results)
+    sys.exit(EXIT_SUCCESS if any_success else EXIT_FAILED)
+
+
+# ── v4-D5: PRESET CONFIGS ─────────────────────────────────────────────
+
+
+@main.command("init")
+@click.option(
+    "--preset",
+    type=click.Choice(sorted(AVAILABLE_PRESETS)),
+    required=True,
+    help="Preset de configuración a aplicar",
+)
+@click.option("--overwrite", is_flag=True, help="Sobrescribir archivos existentes")
+@click.option("--list-presets", "show_list", is_flag=True, help="Listar presets disponibles")
+def init_cmd(preset: str | None, overwrite: bool, show_list: bool) -> None:
+    """Inicializa la configuración de architect en el proyecto.
+
+    Crea archivos .architect.md y config.yaml con configuraciones
+    predefinidas según el stack tecnológico o perfil de seguridad.
+
+    Ejemplo:
+
+        architect init --preset python
+    """
+    import os
+
+    manager = PresetManager(os.getcwd())
+
+    if show_list:
+        presets = manager.list_presets()
+        click.echo("Presets disponibles:\n")
+        for p in presets:
+            click.echo(f"  {p['name']:<15s} {p['description']}")
+        return
+
+    if not preset:
+        click.echo("Error: Especifica un preset con --preset", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    try:
+        files = manager.apply_preset(preset, overwrite=overwrite)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    if files:
+        click.echo(f"Preset '{preset}' aplicado. Archivos creados:")
+        for f in files:
+            click.echo(f"  + {f}")
+    else:
+        click.echo(f"Preset '{preset}': todos los archivos ya existen (usa --overwrite para reemplazar).")
+
+    click.echo(f"\nDirectorio .architect/ creado.")
+    click.echo(f"Edita .architect.md para personalizar las instrucciones del agente.")
 
 
 # ── HELPER FUNCTIONS (v4-B3) ────────────────────────────────────────────

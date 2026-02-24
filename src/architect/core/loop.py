@@ -661,6 +661,30 @@ class AgentLoop:
                 was_dry_run=self.engine.dry_run,
             )
 
+        # ── PRE-EXECUTION CODE RULES (v4-A2) — block BEFORE write ────
+        code_rule_messages = self.engine.check_code_rules(tool_name, tool_args)
+        if code_rule_messages:
+            block_msgs = [m for m in code_rule_messages if m.startswith("BLOQUEADO")]
+            if block_msgs:
+                from ..tools.base import ToolResult as TR
+                blocked_result = TR(
+                    success=False,
+                    output="\n".join(block_msgs),
+                    error="Code rule violation (blocked before execution)",
+                )
+                self.log.info("agent.tool_call.blocked_by_code_rule", tool=tool_name)
+                self.hlog.tool_result(tool_name, False, blocked_result.error)
+                return ToolCallResult(
+                    tool_name=tool_name,
+                    args=tool_args,
+                    result=blocked_result,
+                    was_confirmed=True,
+                    was_dry_run=self.engine.dry_run,
+                )
+            # Warnings: log them but allow execution
+            for warn_msg in code_rule_messages:
+                self.log.warning("agent.code_rule.warning", msg=warn_msg)
+
         # ── PRE-TOOL HOOKS (v4-A1) ─────────────────────────────────────
         pre_result = self.engine.run_pre_tool_hooks(tool_name, tool_args)
         from ..tools.base import ToolResult
@@ -685,18 +709,6 @@ class AgentLoop:
         # ── DRY-RUN TRACKER (v4-B4) ─────────────────────────────────────
         if self.dry_run_tracker:
             self.dry_run_tracker.record(step, tool_name, tool_args)
-
-        # ── POST-EXECUTION CODE RULES (v4-A2) ──────────────────────────
-        code_rule_messages = self.engine.check_code_rules(tool_name, tool_args)
-        if code_rule_messages:
-            block_msgs = [m for m in code_rule_messages if m.startswith("BLOQUEADO")]
-            if block_msgs:
-                from ..tools.base import ToolResult as TR
-                result = TR(
-                    success=False,
-                    output="\n".join(block_msgs),
-                    error="Code rule violation",
-                )
 
         # ── POST-TOOL HOOKS (v4-A1) ────────────────────────────────────
         hook_output = self.engine.run_post_tool_hooks(
