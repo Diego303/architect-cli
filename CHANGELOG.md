@@ -7,6 +7,73 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [0.18.0] - 2026-02-24
+
+### v4 Phase C — Iteración, Pipelines y Revisión
+
+Orquestación avanzada de agentes: loops iterativos con checks automáticos, pipelines YAML multi-step, ejecución paralela en worktrees git, checkpoints con rollback, y auto-review post-build con contexto limpio.
+
+#### Añadido
+
+**C1 — Ralph Loop (Iteración Automática)**:
+- `RalphConfig` dataclass — configuración completa: task, checks, spec_file, max_iterations (25), max_cost, max_time, agent, model, use_worktree, completion_tag
+- `RalphLoop.run()` — loop iterativo que ejecuta un agente hasta que todos los checks shell pasen o se agoten límites (iteraciones, coste, tiempo)
+- Contexto limpio por iteración — cada iteración recibe solo: spec original, diff acumulado, errores de la anterior, y progress.md auto-generado
+- `_run_checks()` — ejecuta checks como subprocesos shell (timeout 30s, output truncado 2000 chars)
+- `_update_progress()` — genera `.architect/progress.md` con historial de iteraciones
+- Worktree support — `_create_worktree()` / `_cleanup_worktree()` para aislamiento git
+- `RalphLoopResult` con success flag, iterations list, total_cost, worktree_path
+
+**C2 — Parallel Runs (Ejecución Paralela en Worktrees)**:
+- `ParallelConfig` dataclass — tasks, workers (3), models, agent, budget_per_worker, timeout_per_worker
+- `ParallelRunner.run()` → list[WorkerResult] — fan-out con ProcessPoolExecutor en git worktrees aislados
+- `WorkerResult` dataclass — worker_id, branch, model, status, steps, cost, duration, files_modified
+- Round-robin de modelos cuando hay menos models que workers
+- Cleanup automático de worktrees (`WORKTREE_PREFIX = ".architect-parallel"`)
+
+**C3 — Pipeline Mode (Workflows YAML Multi-Step)**:
+- `PipelineConfig` con steps secuenciales, cada uno con agente/prompt/modelo independiente
+- Variable substitution con `{{variable_name}}` en prompts de steps
+- `condition` — expresión evaluada; step skipped si False
+- `output_var` — captura output del agente como variable para steps siguientes
+- `checks` — comandos shell post-step con resultado en `checks_passed`
+- `checkpoint: true` — crea git checkpoint automático al completar el step
+- `from_step` — resume pipeline desde un step específico
+- `dry_run` — muestra plan sin ejecutar agentes
+
+**C4 — Checkpoints & Rollback**:
+- `CheckpointManager` — gestiona git commits con prefijo `architect:checkpoint`
+- `create(step, message)` — stage all + commit con prefijo
+- `list_checkpoints()` — parsea `git log --grep` para listar checkpoints
+- `rollback(step=, commit=)` — `git reset --hard` al checkpoint especificado
+- `get_latest()`, `has_changes_since(commit_hash)`
+- Integrado con Pipeline (checkpoint per step) y Ralph Loop
+
+**C5 — Auto-Review (Revisión Post-Build)**:
+- `AutoReviewer` — agente reviewer con contexto LIMPIO (solo diff + tarea, sin historial del builder)
+- `review_changes(task, git_diff)` → `ReviewResult` (has_issues, review_text, cost)
+- `build_fix_prompt(review_result)` — genera prompt para que el builder corrija issues
+- `REVIEW_SYSTEM_PROMPT` — busca bugs, problemas de seguridad, violaciones de convenciones, mejoras, tests faltantes
+- Graceful error handling — excepciones de LLM retornan error controlado
+
+**Nuevos comandos CLI**:
+- `architect loop` — Ralph Loop con `--check` (múltiple), `--spec`, `--max-iterations`, `--max-cost`, `--max-time`, `--worktree`, `--agent`, `--model`
+- `architect parallel` — ejecución paralela con `--task` (múltiple), `--workers`, `--models`, `--agent`, `--budget-per-worker`
+- `architect parallel-cleanup` — limpieza de worktrees de ejecución paralela
+- `architect pipeline` — workflow YAML con `--var` (múltiple), `--from-step`, `--dry-run`, `--config`
+
+**Nuevo módulo**: `src/architect/features/` ampliado con ralph.py, pipelines.py, parallel.py, checkpoints.py. `src/architect/agents/reviewer.py` nuevo.
+
+**Tests**: 311 pytest tests (test_ralph: 90, test_pipelines: 83, test_checkpoints: 48, test_reviewer: 47, test_parallel: 43) + `scripts/test_phase_c_e2e.py` con 31 tests E2E cubriendo C1-C5 + Guardrails. Total proyecto: 504 pytest + 31 E2E.
+
+#### Corregido
+
+- **[MEDIUM] Ralph Loop worktree agent isolation broken** — Agent factory creaba agentes con workspace original en vez del worktree. Fix: `workspace_root` pasado desde `_run_single_iteration` al factory; cli.py factory acepta y usa `workspace_root` kwarg. (`src/architect/features/ralph.py`, `src/architect/cli.py`)
+- **[MEDIUM] Guardrails no bloqueaban `apply_patch` + factories sin guardrails** — `apply_patch` no estaba en la tupla de check de file access en ExecutionEngine. Las factories de `loop_cmd` y `pipeline_cmd` no creaban GuardrailsEngine. Fix: añadido `apply_patch` a la tupla + GuardrailsEngine en ambos factories. (`src/architect/execution/engine.py`, `src/architect/cli.py`)
+- **[LOW] `test_integration.py` stale `PostEditHooks` import** — Sección 8 reescrita con `HookExecutor` API (v4-A1). Sección 9 con paths dinámicos via `tempfile.mkdtemp()`. (`scripts/test_integration.py`)
+
+---
+
 ## [0.17.0] - 2026-02-23
 
 ### v4 Phase B — Persistencia y Reporting

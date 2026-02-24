@@ -248,6 +248,10 @@ class AppConfig(BaseModel):
     skills:     SkillsConfig     = SkillsConfig()     # v4-A3
     memory:     MemoryConfig     = MemoryConfig()     # v4-A4
     sessions:   SessionsConfig   = SessionsConfig()   # v4-B1
+    ralph:      RalphLoopConfig  = RalphLoopConfig()  # v4-C1
+    parallel:   ParallelRunsConfig = ParallelRunsConfig() # v4-C2
+    checkpoints: CheckpointsConfig = CheckpointsConfig() # v4-C4
+    auto_review: AutoReviewConfig = AutoReviewConfig()  # v4-C5
 ```
 
 ---
@@ -950,6 +954,281 @@ class DryRunTracker:
 Constantes: `WRITE_TOOLS` (frozenset) y `READ_TOOLS` (frozenset), disjuntos. Solo las acciones de `WRITE_TOOLS` se registran en el tracker.
 
 `_summarize_action(tool_name, tool_input)` genera descripciones legibles con 5 code paths (path, command, long command, fallback keys, empty dict).
+
+---
+
+## Ralph Loop (`features/ralph.py`) — v4-C1
+
+### `RalphConfig` (dataclass)
+
+```python
+@dataclass
+class RalphConfig:
+    task:            str                      # tarea/prompt para el agente
+    checks:          list[str]                # comandos shell que deben pasar (exit 0)
+    max_iterations:  int   = 25              # límite de iteraciones
+    max_cost:        float | None = None     # coste máximo total USD
+    max_time:        int | None   = None     # tiempo máximo total en segundos
+    completion_tag:  str   = "COMPLETE"      # tag que el agente emite al declarar completado
+    agent:           str   = "build"         # agente a usar en cada iteración
+    model:           str | None = None       # modelo LLM (None = default de config)
+    use_worktree:    bool  = False           # ejecutar en git worktree aislado
+```
+
+### `LoopIteration` (dataclass)
+
+```python
+@dataclass
+class LoopIteration:
+    number:        int          # número de iteración (1-based)
+    status:        str          # "success", "partial", "failed"
+    checks_passed: list[str]   # checks que pasaron
+    checks_failed: list[str]   # checks que fallaron
+    cost:          float        # coste USD de esta iteración
+    duration:      float        # segundos
+```
+
+### `RalphLoopResult` (dataclass)
+
+```python
+@dataclass
+class RalphLoopResult:
+    success:       bool                    # True si todos los checks pasaron
+    iterations:    list[LoopIteration]     # historial de iteraciones
+    total_cost:    float                   # coste total acumulado USD
+    total_duration: float                  # duración total en segundos
+    stop_reason:   str                     # "checks_passed", "max_iterations", "max_cost", "max_time", "agent_failed"
+```
+
+### `RalphLoop`
+
+```python
+class RalphLoop:
+    def __init__(
+        self,
+        agent_factory: Callable[..., Any],
+        config: RalphConfig,
+    ) -> None: ...
+
+    def run(self) -> RalphLoopResult: ...
+    def _run_checks(self, checks: list[str]) -> tuple[list[str], list[str]]: ...
+    def _build_iteration_prompt(self, iteration: int, failed: list[str], outputs: dict) -> str: ...
+```
+
+### `RalphLoopConfig` (Pydantic — `config/schema.py`)
+
+```python
+class RalphLoopConfig(BaseModel):
+    max_iterations: int        = 25        # 1-100
+    max_cost:       float | None = None    # USD, None = sin límite
+    max_time:       int | None   = None    # segundos, None = sin límite
+    completion_tag: str        = "COMPLETE"
+    agent:          str        = "build"
+```
+
+---
+
+## Pipeline Mode (`features/pipelines.py`) — v4-C3
+
+### `PipelineStep` (dataclass)
+
+```python
+@dataclass
+class PipelineStep:
+    name:       str                          # nombre único del paso
+    prompt:     str                          # prompt (soporta {{variables}})
+    agent:      str          = "build"       # agente a usar
+    model:      str | None   = None          # modelo LLM (None = default)
+    max_steps:  int          = 50            # pasos máximos del agente
+    condition:  str | None   = None          # condición shell (exit 0 = ejecutar)
+    output_var: str | None   = None          # capturar output en variable {{nombre}}
+    checks:     list[str]    = field(default_factory=list)  # checks post-step
+    checkpoint: bool         = False         # crear checkpoint git tras completar
+```
+
+### `PipelineConfig` (dataclass)
+
+```python
+@dataclass
+class PipelineConfig:
+    name:      str                       # nombre del pipeline
+    steps:     list[PipelineStep]        # lista de pasos a ejecutar
+    variables: dict[str, str] = field(default_factory=dict)  # variables iniciales
+```
+
+### `PipelineStepResult` (dataclass)
+
+```python
+@dataclass
+class PipelineStepResult:
+    step_name:  str          # nombre del paso
+    status:     str          # "success", "partial", "failed", "skipped"
+    output:     str          # output del agente
+    cost:       float        # coste USD del paso
+    duration:   float        # segundos
+```
+
+### `PipelineRunner`
+
+```python
+class PipelineRunner:
+    def __init__(
+        self,
+        agent_factory: Callable[..., Any],
+        config: PipelineConfig,
+    ) -> None: ...
+
+    def run(self, from_step: str | None = None, dry_run: bool = False) -> list[PipelineStepResult]: ...
+    def _substitute_variables(self, text: str, variables: dict) -> str: ...
+    def _check_condition(self, condition: str) -> bool: ...
+    def _run_checks(self, checks: list[str]) -> tuple[list[str], list[str]]: ...
+    def _create_checkpoint(self, step_name: str) -> None: ...
+```
+
+---
+
+## Parallel Runs (`features/parallel.py`) — v4-C2
+
+### `ParallelConfig` (dataclass)
+
+```python
+@dataclass
+class ParallelConfig:
+    tasks:             list[str]         # tareas a ejecutar
+    workers:           int = 3           # número de workers paralelos
+    models:            list[str] = field(default_factory=list)  # modelos round-robin
+    agent:             str = "build"
+    budget_per_worker: float | None = None   # USD por worker
+    timeout_per_worker: int | None = None    # segundos por worker
+```
+
+### `WorkerResult` (dataclass)
+
+```python
+@dataclass
+class WorkerResult:
+    worker_id:      int          # 1-based
+    branch:         str          # "architect/parallel-1"
+    model:          str          # modelo usado
+    status:         str          # "success", "partial", "failed", "timeout"
+    steps:          int          # pasos del agente
+    cost:           float        # coste USD
+    duration:       float        # segundos
+    files_modified: list[str]    # archivos cambiados
+    worktree_path:  str          # ruta al worktree
+```
+
+### `ParallelRunner`
+
+```python
+class ParallelRunner:
+    WORKTREE_PREFIX = ".architect-parallel"
+
+    def __init__(
+        self,
+        config: ParallelConfig,
+        workspace_root: str,
+    ) -> None: ...
+
+    def run(self) -> list[WorkerResult]: ...
+    def cleanup_worktrees(self) -> None: ...
+    def _create_worktrees(self) -> None: ...
+    def _run_worker(self, worker_id: int, task: str, model: str) -> WorkerResult: ...
+```
+
+### `ParallelRunsConfig` (Pydantic — `config/schema.py`)
+
+```python
+class ParallelRunsConfig(BaseModel):
+    workers:            int = 3            # 1-10
+    agent:              str = "build"
+    max_steps:          int = 50
+    budget_per_worker:  float | None = None
+    timeout_per_worker: int | None = None
+```
+
+---
+
+## Checkpoints (`features/checkpoints.py`) — v4-C4
+
+### `Checkpoint` (dataclass)
+
+```python
+@dataclass(frozen=True)
+class Checkpoint:
+    step:          int          # número de step
+    commit_hash:   str          # hash git completo
+    message:       str          # mensaje descriptivo
+    timestamp:     float        # Unix timestamp
+    files_changed: list[str]    # archivos modificados
+
+    def short_hash(self) -> str:
+        return self.commit_hash[:7]
+```
+
+### `CheckpointManager`
+
+```python
+CHECKPOINT_PREFIX = "architect:checkpoint"
+
+class CheckpointManager:
+    def __init__(self, workspace_root: str) -> None: ...
+    def create(self, step: int, message: str = "") -> Checkpoint | None: ...  # None si no hay cambios
+    def list_checkpoints(self) -> list[Checkpoint]: ...  # más reciente primero
+    def rollback(self, step: int | None = None, commit: str | None = None) -> bool: ...
+    def get_latest(self) -> Checkpoint | None: ...
+    def has_changes_since(self, commit_hash: str) -> bool: ...
+```
+
+### `CheckpointsConfig` (Pydantic — `config/schema.py`)
+
+```python
+class CheckpointsConfig(BaseModel):
+    enabled:       bool = False    # True = activar checkpoints automáticos
+    every_n_steps: int  = 5        # 1-50
+```
+
+---
+
+## Auto-Review (`agents/reviewer.py`) — v4-C5
+
+### `ReviewResult` (dataclass)
+
+```python
+@dataclass
+class ReviewResult:
+    has_issues:  bool       # True si se encontraron problemas
+    review_text: str        # texto completo de la review
+    cost:        float      # coste USD de la review
+```
+
+### `AutoReviewer`
+
+```python
+class AutoReviewer:
+    def __init__(
+        self,
+        agent_factory: Callable[..., Any],
+        review_model: str | None = None,
+    ) -> None: ...
+
+    def review_changes(self, task: str, git_diff: str) -> ReviewResult: ...
+
+    @staticmethod
+    def build_fix_prompt(review_text: str) -> str: ...
+
+    @staticmethod
+    def get_recent_diff(workspace_root: str, commits_back: int = 1) -> str: ...
+```
+
+### `AutoReviewConfig` (Pydantic — `config/schema.py`)
+
+```python
+class AutoReviewConfig(BaseModel):
+    enabled:        bool = False       # True = activar auto-review
+    review_model:   str | None = None  # modelo para el reviewer (None = mismo que builder)
+    max_fix_passes: int = 1            # 0-3 (0 = solo reportar)
+```
 
 ---
 

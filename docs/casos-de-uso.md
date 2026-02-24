@@ -43,6 +43,13 @@ Guía práctica de integración de `architect` en flujos de trabajo reales: desa
   - [Revisión de pipelines de ML](#revisión-de-pipelines-de-ml)
   - [Generación de código de feature engineering](#generación-de-código-de-feature-engineering)
   - [Análisis de drift en configuraciones](#análisis-de-drift-en-configuraciones)
+- [Ralph Loop, Pipelines y Parallel (v4-C)](#ralph-loop-pipelines-y-parallel-v4-c)
+  - [Iteración automática hasta que los tests pasen](#iteración-automática-hasta-que-los-tests-pasen)
+  - [Pipeline CI completo: implementar → testear → revisar](#pipeline-ci-completo-implementar--testear--revisar)
+  - [Competición de modelos en paralelo](#competición-de-modelos-en-paralelo)
+  - [Generación de tests en paralelo](#generación-de-tests-en-paralelo)
+  - [CI/CD con Ralph Loop y reportes](#cicd-con-ralph-loop-y-reportes)
+  - [Auto-review en CI](#auto-review-en-ci)
 - [Patrones de configuración](#patrones-de-configuración)
   - [Configuración para CI headless](#configuración-para-ci-headless)
   - [Configuración para desarrollo local](#configuración-para-desarrollo-local)
@@ -1435,4 +1442,157 @@ architect cleanup --older-than 7
 
 # O en el pipeline de CI
 architect cleanup --older-than 30
+```
+
+---
+
+## Ralph Loop, Pipelines y Parallel (v4-C)
+
+### Iteración automática hasta que los tests pasen
+
+El Ralph Loop itera automáticamente hasta que un conjunto de checks pasan. Ideal para "fixear tests" o "implementar hasta que compile":
+
+```bash
+# Corregir tests rotos — el agente itera hasta que pasen
+architect loop "corrige todos los tests que fallan en src/auth/" \
+  --check "pytest tests/test_auth.py -x" \
+  --max-iterations 10 \
+  --max-cost 3.0
+
+# Implementar y verificar calidad
+architect loop "implementa validación de formularios en src/forms.py" \
+  --check "pytest tests/" \
+  --check "ruff check src/" \
+  --check "mypy src/" \
+  --max-iterations 15
+```
+
+Cada iteración usa un agente con **contexto limpio** — solo ve la tarea y los checks que fallaron. Esto evita degradación del contexto en tareas largas.
+
+### Pipeline CI completo: implementar → testear → revisar
+
+Define un workflow completo en YAML:
+
+```yaml
+# pipeline-feature.yaml
+name: implement-test-review
+variables:
+  feature: "añadir endpoint de health check"
+
+steps:
+  - name: implement
+    prompt: "Implementa: {{feature}}"
+    agent: build
+    checkpoint: true
+
+  - name: test
+    prompt: "Genera tests completos para los cambios del paso anterior"
+    agent: build
+    checks:
+      - "pytest tests/ -x"
+    checkpoint: true
+
+  - name: lint
+    prompt: "Corrige todos los errores de lint"
+    agent: build
+    condition: "ruff check src/ 2>&1 | grep -q 'error'"
+    checks:
+      - "ruff check src/"
+
+  - name: review
+    prompt: "Revisa los cambios realizados y genera un informe"
+    agent: review
+    output_var: review_result
+```
+
+```bash
+# Ejecutar pipeline
+architect pipeline pipeline-feature.yaml
+
+# Reanudar desde el paso de tests (tras corrección manual)
+architect pipeline pipeline-feature.yaml --from-step test
+
+# Previsualizar sin ejecutar
+architect pipeline pipeline-feature.yaml --dry-run
+```
+
+### Competición de modelos en paralelo
+
+Ejecuta la misma tarea con diferentes modelos y compara resultados:
+
+```bash
+# Tres modelos compiten en worktrees aislados
+architect parallel "optimiza las queries SQL del proyecto" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat
+
+# Inspeccionar resultados
+cd .architect-parallel-1 && git diff HEAD~1  # resultado de gpt-4o
+cd .architect-parallel-2 && git diff HEAD~1  # resultado de claude
+cd .architect-parallel-3 && git diff HEAD~1  # resultado de deepseek
+
+# Elegir el mejor y limpiar
+architect parallel-cleanup
+```
+
+### Generación de tests en paralelo
+
+Divide el trabajo de testing entre workers:
+
+```bash
+architect parallel \
+  --task "genera tests para src/auth.py" \
+  --task "genera tests para src/users.py" \
+  --task "genera tests para src/billing.py" \
+  --workers 3 \
+  --budget-per-worker 1.0 \
+  --timeout-per-worker 300
+
+# Limpiar worktrees
+architect parallel-cleanup
+```
+
+### CI/CD con Ralph Loop y reportes
+
+```yaml
+# .github/workflows/fix-and-report.yml
+- name: Fix tests con Ralph Loop
+  env:
+    LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+  run: |
+    architect loop "corrige los tests que fallan" \
+      --check "pytest tests/ -x" \
+      --max-iterations 5 \
+      --max-cost 3.0
+
+- name: Generar reporte
+  run: |
+    architect run "resume los cambios realizados" \
+      -a resume --mode yolo \
+      --report github --report-file pr-report.md
+
+- name: Limpiar
+  if: always()
+  run: architect parallel-cleanup
+```
+
+### Auto-review en CI
+
+Activa la revisión automática post-build para que un reviewer independiente inspeccione los cambios:
+
+```yaml
+# config-ci-review.yaml
+auto_review:
+  enabled: true
+  review_model: claude-sonnet-4-6
+  max_fix_passes: 1
+
+# El flujo es automático:
+# 1. Builder implementa → 2. Reviewer revisa (contexto limpio)
+# → 3. Si hay issues, builder corrige → 4. Resultado final
+```
+
+```bash
+architect run "implementa feature X" \
+  --mode yolo --budget 3.0 \
+  -c config-ci-review.yaml
 ```

@@ -37,6 +37,11 @@ Guía práctica de uso real: desde el caso más simple hasta configuraciones ava
 29. [Reports de ejecución (v4-B2)](#29-reports-de-ejecución-v4-b2)
 30. [Dry Run detallado (v4-B4)](#30-dry-run-detallado-v4-b4)
 31. [CI/CD flags avanzados (v4-B3)](#31-cicd-flags-avanzados-v4-b3)
+32. [Ralph Loop — iteración automática (v4-C1)](#32-ralph-loop--iteración-automática-v4-c1)
+33. [Pipeline Mode — workflows YAML (v4-C3)](#33-pipeline-mode--workflows-yaml-v4-c3)
+34. [Ejecución paralela en worktrees (v4-C2)](#34-ejecución-paralela-en-worktrees-v4-c2)
+35. [Checkpoints y rollback (v4-C4)](#35-checkpoints-y-rollback-v4-c4)
+36. [Auto-review post-build (v4-C5)](#36-auto-review-post-build-v4-c5)
 
 ---
 
@@ -49,7 +54,7 @@ cd architect-cli
 pip install -e .
 
 # Verificar instalación
-architect --version   # architect, version 0.17.0
+architect --version   # architect, version 0.18.0
 architect --help
 
 # Configurar API key (mínimo requerido para llamadas LLM)
@@ -1734,6 +1739,34 @@ Sessions y reports (v4-B)
   --exit-code-on-partial    Exit code 2 si status=partial
 ```
 
+### Comandos adicionales (v4-C)
+
+```
+architect loop TASK [OPTIONS]     Ralph Loop: iterar hasta que checks pasen
+  --check CMD                     Check shell (repetible). Todos deben pasar (exit 0)
+  --max-iterations N              Máximo iteraciones (default: 25)
+  --max-cost FLOAT                Coste máximo total USD
+  --max-time INT                  Tiempo máximo total en segundos
+  --model MODEL                   Modelo LLM
+  --agent NAME                    Agente (default: build)
+  --worktree                      Ejecutar en git worktree aislado
+
+architect pipeline FILE [OPTIONS] Pipeline: ejecutar workflow YAML multi-step
+  --from-step NAME                Reanudar desde un paso específico
+  --dry-run                       Simular sin ejecutar
+  --var KEY=VALUE                 Variable extra (repetible)
+
+architect parallel TASK [OPTIONS] Parallel: ejecutar en git worktrees
+  --task CMD                      Tarea (repetible). Round-robin entre workers
+  --workers N                     Número de workers (default: 3)
+  --models CSV                    Modelos separados por coma (round-robin)
+  --agent NAME                    Agente (default: build)
+  --budget-per-worker FLOAT       USD por worker
+  --timeout-per-worker INT        Timeout en segundos por worker
+
+architect parallel-cleanup        Limpiar worktrees de ejecuciones paralelas
+```
+
 ### Combinaciones más comunes
 
 ```bash
@@ -2191,3 +2224,235 @@ else
   echo "Fallo: exit code $EXIT"
 fi
 ```
+
+---
+
+## 32. Ralph Loop — iteración automática (v4-C1)
+
+A partir de v0.18.0, architect incluye el **Ralph Loop**: un modo de iteración automática que ejecuta el agente repetidamente hasta que un conjunto de checks (comandos shell) pasen. Cada iteración usa un agente con **contexto limpio** — sin historial de iteraciones anteriores.
+
+### Uso básico
+
+```bash
+# Iterar hasta que los tests pasen
+architect loop "corrige los tests que fallan" \
+  --check "pytest tests/ -x"
+
+# Con múltiples checks (todos deben pasar)
+architect loop "implementa la feature y verifica calidad" \
+  --check "pytest tests/" \
+  --check "ruff check src/" \
+  --check "mypy src/"
+
+# Con límites de seguridad
+architect loop "refactoriza el módulo auth" \
+  --check "pytest tests/test_auth.py" \
+  --max-iterations 10 \
+  --max-cost 5.0 \
+  --max-time 600
+```
+
+### Opciones
+
+| Opción | Default | Descripción |
+|--------|---------|-------------|
+| `TASK` | — | Tarea como argumento posicional |
+| `--check CMD` | — | Check a ejecutar (repetible). Todos deben retornar exit 0 |
+| `--max-iterations N` | 25 | Máximo de iteraciones |
+| `--max-cost FLOAT` | — | Coste máximo total en USD |
+| `--max-time INT` | — | Tiempo máximo total en segundos |
+| `--model MODEL` | — | Modelo LLM a usar |
+| `--agent NAME` | `build` | Agente a usar en cada iteración |
+| `--worktree` | `false` | Ejecutar en git worktree aislado |
+
+### Cómo funciona
+
+1. Ejecuta los checks → si todos pasan, termina con éxito.
+2. Si algún check falla, construye un prompt con la tarea original + los checks que fallaron + su output.
+3. Ejecuta el agente con contexto limpio (sin historial previo).
+4. Repite desde el paso 1.
+
+El agente de cada iteración no ve lo que hicieron iteraciones anteriores — solo ve la tarea, los checks que fallaron y su output. Esto evita acumulación de contexto y permite iteraciones indefinidas.
+
+Ver documentación completa: [`ralph-loop.md`](ralph-loop.md).
+
+---
+
+## 33. Pipeline Mode — workflows YAML (v4-C3)
+
+A partir de v0.18.0, architect soporta **pipelines**: workflows YAML multi-step donde cada paso es una ejecución del agente con su propio prompt, agente y configuración.
+
+### Uso básico
+
+```bash
+# Ejecutar un pipeline definido en YAML
+architect pipeline workflow.yaml
+
+# Ejecutar desde un paso específico (resume)
+architect pipeline workflow.yaml --from-step test
+
+# Dry-run del pipeline
+architect pipeline workflow.yaml --dry-run
+
+# Con variables desde CLI
+architect pipeline workflow.yaml --var task="añadir auth" --var lang=python
+```
+
+### Formato del archivo YAML
+
+```yaml
+name: implement-and-test
+variables:
+  task: "implementar feature X"
+  module: "src/auth"
+
+steps:
+  - name: implement
+    prompt: "Implementa: {{task}} en {{module}}"
+    agent: build
+    checkpoint: true
+
+  - name: test
+    prompt: "Genera tests para {{module}}"
+    agent: build
+    checks:
+      - "pytest tests/ -x"
+
+  - name: review
+    prompt: "Revisa los cambios realizados"
+    agent: review
+    condition: "test -f src/auth/new_feature.py"
+    output_var: review_result
+```
+
+### Features
+
+- **Variables**: `{{nombre}}` se sustituyen en prompts con valores de `variables` o `output_var` de pasos anteriores.
+- **Condiciones**: `condition` ejecuta un comando shell; si retorna exit != 0, el paso se salta.
+- **Checks**: Comandos shell post-step. Si fallan, el paso se marca como `failed`.
+- **Checkpoints**: `checkpoint: true` crea un git commit con prefijo `architect:checkpoint:<step_name>`.
+- **output_var**: Captura el output del agente en una variable para usarla en pasos posteriores.
+- **from-step**: Reanuda un pipeline desde un paso específico (útil tras correcciones manuales).
+- **dry-run**: Simula sin ejecutar, mostrando qué haría cada paso.
+
+Ver documentación completa: [`pipelines.md`](pipelines.md).
+
+---
+
+## 34. Ejecución paralela en worktrees (v4-C2)
+
+A partir de v0.18.0, architect soporta **ejecución paralela** de múltiples agentes, cada uno en un git worktree aislado.
+
+### Uso básico
+
+```bash
+# Misma tarea con diferentes modelos (competición)
+architect parallel "optimiza las queries SQL" \
+  --models gpt-4o,claude-sonnet-4-6,deepseek-chat
+
+# Tareas diferentes en paralelo
+architect parallel \
+  --task "tests para src/auth.py" \
+  --task "tests para src/users.py" \
+  --task "tests para src/billing.py" \
+  --workers 3
+
+# Con budget y timeout por worker
+architect parallel \
+  --task "refactoriza módulo de pagos" \
+  --task "refactoriza módulo de usuarios" \
+  --budget-per-worker 2.0 \
+  --timeout-per-worker 300
+```
+
+### Opciones
+
+| Opción | Default | Descripción |
+|--------|---------|-------------|
+| `TASK` | — | Tarea como argumento posicional |
+| `--task CMD` | — | Tarea (repetible). Se asignan round-robin a workers |
+| `--workers N` | 3 | Número de workers paralelos |
+| `--models CSV` | — | Modelos separados por coma (round-robin) |
+| `--agent NAME` | `build` | Agente a usar en todos los workers |
+| `--budget-per-worker FLOAT` | — | Límite USD por worker |
+| `--timeout-per-worker INT` | — | Timeout en segundos por worker |
+
+### Worktrees y limpieza
+
+Cada worker ejecuta en `.architect-parallel-{N}/` con su propio branch `architect/parallel-{N}`. Los worktrees no se eliminan automáticamente para permitir inspección:
+
+```bash
+# Ver worktrees
+git worktree list
+
+# Limpiar todos los worktrees de parallel
+architect parallel-cleanup
+```
+
+Ver documentación completa: [`parallel.md`](parallel.md).
+
+---
+
+## 35. Checkpoints y rollback (v4-C4)
+
+A partir de v0.18.0, architect puede crear **checkpoints**: git commits con el prefijo `architect:checkpoint` que permiten volver a un estado anterior del workspace.
+
+### Uso en pipelines
+
+```yaml
+steps:
+  - name: implement
+    prompt: "Implementa la feature"
+    checkpoint: true     # → git commit "architect:checkpoint:implement"
+
+  - name: optimize
+    prompt: "Optimiza el rendimiento"
+    checkpoint: true     # → git commit "architect:checkpoint:optimize"
+```
+
+### Configuración para checkpoints automáticos
+
+```yaml
+checkpoints:
+  enabled: true        # activar checkpoints cada N pasos del AgentLoop
+  every_n_steps: 5     # crear checkpoint cada 5 pasos
+```
+
+### Listar y restaurar
+
+```bash
+# Ver checkpoints
+git log --oneline --grep="architect:checkpoint"
+
+# Rollback a un checkpoint específico
+git reset --hard <commit_hash>
+```
+
+Ver documentación completa: [`checkpoints.md`](checkpoints.md).
+
+---
+
+## 36. Auto-review post-build (v4-C5)
+
+A partir de v0.18.0, architect puede ejecutar automáticamente una **revisión post-build** con un agente reviewer que tiene contexto limpio (solo ve el diff y la tarea original).
+
+### Configuración
+
+```yaml
+auto_review:
+  enabled: true                    # activar auto-review
+  review_model: claude-sonnet-4-6  # modelo para el reviewer (null = mismo que builder)
+  max_fix_passes: 1                # 0 = solo reportar, 1-3 = corregir
+```
+
+### Flujo
+
+1. El builder completa la tarea.
+2. Se obtiene el `git diff` de los cambios.
+3. Un agente reviewer fresco (solo tools de lectura) inspecciona los cambios.
+4. Si encuentra issues y `max_fix_passes > 0`, genera un prompt de corrección.
+5. El builder ejecuta la corrección en un segundo pase.
+
+El reviewer busca: bugs lógicos, problemas de seguridad, violaciones de convenciones, oportunidades de simplificación y tests faltantes.
+
+Ver documentación completa: [`auto-review.md`](auto-review.md).

@@ -42,6 +42,36 @@
 │                                                                         │
 │    11. ReportGenerator (opcional, --report json|markdown|github, B2)   │
 │         └─ to_json() | to_markdown() | to_github_pr_comment()         │
+│                                                                         │
+│  ══ Modos de orquestación avanzada (v4 Phase C) ══                    │
+│                                                                         │
+│    12. RalphLoop (architect loop, v4-C1)                               │
+│         ├─ agent_factory() → AgentLoop fresco por iteración           │
+│         ├─ _run_checks() → subprocess shell commands                   │
+│         ├─ _build_iteration_prompt() → spec + diff + errors + progress│
+│         └─ worktree support → .architect-ralph-worktree                │
+│                                                                         │
+│    13. PipelineRunner (architect pipeline, v4-C3)                      │
+│         ├─ from_yaml() → cargar pipeline desde YAML                    │
+│         ├─ agent_factory() → AgentLoop fresco por step                │
+│         ├─ _resolve_vars() → {{variable}} substitution                 │
+│         ├─ _eval_condition() → skip steps condicionalmente             │
+│         └─ _create_checkpoint() → git commit por step                  │
+│                                                                         │
+│    14. ParallelRunner (architect parallel, v4-C2)                      │
+│         ├─ ProcessPoolExecutor(max_workers)                            │
+│         ├─ _run_worker_process() → subprocess architect run en worktree│
+│         └─ cleanup() → eliminar worktrees y branches                   │
+│                                                                         │
+│    15. AutoReviewer (v4-C5)                                            │
+│         ├─ review_changes(task, diff) → ReviewResult                   │
+│         ├─ build_fix_prompt() → prompt de corrección                   │
+│         └─ get_recent_diff() → git diff HEAD                           │
+│                                                                         │
+│    16. CheckpointManager (v4-C4)                                       │
+│         ├─ create(step) → git commit con prefijo                       │
+│         ├─ list_checkpoints() → parse git log                          │
+│         └─ rollback(step|commit) → git reset --hard                    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,6 +116,13 @@ cli.py
  ├── features/report.py ──── core/state.py (AgentState)
  │                            costs/tracker.py (CostTracker)
  ├── features/dryrun.py ──── (standalone, minimal deps)
+ ├── features/ralph.py ───── core/state.py (AgentState)       # v4-C1
+ │                            costs/tracker.py (CostTracker)
+ ├── features/pipelines.py ── core/state.py (AgentState)      # v4-C3
+ │                             costs/tracker.py (CostTracker)
+ ├── features/parallel.py ── (subprocess, standalone)          # v4-C2
+ ├── features/checkpoints.py ─ (subprocess git, standalone)    # v4-C4
+ ├── agents/reviewer.py ──── core/state.py (AgentState)       # v4-C5
  └── agents/registry.py ──── agents/prompts.py
                             config/schema.py (AgentConfig)
 ```

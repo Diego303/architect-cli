@@ -38,6 +38,16 @@ from .features.sessions import SessionManager, generate_session_id
 from .features.report import ExecutionReport, ReportGenerator, collect_git_diff
 # v4-B4: Dry Run Tracker
 from .features.dryrun import DryRunTracker
+# v4-C1: Ralph Loop
+from .features.ralph import RalphConfig, RalphLoop
+# v4-C2: Parallel Runs
+from .features.parallel import ParallelConfig, ParallelRunner
+# v4-C3: Pipelines
+from .features.pipelines import PipelineRunner
+# v4-C4: Checkpoints
+from .features.checkpoints import CheckpointManager
+# v4-C5: Auto-Review
+from .agents.reviewer import AutoReviewer
 
 # Códigos de salida
 EXIT_SUCCESS = 0
@@ -49,7 +59,7 @@ EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
 # Versión actual
-_VERSION = "0.17.0"
+_VERSION = "0.18.0"
 
 
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
@@ -1011,6 +1021,542 @@ def cleanup(older_than_days: int, config: Path | None) -> None:
     mgr = SessionManager(workspace)
     removed = mgr.cleanup(older_than_days=older_than_days)
     click.echo(f"Sesiones eliminadas: {removed}")
+
+
+# ── PHASE C COMMANDS (v4-C1..C5) ───────────────────────────────────────
+
+
+@main.command("loop")
+@click.argument("task")
+@click.option(
+    "--check",
+    "checks",
+    multiple=True,
+    required=True,
+    help="Comando de verificación (repetible con múltiples --check)",
+)
+@click.option(
+    "--spec",
+    "spec_file",
+    type=click.Path(exists=True),
+    help="Archivo de especificación detallada",
+)
+@click.option(
+    "--max-iterations",
+    default=25,
+    type=int,
+    help="Número máximo de iteraciones (default: 25)",
+)
+@click.option("--max-cost", type=float, help="Coste máximo total en USD")
+@click.option("--max-time", type=int, help="Tiempo máximo total en segundos")
+@click.option(
+    "--completion-tag",
+    default="COMPLETE",
+    help="Tag que el agente emite al terminar (default: COMPLETE)",
+)
+@click.option("--agent", default="build", help="Agente a usar en cada iteración")
+@click.option("--model", default=None, help="Modelo LLM a usar")
+@click.option(
+    "-c",
+    "--config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path al archivo de configuración YAML",
+)
+@click.option("--worktree", is_flag=True, help="Usar git worktree aislado")
+@click.option("--quiet", is_flag=True, help="Modo silencioso")
+def loop_cmd(
+    task: str,
+    checks: tuple[str, ...],
+    spec_file: str | None,
+    max_iterations: int,
+    max_cost: float | None,
+    max_time: int | None,
+    completion_tag: str,
+    agent: str,
+    model: str | None,
+    config: Path | None,
+    worktree: bool,
+    quiet: bool,
+) -> None:
+    """Ejecuta un Ralph Loop: iterar hasta que los checks pasen.
+
+    Cada iteración usa un agente con contexto LIMPIO. Solo recibe:
+    la tarea original, diff acumulado, errores de la iteración anterior,
+    y progreso acumulado.
+
+    Ejemplos:
+
+        \b
+        # Loop con test como check
+        $ architect loop "implementa login" --check "pytest tests/"
+
+        \b
+        # Loop con múltiples checks
+        $ architect loop "refactoriza auth" \\
+            --check "ruff check src/" \\
+            --check "pytest tests/ -q" \\
+            --max-iterations 10
+
+        \b
+        # Con spec file y presupuesto
+        $ architect loop "implementa spec" --spec spec.md \\
+            --check "pytest" --max-cost 1.0
+
+        \b
+        # En worktree aislado (no modifica working tree)
+        $ architect loop "migra DB" --check "pytest" --worktree
+    """
+    import os
+
+    try:
+        app_config = load_config(config_path=config)
+    except Exception:
+        app_config = None
+
+    workspace = str(Path(app_config.workspace.root).resolve()) if app_config else os.getcwd()
+
+    configure_logging(
+        app_config.logging if app_config else None,
+        quiet=quiet,
+    )
+
+    ralph_config = RalphConfig(
+        task=task,
+        checks=list(checks),
+        spec_file=spec_file,
+        completion_tag=completion_tag,
+        max_iterations=max_iterations,
+        max_cost=max_cost,
+        max_time=max_time,
+        agent=agent,
+        model=model,
+        use_worktree=worktree,
+    )
+
+    def agent_factory(**kwargs):
+        """Crea un AgentLoop fresco para cada iteración.
+
+        Acepta workspace_root para soportar worktrees aislados.
+        Cuando se pasa workspace_root, las tools del agente operan
+        en ese directorio en lugar del workspace original.
+        """
+        iter_agent = kwargs.get("agent", agent)
+        iter_model = kwargs.get("model", model)
+        iter_workspace_root = kwargs.get("workspace_root")
+
+        if not app_config:
+            click.echo("Error: Configuración no disponible.", err=True)
+            sys.exit(EXIT_CONFIG_ERROR)
+
+        # Si se proporcionó workspace_root (worktree), usar ese en lugar del original
+        iter_workspace_config = app_config.workspace
+        iter_app_config = app_config
+        if iter_workspace_root and str(iter_workspace_root) != workspace:
+            iter_workspace_config = app_config.workspace.model_copy(
+                update={"root": Path(iter_workspace_root)}
+            )
+            iter_app_config = app_config.model_copy(
+                update={"workspace": iter_workspace_config}
+            )
+
+        # Crear componentes frescos para cada iteración
+        registry = ToolRegistry()
+        register_all_tools(registry, iter_workspace_config, app_config.commands)
+
+        llm_config = app_config.llm
+        if iter_model:
+            # Override model for this iteration
+            llm_config = app_config.llm.model_copy(update={"model": iter_model})
+
+        llm = LLMAdapter(llm_config)
+        context_mgr = ContextManager(app_config.context)
+        ctx = ContextBuilder(context_manager=context_mgr)
+
+        cost_tracker_iter: CostTracker | None = None
+        if app_config.costs.enabled:
+            price_loader = PriceLoader()
+            cost_tracker_iter = CostTracker(price_loader=price_loader)
+
+        try:
+            agent_config = get_agent(iter_agent, app_config.agents, {"mode": "yolo"})
+        except AgentNotFoundError:
+            agent_config = get_agent("build", app_config.agents, {"mode": "yolo"})
+
+        # Guardrails para iteraciones del loop (v4-A2)
+        iter_guardrails: GuardrailsEngine | None = None
+        if iter_app_config.guardrails.enabled:
+            ws_root = str(Path(iter_workspace_config.root).resolve())
+            iter_guardrails = GuardrailsEngine(
+                config=iter_app_config.guardrails,
+                workspace_root=ws_root,
+            )
+
+        engine = ExecutionEngine(
+            registry, iter_app_config, confirm_mode="yolo",
+            guardrails=iter_guardrails,
+        )
+
+        return AgentLoop(
+            llm, engine, agent_config, ctx,
+            context_manager=context_mgr,
+            cost_tracker=cost_tracker_iter,
+            guardrails=iter_guardrails,
+        )
+
+    if not quiet:
+        wt_label = " [worktree]" if worktree else ""
+        click.echo(
+            f"\nRalph Loop: {len(checks)} check(s), "
+            f"max {max_iterations} iteraciones{wt_label}",
+            err=True,
+        )
+
+    ralph = RalphLoop(ralph_config, agent_factory, workspace_root=workspace)
+    result = ralph.run()
+
+    # Resumen
+    if not quiet:
+        click.echo(f"\n--- Ralph Loop {'Completado' if result.success else 'Finalizado'} ---", err=True)
+        click.echo(f"Iteraciones: {result.total_iterations}", err=True)
+        click.echo(f"Coste total: ${result.total_cost:.4f}", err=True)
+        click.echo(f"Duración: {result.total_duration:.1f}s", err=True)
+        click.echo(f"Razón: {result.stop_reason}", err=True)
+        if result.worktree_path:
+            click.echo(f"Worktree: {result.worktree_path}", err=True)
+            click.echo(
+                "  Inspecciona los cambios y usa 'git merge architect/ralph-loop' para integrar.",
+                err=True,
+            )
+
+        for it in result.iterations:
+            status = "PASS" if it.all_checks_passed else "FAIL"
+            tag = " [TAG]" if it.completion_tag_found else ""
+            click.echo(
+                f"  Iter {it.iteration}: [{status}]{tag} "
+                f"steps={it.steps_taken} cost=${it.cost:.4f}",
+                err=True,
+            )
+
+    sys.exit(EXIT_SUCCESS if result.success else EXIT_FAILED)
+
+
+@main.command("parallel")
+@click.argument("task", required=False)
+@click.option("--task", "tasks", multiple=True, help="Tarea (repetible para fan-out)")
+@click.option("--workers", default=3, type=int, help="Número de workers (default: 3)")
+@click.option("--models", help="Modelos separados por coma (ej: gpt-4o,claude-sonnet-4)")
+@click.option("--agent", default="build", help="Agente a usar")
+@click.option("--budget-per-worker", type=float, help="Presupuesto USD por worker")
+@click.option("--timeout-per-worker", type=int, help="Timeout segundos por worker")
+@click.option("--quiet", is_flag=True, help="Modo silencioso")
+def parallel_cmd(
+    task: str | None,
+    tasks: tuple[str, ...],
+    workers: int,
+    models: str | None,
+    agent: str,
+    budget_per_worker: float | None,
+    timeout_per_worker: int | None,
+    quiet: bool,
+) -> None:
+    """Ejecuta múltiples agentes en paralelo con worktrees.
+
+    Cada worker se ejecuta en un git worktree aislado. Los worktrees
+    se conservan después de la ejecución para inspección.
+
+    Ejemplos:
+
+        \b
+        # Misma tarea, 3 modelos diferentes
+        $ architect parallel "implementa auth" \\
+            --models gpt-4o,claude-sonnet-4,deepseek-chat
+
+        \b
+        # Fan-out con diferentes tareas
+        $ architect parallel \\
+            --task "implementa login" \\
+            --task "implementa registro" \\
+            --task "implementa logout" \\
+            --workers 3
+    """
+    import os
+
+    task_list = list(tasks) if tasks else ([task] if task else [])
+    if not task_list:
+        click.echo("Error: Especifica una tarea como argumento o con --task", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    model_list = models.split(",") if models else None
+    workspace = os.getcwd()
+
+    config = ParallelConfig(
+        tasks=task_list,
+        workers=workers,
+        models=model_list,
+        agent=agent,
+        budget_per_worker=budget_per_worker,
+        timeout_per_worker=timeout_per_worker,
+    )
+
+    if not quiet:
+        click.echo(
+            f"\nParallel Run: {workers} workers, "
+            f"{len(task_list)} tarea(s)"
+            + (f", modelos: {models}" if models else ""),
+            err=True,
+        )
+
+    runner = ParallelRunner(config, workspace)
+    results = runner.run()
+
+    if not quiet:
+        click.echo("\n--- Resultados Parallel Run ---", err=True)
+        for r in results:
+            click.echo(
+                f"  Worker {r.worker_id}: [{r.status}] "
+                f"branch={r.branch} model={r.model} "
+                f"steps={r.steps} cost=${r.cost:.4f} "
+                f"duration={r.duration:.1f}s",
+                err=True,
+            )
+            if r.files_modified:
+                click.echo(f"    files: {', '.join(r.files_modified[:5])}", err=True)
+
+        click.echo(
+            f"\nWorktrees conservados. Usa 'architect parallel-cleanup' para limpiar.",
+            err=True,
+        )
+
+    any_success = any(r.status == "success" for r in results)
+    sys.exit(EXIT_SUCCESS if any_success else EXIT_FAILED)
+
+
+@main.command("parallel-cleanup")
+def parallel_cleanup_cmd() -> None:
+    """Limpia worktrees y branches de ejecuciones paralelas."""
+    import os
+
+    workspace = os.getcwd()
+    runner = ParallelRunner(
+        ParallelConfig(tasks=[""]),
+        workspace,
+    )
+    removed = runner.cleanup()
+    click.echo(f"Worktrees limpiados: {removed}")
+
+
+@main.command("pipeline")
+@click.argument("pipeline_file", type=click.Path(exists=True))
+@click.option(
+    "--var",
+    "variables",
+    multiple=True,
+    help="Variable del pipeline (formato: nombre=valor, repetible)",
+)
+@click.option("--from-step", help="Empezar desde un paso específico")
+@click.option("--dry-run", is_flag=True, help="Mostrar plan sin ejecutar")
+@click.option(
+    "-c",
+    "--config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path al archivo de configuración YAML",
+)
+@click.option("--quiet", is_flag=True, help="Modo silencioso")
+def pipeline_cmd(
+    pipeline_file: str,
+    variables: tuple[str, ...],
+    from_step: str | None,
+    dry_run: bool,
+    config: Path | None,
+    quiet: bool,
+) -> None:
+    """Ejecuta un workflow YAML multi-step.
+
+    El archivo YAML define una secuencia de pasos, cada uno con su
+    agente, prompt, y configuración.
+
+    Ejemplos:
+
+        \b
+        # Ejecutar pipeline completo
+        $ architect pipeline workflow.yaml --var task="añade auth"
+
+        \b
+        # Continuar desde un paso específico
+        $ architect pipeline workflow.yaml --from-step test
+
+        \b
+        # Dry-run para ver el plan
+        $ architect pipeline workflow.yaml --dry-run
+    """
+    import os
+
+    try:
+        app_config = load_config(config_path=config)
+    except Exception:
+        app_config = None
+
+    workspace = str(Path(app_config.workspace.root).resolve()) if app_config else os.getcwd()
+
+    configure_logging(
+        app_config.logging if app_config else None,
+        quiet=quiet,
+    )
+
+    # Parsear variables
+    vars_dict: dict[str, str] = {}
+    for v in variables:
+        if "=" in v:
+            key, val = v.split("=", 1)
+            vars_dict[key.strip()] = val.strip()
+
+    def agent_factory(**kwargs):
+        """Crea un AgentLoop fresco para cada step del pipeline."""
+        iter_agent = kwargs.get("agent", "build")
+        iter_model = kwargs.get("model")
+
+        if not app_config:
+            click.echo("Error: Configuración no disponible.", err=True)
+            sys.exit(EXIT_CONFIG_ERROR)
+
+        registry = ToolRegistry()
+        register_all_tools(registry, app_config.workspace, app_config.commands)
+
+        llm_config = app_config.llm
+        if iter_model:
+            llm_config = app_config.llm.model_copy(update={"model": iter_model})
+
+        llm = LLMAdapter(llm_config)
+        context_mgr = ContextManager(app_config.context)
+        ctx = ContextBuilder(context_manager=context_mgr)
+
+        cost_tracker_iter: CostTracker | None = None
+        if app_config.costs.enabled:
+            price_loader = PriceLoader()
+            cost_tracker_iter = CostTracker(price_loader=price_loader)
+
+        try:
+            agent_config = get_agent(iter_agent, app_config.agents, {"mode": "yolo"})
+        except AgentNotFoundError:
+            agent_config = get_agent("build", app_config.agents, {"mode": "yolo"})
+
+        # Guardrails para steps del pipeline (v4-A2)
+        pipe_guardrails: GuardrailsEngine | None = None
+        if app_config.guardrails.enabled:
+            pipe_guardrails = GuardrailsEngine(
+                config=app_config.guardrails,
+                workspace_root=workspace,
+            )
+
+        engine = ExecutionEngine(
+            registry, app_config, confirm_mode="yolo",
+            guardrails=pipe_guardrails,
+        )
+
+        return AgentLoop(
+            llm, engine, agent_config, ctx,
+            context_manager=context_mgr,
+            cost_tracker=cost_tracker_iter,
+            guardrails=pipe_guardrails,
+        )
+
+    runner = PipelineRunner.from_yaml(
+        pipeline_file, vars_dict, agent_factory, workspace_root=workspace,
+    )
+
+    if dry_run and not quiet:
+        click.echo(runner.get_plan_summary(), err=True)
+        sys.exit(EXIT_SUCCESS)
+
+    if not quiet:
+        click.echo(
+            f"\nPipeline: {runner.config.name} "
+            f"({len(runner.config.steps)} steps)",
+            err=True,
+        )
+
+    results = runner.run(from_step=from_step, dry_run=dry_run)
+
+    if not quiet:
+        click.echo("\n--- Pipeline Results ---", err=True)
+        for r in results:
+            status_icon = {"success": "PASS", "failed": "FAIL", "skipped": "SKIP"}.get(
+                r.status, r.status
+            )
+            click.echo(
+                f"  [{status_icon}] {r.step_name} "
+                f"(${r.cost:.4f}, {r.duration:.1f}s)",
+                err=True,
+            )
+            if r.error:
+                click.echo(f"    Error: {r.error[:100]}", err=True)
+
+    all_ok = all(r.status in ("success", "skipped", "dry_run") for r in results)
+    sys.exit(EXIT_SUCCESS if all_ok else EXIT_FAILED)
+
+
+@main.command("rollback")
+@click.option("--to-step", type=int, help="Rollback al checkpoint de este step")
+@click.option("--to-commit", help="Rollback a un commit específico")
+def rollback_cmd(to_step: int | None, to_commit: str | None) -> None:
+    """Deshace cambios hasta un checkpoint.
+
+    Los checkpoints son creados automáticamente por architect durante
+    la ejecución. Usa 'architect history' para ver los disponibles.
+
+    Ejemplos:
+
+        \b
+        # Rollback al paso 3
+        $ architect rollback --to-step 3
+
+        \b
+        # Rollback a un commit específico
+        $ architect rollback --to-commit abc1234
+    """
+    import os
+
+    if to_step is None and to_commit is None:
+        click.echo("Error: Especifica --to-step o --to-commit", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    mgr = CheckpointManager(os.getcwd())
+
+    if mgr.rollback(step=to_step, commit=to_commit):
+        target = f"step {to_step}" if to_step is not None else to_commit
+        click.echo(f"Rollback exitoso a {target}")
+    else:
+        click.echo("Error: No se pudo hacer rollback.", err=True)
+        sys.exit(EXIT_FAILED)
+
+
+@main.command("history")
+def history_cmd() -> None:
+    """Muestra historial de checkpoints de architect.
+
+    Lista todos los git commits con prefijo 'architect:checkpoint'
+    creados durante ejecuciones del agente.
+    """
+    import os
+    from datetime import datetime
+
+    mgr = CheckpointManager(os.getcwd())
+    checkpoints = mgr.list_checkpoints()
+
+    if not checkpoints:
+        click.echo("No hay checkpoints registrados.")
+        return
+
+    click.echo(f"Checkpoints ({len(checkpoints)}):\n")
+    click.echo(f"  {'Step':<6s} {'Hash':<9s} {'Fecha':<20s} Mensaje")
+    click.echo(f"  {'─'*6} {'─'*9} {'─'*20} {'─'*30}")
+    for cp in checkpoints:
+        date_str = datetime.fromtimestamp(cp.timestamp).strftime("%Y-%m-%d %H:%M:%S") if cp.timestamp else "-"
+        click.echo(
+            f"  {cp.step:<6d} {cp.short_hash():<9s} {date_str:<20s} {cp.message or '-'}"
+        )
+
+    click.echo(f"\nUsa 'architect rollback --to-step N' para restaurar.")
 
 
 # ── HELPER FUNCTIONS (v4-B3) ────────────────────────────────────────────

@@ -99,7 +99,27 @@ def record(self, step, model, usage, source="agent") -> None:
 
 La herramienta `run_command` tiene `sensitive=True` como atributo base, pero `ExecutionEngine` **no usa ese atributo** para esta tool. En su lugar llama a `_should_confirm_command()` que consulta `tool.classify_sensitivity(command)` dinámicamente. Si añades nueva lógica de confirmación, asegúrate de mantener este bypass intacto.
 
-### 9. Los hooks post-edit nunca lanzan excepciones
+### 9. Contexto limpio por iteración en Ralph Loop y Auto-Review
+
+El `RalphLoop` y el `AutoReviewer` crean un agente **fresco** en cada iteración/review via `agent_factory`. Nunca reutilizan el historial de mensajes de una iteración anterior. Esto es intencional: evita acumulación de contexto y permite iteraciones indefinidas sin degradación.
+
+```python
+# ✓ CORRECTO — agent_factory crea agente fresco
+for iteration in range(max_iterations):
+    agent = self.agent_factory(task=prompt, **kwargs)
+    result = agent.run()
+
+# ✗ INCORRECTO — reutilizar el mismo agente
+agent = self.agent_factory(task=initial_prompt)
+for iteration in range(max_iterations):
+    result = agent.run()  # acumula contexto → degrade
+```
+
+### 10. Worktrees de parallel son independientes y no se limpian automáticamente
+
+Los worktrees de `ParallelRunner` (`.architect-parallel-{N}`) persisten tras la ejecución para permitir inspección. Solo se limpian con `architect parallel-cleanup`. El repositorio original nunca se modifica durante la ejecución paralela.
+
+### 11. Los hooks post-edit nunca lanzan excepciones
 
 `PostEditHooks.run_for_tool()` y `run_for_file()` capturan todas las excepciones internamente. `subprocess.TimeoutExpired` retorna un `HookRunResult` formateado con el error de timeout. Otras excepciones logean un warning y retornan `None`. El resultado del hook (si existe) se concatena al `ToolResult` para que el LLM pueda auto-corregir.
 
@@ -334,6 +354,13 @@ except Exception as e:
 | Human log integration en loop | `core/loop.py` → `self.hlog = HumanLog(self.log)` |
 | Hook execution in engine | `execution/engine.py` → `run_post_edit_hooks()` |
 | StopReason enum | `core/state.py` → `StopReason` |
+| Ralph Loop | `features/ralph.py` → `RalphLoop`, `RalphConfig` |
+| Pipeline mode | `features/pipelines.py` → `PipelineRunner`, `PipelineConfig` |
+| Parallel execution | `features/parallel.py` → `ParallelRunner`, `ParallelConfig` |
+| Checkpoints | `features/checkpoints.py` → `CheckpointManager`, `Checkpoint` |
+| Auto-review | `agents/reviewer.py` → `AutoReviewer`, `ReviewResult` |
+| Phase C configs | `config/schema.py` → `RalphLoopConfig`, `ParallelRunsConfig`, `CheckpointsConfig`, `AutoReviewConfig` |
+| Phase C CLI commands | `cli.py` → `loop`, `pipeline`, `parallel`, `parallel-cleanup` |
 
 ---
 
@@ -440,3 +467,23 @@ Los eventos con nivel HUMAN (25) se enrutan exclusivamente al `HumanLogHandler` 
 ### `_graceful_close()` hace una ultima llamada al LLM
 
 Cuando un watchdog se dispara (max_steps, budget, timeout, context_full), el loop llama a `_graceful_close()` que inyecta un mensaje `[SISTEMA]` y hace una ultima llamada al LLM SIN tools para obtener un resumen de lo hecho hasta ese punto. La excepcion es `USER_INTERRUPT` (Ctrl+C), que corta inmediatamente sin llamada extra. Si la llamada final al LLM falla, se usa un mensaje mecanico como output.
+
+### `RalphLoop._run_checks()` usa subprocess con shell=True
+
+Los checks del Ralph Loop se ejecutan con `subprocess.run(cmd, shell=True)`. Esto significa que los comandos pueden usar pipes, redirects y variables de entorno. El exit code 0 indica éxito, cualquier otro indica fallo. El timeout por check no está configurado — un check que cuelga bloqueará la iteración.
+
+### `PipelineRunner._substitute_variables()` es literal
+
+La sustitución de variables `{{nombre}}` es una simple `str.replace()`. No soporta expresiones, filtros ni nested variables. Si una variable no existe, `{{nombre}}` se queda literal en el prompt — no produce error.
+
+### `CheckpointManager.list_checkpoints()` parsea formato pipe-separated
+
+El `list_checkpoints()` usa `git log --format=%H|%s|%at` y parsea con `split('|')`. Si un mensaje de commit contiene `|`, el parsing puede fallar. Los checkpoints siempre usan el formato `architect:checkpoint:<name>` que no contiene pipes.
+
+### `ParallelRunner._run_worker()` es un subprocess
+
+Cada worker se ejecuta como `subprocess.Popen("architect run --json --confirm-mode yolo ...")` en su worktree. Esto significa que el worker hereda las env vars del proceso padre (incluyendo API keys). Si el subprocess falla, el `WorkerResult` tiene `status="failed"`.
+
+### `AutoReviewer` falla silenciosamente
+
+Si la llamada al LLM falla durante la review, el `AutoReviewer` no propaga la excepción. Retorna `ReviewResult(has_issues=True, review_text="Error durante la review: ...", cost=0.0)`. Esto permite que el flujo principal continúe sin interrupciones.
