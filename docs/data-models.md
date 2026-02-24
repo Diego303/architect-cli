@@ -252,6 +252,8 @@ class AppConfig(BaseModel):
     parallel:   ParallelRunsConfig = ParallelRunsConfig() # v4-C2
     checkpoints: CheckpointsConfig = CheckpointsConfig() # v4-C4
     auto_review: AutoReviewConfig = AutoReviewConfig()  # v4-C5
+    telemetry:  TelemetryConfig  = TelemetryConfig()   # v1.0.0 (D4)
+    health:     HealthConfig     = HealthConfig()       # v1.0.0 (D2)
 ```
 
 ---
@@ -1228,6 +1230,102 @@ class AutoReviewConfig(BaseModel):
     enabled:        bool = False       # True = activar auto-review
     review_model:   str | None = None  # modelo para el reviewer (None = mismo que builder)
     max_fix_passes: int = 1            # 0-3 (0 = solo reportar)
+```
+
+### `TelemetryConfig` (Pydantic — `config/schema.py`, v1.0.0)
+
+```python
+class TelemetryConfig(BaseModel):
+    enabled:    bool = False                         # True = activar trazas OpenTelemetry
+    exporter:   str = "console"                      # "otlp" | "console" | "json-file"
+    endpoint:   str = "http://localhost:4317"        # endpoint gRPC para OTLP
+    trace_file: str | None = None                    # path del archivo para json-file
+```
+
+### `HealthConfig` (Pydantic — `config/schema.py`, v1.0.0)
+
+```python
+class HealthConfig(BaseModel):
+    enabled:          bool = False                   # True = análisis automático
+    include_patterns: list[str] = ["**/*.py"]        # patrones de archivos a analizar
+    exclude_dirs:     list[str] = [".git", "venv", "__pycache__", "node_modules"]
+```
+
+### `HealthSnapshot` (dataclass — `core/health.py`, v1.0.0)
+
+```python
+@dataclass
+class HealthSnapshot:
+    files_analyzed: int
+    total_functions: int
+    avg_complexity: float
+    max_complexity: int
+    long_functions: int           # > 50 líneas
+    duplicate_blocks: int         # bloques duplicados
+    functions: list[FunctionMetric]
+```
+
+### `HealthDelta` (dataclass — `core/health.py`, v1.0.0)
+
+```python
+@dataclass
+class HealthDelta:
+    before: HealthSnapshot
+    after: HealthSnapshot
+    def to_report(self) -> str: ...  # tabla markdown
+```
+
+### `FunctionMetric` (frozen dataclass — `core/health.py`, v1.0.0)
+
+```python
+@dataclass(frozen=True)
+class FunctionMetric:
+    file: str
+    name: str
+    lines: int
+    complexity: int
+```
+
+### `CompetitiveConfig` (dataclass — `features/competitive.py`, v1.0.0)
+
+```python
+@dataclass
+class CompetitiveConfig:
+    task: str
+    models: list[str]
+    checks: list[str]
+    agent: str = "build"
+    max_steps: int = 50
+    budget_per_model: float | None = None
+    timeout_per_model: int | None = None
+    config_path: str | None = None
+    api_base: str | None = None
+```
+
+### `CompetitiveResult` (dataclass — `features/competitive.py`, v1.0.0)
+
+```python
+@dataclass
+class CompetitiveResult:
+    model: str
+    status: str                   # success | partial | failed | timeout
+    steps: int
+    cost: float
+    duration: float
+    files_modified: list[str]
+    checks_passed: int
+    checks_total: int
+    worktree_path: str
+    score: float                  # 0-100
+```
+
+### `DispatchSubagentArgs` (Pydantic — `tools/dispatch.py`, v1.0.0)
+
+```python
+class DispatchSubagentArgs(BaseModel):
+    agent_type: str     # "explore" | "test" | "review"
+    task: str           # descripción de la sub-tarea
+    context: str = ""   # contexto adicional
 ```
 
 ---

@@ -7,8 +7,8 @@ Este documento registra el progreso de implementación del proyecto architect
 ## Estado General
 
 - **Inicio**: 2026-02-18
-- **Fase Actual**: v4 Phase C Completada — Iteración, Pipelines y Revisión
-- **Estado**: ✅ v0.18.0 — Phase C implementada y validada, 3 bugs QA4 corregidos, 504 pytest + 31 E2E script checks
+- **Fase Actual**: v4 Phase D Completada — Extensiones Avanzadas y QA
+- **Estado**: ✅ v0.19.0 — Phase D implementada, 7 bugs QA corregidos, 687 pytest + 31 E2E script checks
 
 ---
 
@@ -1774,10 +1774,69 @@ Agente reviewer con contexto limpio que inspecciona cambios post-build. Recibe S
 
 ---
 
+### ✅ v0.19.0 — v4 Phase D: Extensiones Avanzadas y QA (Completada: 2026-02-24)
+
+**Objetivo**: Extensiones avanzadas del agente — sub-agentes, análisis de salud, evaluación competitiva, telemetría, presets — y corrección exhaustiva de bugs del QA.
+
+**Progreso**: 100%
+
+**Plan de referencia**: `Plan_Implementacion_v4.md` Phase D (D1-D5)
+
+#### Tareas Completadas
+- [x] D1 - Sub-Agents / Dispatch — tool `dispatch_subagent` con 3 tipos (explore/test/review), contexto limpio, factory en CLI
+- [x] D2 - Code Health Delta — CodeHealthAnalyzer con AST + radon, snapshots before/after, delta report markdown, flag `--health`
+- [x] D3 - Competitive Eval — CompetitiveEval con ParallelRunner, checks por worktree, ranking compuesto, comando `architect eval`
+- [x] D4 - OpenTelemetry Traces — ArchitectTracer/NoopTracer, 3 exporters (otlp/console/json-file), wiring completo en CLI
+- [x] D5 - Preset Configs — PresetManager con 5 presets (python/node-react/ci/paranoid/yolo), comando `architect init`
+- [x] QA Exhaustivo — 11 pasos de testing (unit, E2E con LLM proxy, MCP, streaming, budget, exit codes, fases A-D)
+- [x] BUG-1 (CRITICAL): `@cli.command` → `@main.command` para `eval` e `init`
+- [x] BUG-2 (MEDIUM): Versión 0.18.0 → 0.19.0 en `__init__.py` y `cli.py`
+- [x] BUG-3 (HIGH): code_rules severity:block ahora bloquea ANTES de escribir (no después)
+- [x] BUG-4 (MEDIUM): dispatch_subagent registrado en CLI con factory closure
+- [x] BUG-5 (MEDIUM): TelemetryConfig conectado con create_tracer() + session span
+- [x] BUG-6 (MEDIUM): HealthConfig conectado con --health flag + before/after snapshots
+- [x] BUG-7 (MEDIUM): Parallel workers propagan --config y --api-base al subprocess
+
+#### Archivos Creados
+- `src/architect/tools/dispatch.py` — DispatchSubagentTool + DispatchSubagentArgs
+- `src/architect/core/health.py` — CodeHealthAnalyzer + HealthSnapshot + HealthDelta + FunctionMetric
+- `src/architect/features/competitive.py` — CompetitiveEval + CompetitiveConfig + CompetitiveResult
+- `src/architect/telemetry/otel.py` — ArchitectTracer + NoopTracer + create_tracer()
+- `src/architect/telemetry/__init__.py` — Exports del módulo telemetry
+- `src/architect/config/presets.py` — PresetManager + AVAILABLE_PRESETS (5 presets)
+- `tests/test_dispatch/test_dispatch.py` — 36 tests
+- `tests/test_health/test_health.py` — 28 tests
+- `tests/test_competitive/` — Tests CompetitiveEval
+- `tests/test_telemetry/test_telemetry.py` — 16 tests
+- `tests/test_presets/` — Tests PresetManager
+- `tests/test_bugfixes/test_bugfixes.py` — 41 tests validando bugs 3-7
+
+#### Archivos Modificados
+- `src/architect/cli.py` — Comandos `eval`, `init`, flag `--health`, wiring D1-D5, bugfixes 1-7
+- `src/architect/config/schema.py` — TelemetryConfig, HealthConfig, CompetitiveConfig añadidos a AppConfig
+- `src/architect/execution/engine.py` — record_edit() solo tras éxito, docstring check_code_rules
+- `src/architect/core/loop.py` — code_rules pre-execution (BUG-3), warnings logged
+- `src/architect/features/parallel.py` — config_path y api_base en ParallelConfig y _run_worker_process
+- `src/architect/tools/setup.py` — register_dispatch_tool()
+- `src/architect/tools/__init__.py` — Exports dispatch
+- `src/architect/features/__init__.py` — Exports competitive
+- `src/architect/__init__.py` — __version__ = "0.19.0"
+- `pyproject.toml` — Versión 0.19.0, dependencias opcionales telemetry y health
+
+#### Tests
+- **Phase D unit tests**: test_dispatch (36), test_health (28), test_telemetry (16), test_competitive, test_presets
+- **Bugfix tests**: test_bugfixes (41) — 11 BUG-3, 5 BUG-4, 8 BUG-5, 6 BUG-6, 11 BUG-7
+- **Total proyecto**: 687 pytest passed, 9 skipped, 0 failures + 31 E2E script checks
+
+#### Entregable
+✅ v0.19.0 — Phase D completa. Sub-agentes despachables con contexto limpio, análisis de salud del código con delta report, evaluación competitiva multi-modelo con ranking, trazas OpenTelemetry opcionales, 5 presets de configuración, y 7 bugs QA corregidos con 41 tests de validación. 687 tests unitarios + 31 E2E checks.
+
+---
+
 ## Próximas Fases
 
-v4 Phase C completada y validada con QA en v0.18.0.
-Próxima fase: v4 Phase D (Optimización y Polish).
+v4 Phase D completada y validada con QA en v0.19.0.
+Plan V4 completo (Phases A + B + C + D).
 
 ---
 

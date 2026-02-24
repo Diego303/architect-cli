@@ -9,11 +9,11 @@ Definidos en `agents/registry.py` como `DEFAULT_AGENTS: dict[str, AgentConfig]`.
 | Agente | Tools disponibles | confirm_mode | max_steps | Propósito |
 |--------|-------------------|--------------|-----------|-----------|
 | `plan` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 | Analiza la tarea y genera un plan estructurado. Solo lectura. (v3: yolo porque plan no modifica archivos) |
-| `build` | todas las tools (filesystem + edición + búsqueda + `run_command`) | `confirm-sensitive` | 50 | Ejecuta tareas: crea y modifica archivos con herramientas completas. (v3: safety net, no driver del loop) |
+| `build` | todas las tools (filesystem + edición + búsqueda + `run_command` + `dispatch_subagent`) | `confirm-sensitive` | 50 | Ejecuta tareas: crea y modifica archivos con herramientas completas. Puede delegar sub-tareas a sub-agentes. |
 | `resume` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 | Lee y resume información. Solo lectura, sin confirmaciones. |
 | `review` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 | Revisa código y da feedback. Solo lectura, sin confirmaciones. |
 
-Las tools de búsqueda (`search_code`, `grep`, `find_files`) están disponibles para todos los agentes desde F10. El agente `build` tiene acceso adicional a `edit_file` y `apply_patch` para edición incremental.
+Las tools de búsqueda (`search_code`, `grep`, `find_files`) están disponibles para todos los agentes desde F10. El agente `build` tiene acceso adicional a `edit_file` y `apply_patch` para edición incremental, y `dispatch_subagent` (v1.0.0) para delegar sub-tareas a agentes especializados con contexto aislado (tipos: explore, test, review). Ver [`dispatch-subagent.md`](dispatch-subagent.md).
 
 ---
 
@@ -258,15 +258,15 @@ Para repositorios > 300 archivos, se usa una vista compacta agrupada por directo
 
 ---
 
-## Contexto inyectado en system prompt (v4 Phase A)
+## Contexto inyectado en system prompt (Plan base v4 Phase A)
 
 A partir de v0.16.0, el system prompt de cada agente puede recibir contexto adicional de tres fuentes:
 
-### 1. Skills y contexto del proyecto (v4-A3)
+### 1. Skills y contexto del proyecto
 
 El `SkillsLoader` busca `.architect.md`, `AGENTS.md` o `CLAUDE.md` en la raíz del workspace y lo inyecta como `# Instrucciones del Proyecto`. Además, las skills en `.architect/skills/` cuyo `globs` coincida con los archivos activos se inyectan como `# Skill: {name}`.
 
-### 2. Memoria procedural (v4-A4)
+### 2. Memoria procedural
 
 Si `memory.enabled: true`, el contenido de `.architect/memory.md` se inyecta en el system prompt. Esto incluye correcciones del usuario detectadas automáticamente en sesiones anteriores.
 

@@ -304,6 +304,48 @@ architect run "..." --mode yolo \
 
 ---
 
+## Evaluación competitiva (v1.0.0)
+
+Compara múltiples modelos en la misma tarea con checks automáticos.
+
+```bash
+architect eval "implementa feature X" \
+  --models gpt-4o,claude-sonnet-4-6 \
+  --check "pytest tests/" \
+  --budget-per-model 1.0
+```
+
+---
+
+## Inicialización con presets (v1.0.0)
+
+Genera configuración inicial optimizada para tu tipo de proyecto.
+
+```bash
+# Ver presets disponibles
+architect init --list-presets
+
+# Inicializar proyecto Python
+architect init --preset python
+# → Crea .architect.md + config.yaml con ruff, mypy, pytest
+
+# Modo seguridad máxima
+architect init --preset paranoid
+```
+
+---
+
+## Code Health (v1.0.0)
+
+Análisis de calidad del código antes/después de la ejecución.
+
+```bash
+architect run "refactoriza utils.py" --health
+# → Muestra delta de complejidad, funciones largas, duplicados
+```
+
+---
+
 ## Verbose y debugging
 
 ```bash
@@ -350,7 +392,7 @@ Cache:
   --no-cache                Desactivar cache
   --cache-clear             Limpiar cache antes de ejecutar
 
-Sessions y reports (v4-B):
+Sessions y reports:
   --session ID              Reanudar sesión existente por ID
   --report FORMAT           json | markdown | github
   --report-file PATH        Guardar reporte en archivo
@@ -358,11 +400,21 @@ Sessions y reports (v4-B):
   --confirm-mode MODE       Override de confirm mode
   --exit-code-on-partial    Exit code 2 si status=partial
 
+Análisis (v1.0.0):
+  --health                  Análisis de calidad antes/después
+
 Config:
   -c, --config PATH         Archivo YAML de configuración
   -w, --workspace PATH      Directorio de trabajo
   --log-level LEVEL         debug | info | human | warn | error
   --log-file PATH           Archivo de logs JSON
+
+Comandos adicionales (v1.0.0):
+  architect eval PROMPT     Evaluación competitiva multi-modelo
+  architect init            Inicializar proyecto con presets
+  architect loop PROMPT     Iteración automática (Ralph Loop)
+  architect pipeline FILE   Ejecutar workflow YAML
+  architect parallel        Ejecución paralela en worktrees
 ```
 
 ---
@@ -406,6 +458,16 @@ costs:
 sessions:
   auto_save: true
   cleanup_after_days: 7
+
+# Telemetry (opcional, requiere pip install architect[telemetry])
+telemetry:
+  enabled: false
+  exporter: console        # otlp | console | json-file
+
+# Health (opcional, requiere pip install architect[health] para radon)
+health:
+  enabled: false
+  include_patterns: ["**/*.py"]
 ```
 
 ```bash
@@ -413,4 +475,7 @@ architect run "implementa feature X" -c config.yaml --mode yolo --show-costs
 
 # Con reporte para CI/CD
 architect run "..." --mode yolo --report github --report-file report.md
+
+# Con health check
+architect run "..." --mode yolo --health
 ```

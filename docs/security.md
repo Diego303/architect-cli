@@ -611,6 +611,36 @@ Ver [`containers.md`](containers.md) para Containerfiles completos.
 
 ---
 
+## Seguridad de extensiones (v1.0.0)
+
+### Sub-agentes (Dispatch)
+
+- Los sub-agentes de tipo `explore` y `review` son **solo lectura** — no tienen acceso a write/edit/delete/run_command
+- El tipo `test` puede ejecutar comandos pero hereda los guardrails del agente principal (blocklist, path validation)
+- Cada sub-agente ejecuta en modo `yolo` pero con todas las capas de seguridad activas
+- El resumen se trunca a 1000 chars — previene inyección de contexto excesivo
+
+### Evaluación competitiva (Eval)
+
+- Cada modelo se ejecuta en un git worktree aislado — los modelos no pueden ver ni modificar el trabajo de otros
+- Los worktrees se crean como branches independientes — sin riesgo de conflictos
+- Los checks se ejecutan como subprocesos con timeout de 120s
+
+### Telemetry
+
+- Las trazas OpenTelemetry pueden contener información sensible (task prompts, nombres de archivos)
+- El prompt del usuario se trunca a 200 chars en los atributos del span
+- API keys no se incluyen en las trazas
+- Se recomienda usar OTLP con TLS en producción
+
+### Code Health
+
+- El `CodeHealthAnalyzer` solo lee archivos — no modifica nada
+- El análisis AST se ejecuta en el proceso principal (no en subprocesos)
+- Los patrones de include/exclude controlan qué archivos se analizan
+
+---
+
 ## Checklist de seguridad
 
 ### Antes de desplegar
@@ -622,12 +652,14 @@ Ver [`containers.md`](containers.md) para Containerfiles completos.
 - [ ] Hooks de lint/test configurados para verificar código generado
 - [ ] Revisar `blocked_patterns` adicionales según el entorno
 - [ ] Verificar que el workspace no contiene archivos con secrets
+- [ ] Si telemetry habilitado: verificar que el endpoint OTLP usa TLS
 
 ### Auditoria
 
 - [ ] Activar `--log-file audit.jsonl` para registro completo en JSON
 - [ ] Revisar logs periódicamente para tool calls inesperadas
 - [ ] Monitorizar costes con `--show-costs` o `costs.warn_at_usd`
+- [ ] Si telemetry habilitado: revisar trazas en Jaeger/Tempo para comportamiento anómalo
 
 ### Tokens y secretos
 
@@ -661,3 +693,5 @@ Ver [`containers.md`](containers.md) para Containerfiles completos.
 | 17 | Step timeout | `timeout.py` | Steps bloqueados indefinidamente |
 | 18 | Post-edit hooks | `hooks.py` | Código generado con errores/vulnerabilidades |
 | 19 | Dry-run mode | `engine.py` | Verificar sin ejecutar |
+| 20 | Subagent isolation | `dispatch.py` | Sub-agentes con tools limitadas y contexto aislado |
+| 21 | Code rules pre-exec | `loop.py` | Bloqueo de escrituras que violan reglas ANTES de ejecutar |

@@ -7,6 +7,140 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [1.0.0] - 2026-02-24
+
+### Release 1.0.0 — Primera versión estable
+
+Primera release pública de architect CLI. Culminación de 4 fases de desarrollo (Plan V4: A, B, C, D) sobre la base del core v3, resultando en una herramienta CLI completa, robusta y extensible para orquestar agentes de IA sobre código local.
+
+#### Resumen de capacidades
+
+**Core del agente**:
+- Loop determinista `while True` con el LLM decidiendo cuándo parar
+- 4 agentes por defecto: `build`, `plan`, `resume`, `review` + agentes custom en YAML
+- 8 tools locales: `read_file`, `write_file`, `edit_file`, `delete_file`, `list_files`, `search_code`, `grep`, `find_files`, `apply_patch`, `run_command`, `dispatch_subagent`
+- Gestión de contexto inteligente: compresión, pruning, enforce_window
+- Auto-evaluación (`--self-eval basic|full`) con reintentos automáticos
+- Safety nets: max_steps, budget, timeout, context_full — todos con cierre limpio (graceful close)
+
+**Seguridad (Phase A)**:
+- Hooks del lifecycle (10 eventos: pre/post tool, pre/post LLM, session, agent, error, budget, context)
+- Guardrails deterministas: archivos protegidos, comandos bloqueados, límites de edición, code_rules (warn/block)
+- Quality gates post-build con re-ejecución automática si fallan
+- Skills ecosystem: `.architect.md`, `.architect/skills/`, instalación desde GitHub
+- Memoria procedural: correcciones del usuario persistidas entre sesiones
+
+**Operaciones (Phase B)**:
+- Sesiones persistentes con resume (`architect sessions`, `architect resume`)
+- Reportes multi-formato: JSON, Markdown, GitHub PR comment
+- 10+ flags CI/CD nativos: `--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`
+- Dry-run/preview mode con registro de acciones simuladas
+
+**Orquestación (Phase C)**:
+- Ralph Loop: iteración automática hasta que checks pasen (`architect loop`)
+- Pipeline Mode: workflows YAML multi-step con variables, condiciones, checkpoints (`architect pipeline`)
+- Ejecución paralela en git worktrees aislados (`architect parallel`)
+- Checkpoints git con rollback (`architect rollback`, `architect history`)
+- Auto-review post-build con contexto limpio
+
+**Extensiones (Phase D)**:
+- Sub-agentes delegados: explore, test, review (`dispatch_subagent`)
+- Análisis de salud del código: complejidad, duplicados, funciones largas (`--health`)
+- Evaluación competitiva multi-modelo con ranking (`architect eval`)
+- Trazabilidad OpenTelemetry: session/llm/tool spans (otlp, console, json-file)
+- Presets de configuración: python, node-react, ci, paranoid, yolo (`architect init`)
+
+**Infraestructura**:
+- 15 comandos CLI: `run`, `loop`, `pipeline`, `parallel`, `parallel-cleanup`, `eval`, `init`, `sessions`, `resume`, `cleanup`, `agents`, `validate-config`, `skill`, `rollback`, `history`
+- Control de costes: `CostTracker`, `--budget`, prompt caching, `--show-costs`
+- Logging triple pipeline: HUMAN (stderr), técnico (stderr con -v), JSON file (--log-file)
+- Proveedores LLM vía LiteLLM: OpenAI, Anthropic, Google, Ollama, proxies
+- MCP (Model Context Protocol): tools remotas vía HTTP, auto-discovery
+
+**Calidad**:
+- 687 tests unitarios (pytest), 9 skipped, 0 failures
+- 31 E2E script checks
+- 7 bugs de QA corregidos (BUG-1 a BUG-7)
+- Tipado estricto con mypy, formato con black (100 chars), linting con ruff
+
+---
+
+## [0.19.0] - 2026-02-24
+
+### v4 Phase D — Extensiones Avanzadas y QA
+
+Extensiones avanzadas del agente: sub-agentes despachables, análisis de salud del código, evaluación competitiva multi-modelo, trazas OpenTelemetry, presets de configuración, y 7 bugs corregidos del QA exhaustivo.
+
+#### Añadido
+
+**D1 — Sub-Agents / Dispatch**:
+- `DispatchSubagentTool` — tool `dispatch_subagent` que delega sub-tareas a agentes con contexto independiente
+- Tres tipos de sub-agente: `explore` (solo lectura/búsqueda), `test` (lectura + ejecución de tests), `review` (lectura + análisis)
+- `SUBAGENT_MAX_STEPS=15`, `SUBAGENT_SUMMARY_MAX_CHARS=1000` — límites para no consumir contexto/coste
+- `register_dispatch_tool()` en `tools/setup.py` — registro con agent_factory callable
+- Wiring completo en `cli.py`: `_subagent_factory()` closure que crea AgentLoops frescos para sub-agentes
+
+**D2 — Code Health Delta**:
+- `CodeHealthAnalyzer` — analiza métricas de salud del código Python (AST nativo + radon opcional)
+- `HealthSnapshot` — files_analyzed, total_functions, avg_complexity, max_complexity, long_functions, duplicate_blocks
+- `HealthDelta` — delta entre snapshots con `to_report()` en formato markdown
+- `FunctionMetric` — métricas por función (file, name, lines, complexity)
+- Detección de duplicación por hashing de bloques (ventana deslizante MD5)
+- Flag `--health` en `architect run` — toma snapshot antes/después y muestra delta report
+- `HealthConfig` en `AppConfig` — `enabled`, `include_patterns`, `exclude_dirs`
+
+**D3 — Competitive Eval**:
+- `CompetitiveEval` — ejecuta misma tarea con múltiples modelos en worktrees aislados
+- `CompetitiveConfig` — task, models, checks, agent, max_steps, budget_per_model, timeout_per_model
+- `CompetitiveResult` — model, status, steps, cost, duration, checks_passed/total, worktree_path
+- `generate_report()` — reporte markdown con tabla comparativa, ranking por score compuesto (checks 40% + status 30% + efficiency 20% + cost 10%)
+- Comando `architect eval` — `--models` (requerido), `--check` (repetible), `--report-file`
+
+**D4 — OpenTelemetry Traces**:
+- `ArchitectTracer` — emite spans para sesiones, llamadas LLM y tools (GenAI Semantic Conventions)
+- `NoopTracer` / `NoopSpan` — pattern para cuando OTel no está instalado
+- `create_tracer()` factory — retorna ArchitectTracer o NoopTracer según configuración
+- Exporters: `otlp` (gRPC), `console` (stderr), `json-file` (archivo JSON)
+- `TelemetryConfig` en `AppConfig` — `enabled`, `exporter`, `endpoint`, `trace_file`
+- Wiring completo en `cli.py`: `create_tracer()` + `tracer.start_session()` envuelve ejecución + `tracer.shutdown()`
+
+**D5 — Preset Configs**:
+- `PresetManager` — genera `.architect.md` y `config.yaml` desde presets predefinidos
+- 5 presets: `python` (ruff/mypy/pytest), `node-react` (eslint/jest), `ci` (yolo headless), `paranoid` (máxima seguridad), `yolo` (sin restricciones)
+- `AVAILABLE_PRESETS` dict con metadata (description, tags, files)
+- Comando `architect init --preset <name>` con `--overwrite` y `--list-presets`
+
+**Nuevos módulos**:
+- `src/architect/tools/dispatch.py` — DispatchSubagentTool
+- `src/architect/core/health.py` — CodeHealthAnalyzer
+- `src/architect/features/competitive.py` — CompetitiveEval
+- `src/architect/telemetry/otel.py` — ArchitectTracer
+- `src/architect/config/presets.py` — PresetManager
+
+**Dependencias opcionales** (pyproject.toml):
+- `telemetry` — opentelemetry-api, opentelemetry-sdk, opentelemetry-exporter-otlp (>=1.20)
+- `health` — radon (>=6.0)
+
+**Tests**: 687 pytest (646 pre-existentes + 41 nuevos bugfix tests), 9 skipped, 0 failures. Tests nuevos en:
+- `tests/test_dispatch/` (36 tests) — DispatchSubagentTool unit tests
+- `tests/test_health/` (28 tests) — CodeHealthAnalyzer unit tests
+- `tests/test_competitive/` — CompetitiveEval unit tests
+- `tests/test_telemetry/` (16 tests) — ArchitectTracer y NoopTracer unit tests
+- `tests/test_presets/` — PresetManager unit tests
+- `tests/test_bugfixes/` (41 tests) — validación específica de los 7 bugs corregidos
+
+#### Corregido
+
+- **[CRITICAL] BUG-1: CLI commands `eval` e `init` usaban `@cli.command` en vez de `@main.command`** — Rompía toda la importación del módulo CLI. Fix: cambiado a `@main.command("eval")` y `@main.command("init")`. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-2: Versión inconsistente** — `pyproject.toml` en 0.19.0 pero `__init__.py` y `cli.py` en 0.18.0. Fix: actualizado ambos a 0.19.0. (`src/architect/__init__.py`, `src/architect/cli.py`)
+- **[HIGH] BUG-3: `code_rules` severity:block no prevenía escrituras** — `check_code_rules` se ejecutaba DESPUÉS de `execute_tool_call`, el archivo ya estaba escrito en disco. Fix: movido el check a ANTES de la ejecución en `_execute_single_tool`; si hay violación block, retorna ToolResult failure sin ejecutar. `record_edit()` movido a `execute_tool_call` solo tras éxito. (`src/architect/core/loop.py`, `src/architect/execution/engine.py`)
+- **[MEDIUM] BUG-4: `dispatch_subagent` tool no registrada en CLI run** — `register_dispatch_tool()` existía pero no se llamaba. Fix: añadido wiring en `cli.py` con closure `_subagent_factory()` que crea AgentLoops frescos. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-5: `TelemetryConfig` parseada pero `create_tracer()` nunca llamado** — La config existía en schema pero no se conectaba. Fix: añadido `create_tracer()` desde config, `tracer.start_session()` envolviendo ejecución, y `tracer.shutdown()` al finalizar. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-6: `HealthConfig` parseada pero `CodeHealthAnalyzer` nunca invocado** — Config en schema sin wiring. Fix: añadido flag `--health` en run command, `CodeHealthAnalyzer` con snapshots before/after y delta report. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-7: Parallel workers no propagaban `--config` ni `--api-base`** — `_run_worker_process` no incluía estos flags en el subprocess. Fix: añadidos `config_path` y `api_base` a `ParallelConfig` y `_run_worker_process`, y `--config`/`--api-base` en CLI parallel. (`src/architect/features/parallel.py`, `src/architect/cli.py`)
+
+---
+
 ## [0.18.0] - 2026-02-24
 
 ### v4 Phase C — Iteración, Pipelines y Revisión

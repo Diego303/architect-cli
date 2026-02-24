@@ -32,6 +32,16 @@
 | [`parallel.md`](parallel.md) | **Parallel**: ejecución paralela en git worktrees — ParallelRunner, workers, round-robin de modelos |
 | [`checkpoints.md`](checkpoints.md) | **Checkpoints**: puntos de restauración git — CheckpointManager, rollback, integración con pipelines |
 | [`auto-review.md`](auto-review.md) | **Auto-Review**: revisión post-build con contexto limpio — AutoReviewer, ReviewResult, fix-pass |
+| [`dispatch-subagent.md`](dispatch-subagent.md) | **Sub-Agentes**: delegación de sub-tareas (explore/test/review) con contexto aislado y tools limitadas |
+| [`health.md`](health.md) | **Code Health Delta**: análisis de métricas de calidad antes/después (complejidad, duplicados, funciones largas) |
+| [`eval.md`](eval.md) | **Evaluación Competitiva**: comparación multi-modelo con ranking por calidad, eficiencia y coste |
+| [`telemetry.md`](telemetry.md) | **OpenTelemetry Traces**: spans de sesión, LLM y tools — exporters OTLP, console, JSON file |
+| [`presets.md`](presets.md) | **Presets**: inicialización de proyectos con configuraciones predefinidas (python, node-react, ci, paranoid, yolo) |
+| [`troubleshooting.md`](troubleshooting.md) | **Troubleshooting**: diagnóstico por síntomas — errores LLM, loops, tools, hooks, guardrails, features avanzadas, exit codes |
+| [`extending.md`](extending.md) | **Extensibilidad**: crear tools custom, agentes, hooks lifecycle, skills, guardrails — con ejemplos completos |
+| [`ci-cd-integration.md`](ci-cd-integration.md) | **CI/CD**: recetas completas para GitHub Actions, GitLab CI, Jenkins — review bots, auto-fix, pipelines, secrets, costes |
+| [`cost-management.md`](cost-management.md) | **Gestión de costes**: CostTracker, precios por modelo, budgets, prompt caching, cache local, estrategias de optimización |
+| [`prompt-engineering.md`](prompt-engineering.md) | **Prompt Engineering**: escribir prompts efectivos, .architect.md, skills, anti-patrones, recetas por agente |
 
 ---
 
@@ -54,11 +64,16 @@ architect run "refactoriza main.py" -a build --mode yolo
          ├─ SessionManager        persistencia de sesiones en .architect/sessions/
          ├─ DryRunTracker         registro de acciones en modo --dry-run
          ├─ CheckpointManager     git commits con rollback (architect:checkpoint)
+         ├─ ArchitectTracer       OpenTelemetry spans (session/llm/tool) o NoopTracer
+         ├─ CodeHealthAnalyzer    métricas de calidad antes/después (--health)
          │
-         ├─ RalphLoop             iteración automática hasta que checks pasen (v4-C1)
-         ├─ PipelineRunner        workflows YAML multi-step con variables (v4-C3)
-         ├─ ParallelRunner        ejecución paralela en git worktrees (v4-C2)
-         ├─ AutoReviewer          review post-build con contexto limpio (v4-C5)
+         ├─ RalphLoop             iteración automática hasta que checks pasen
+         ├─ PipelineRunner        workflows YAML multi-step con variables
+         ├─ ParallelRunner        ejecución paralela en git worktrees
+         ├─ CompetitiveEval       evaluación comparativa multi-modelo (architect eval)
+         ├─ AutoReviewer          review post-build con contexto limpio
+         ├─ PresetManager         generación de .architect.md + config.yaml (architect init)
+         ├─ DispatchSubagentTool  delegación de sub-tareas (explore/test/review)
          │
          ├─ AgentLoop (build por defecto)        while True + safety nets
          │       │
@@ -86,11 +101,11 @@ architect run "refactoriza main.py" -a build --mode yolo
 
 **Stack**: Python 3.12+, Click, Pydantic v2, LiteLLM, httpx, structlog, tenacity.
 
-**Versión actual**: 0.18.0
+**Versión actual**: 1.0.0
 
 ---
 
-## Novedades recientes (v0.9–v0.18)
+## Historial de versiones (v0.9–v1.0.0)
 
 | Versión | Funcionalidad |
 |---------|---------------|
@@ -107,4 +122,6 @@ architect run "refactoriza main.py" -a build --mode yolo
 | v0.16.1 | QA Phase A: 5 bug fixes, 116 nuevos tests (713 total), scripts actualizados |
 | v0.16.2 | QA2: streaming costs fix, yolo mode fix, timeout separation, MCP tools auto-injection, defensive get_schemas |
 | v0.17.0 | **v4 Phase B**: `SessionManager` (save/load/resume/cleanup), `ReportGenerator` (JSON/Markdown/GitHub PR), `DryRunTracker` (plan de acciones), CI/CD flags (`--report`, `--session`, `--context-git-diff`, `--exit-code-on-partial`), exit codes (0-5, 130), nuevos comandos (`sessions`, `resume`, `cleanup`) |
-| v0.18.0 | **v4 Phase C**: `RalphLoop` (iteración automática con checks, contexto limpio, worktrees), `PipelineRunner` (workflows YAML multi-step con variables, condiciones, checkpoints), `ParallelRunner` (ejecución paralela en git worktrees), `CheckpointManager` (git commits con rollback), `AutoReviewer` (review post-build con contexto limpio), 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
+| v0.18.0 | **Plan base v4 Phase C**: `RalphLoop` (iteración automática con checks, contexto limpio, worktrees), `PipelineRunner` (workflows YAML multi-step con variables, condiciones, checkpoints), `ParallelRunner` (ejecución paralela en git worktrees), `CheckpointManager` (git commits con rollback), `AutoReviewer` (review post-build con contexto limpio), 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
+| v0.19.0 | **Plan base v4 Phase D**: `DispatchSubagentTool` (sub-agentes explore/test/review), `CodeHealthAnalyzer` (delta de calidad con `--health`), `CompetitiveEval` (`architect eval` multi-modelo), `ArchitectTracer` (OpenTelemetry spans), `PresetManager` (`architect init` con 5 presets), 7 bugfixes QA |
+| **v1.0.0** | **Release estable** — Primera versión pública. Culminación del Plan base v4 (Phases A+B+C+D). 15 comandos CLI, 11+ tools, 4 agentes, 687 tests. |

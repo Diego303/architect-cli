@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "architect"
-version = "0.18.0"
+version = "1.0.0"
 description = "Herramienta CLI headless y agentica para orquestar agentes de IA"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["ai", "agents", "cli", "llm", "automation", "mcp"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -40,6 +40,14 @@ dev = [
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.5",
+]
+telemetry = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp>=1.20",
+]
+health = [
+    "radon>=6.0",
 ]
 
 [project.scripts]

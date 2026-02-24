@@ -24,6 +24,11 @@ Guía de buenas prácticas para sacar el máximo partido a `architect`, evitar e
 - [Pipelines](#pipelines)
 - [Ejecución paralela](#ejecución-paralela)
 - [Auto-review](#auto-review)
+- [Sub-agentes (Dispatch)](#sub-agentes-dispatch)
+- [Code Health](#code-health)
+- [Evaluación competitiva](#evaluación-competitiva)
+- [Telemetry](#telemetry)
+- [Presets](#presets)
 - [Errores comunes y cómo evitarlos](#errores-comunes-y-cómo-evitarlos)
 
 ---
@@ -871,6 +876,82 @@ auto_review:
 ```
 
 **Combina con guardrails para máxima seguridad.** Los guardrails previenen acciones peligrosas; el auto-review detecta problemas lógicos.
+
+---
+
+## Sub-agentes (Dispatch)
+
+**Usa `explore` antes de implementar.** El agente principal puede delegar la investigación a un sub-agente explore que busque patrones, lea archivos y reporte resultados sin contaminar el contexto del builder.
+
+**No delegues tareas triviales.** Cada sub-agente consume una invocación LLM completa (hasta 15 pasos). Si la tarea es simple (leer un archivo, buscar una función), es más eficiente que el agente principal la haga directamente.
+
+**Usa `test` para verificación post-implementación.** Delega la ejecución de tests a un sub-agente test: ejecuta, verifica resultados y reporta sin inflar el contexto del builder.
+
+**Los sub-agentes son solo lectura (excepto `test`).** Los tipos `explore` y `review` no pueden modificar archivos — ideales para análisis sin riesgo.
+
+---
+
+## Code Health
+
+**Activa `--health` en refactorizaciones grandes.** El delta de métricas muestra si la refactorización realmente mejoró la calidad: menos complejidad, menos duplicados, funciones más cortas.
+
+**Instala `radon` para métricas precisas.** Sin radon, la complejidad ciclomática se estima con AST (menos preciso). Con `pip install architect[health]` obtienes métricas exactas.
+
+**Configura `health.enabled: true` para monitoreo continuo.** En vez de pasar `--health` cada vez, actívalo en config para que siempre se analice la calidad.
+
+**Usa `exclude_dirs` para evitar ruido.** Excluye `venv`, `node_modules`, archivos generados y dependencias que inflarían las métricas.
+
+---
+
+## Evaluación competitiva
+
+**Evalúa modelos para tu tipo de tarea.** Los modelos tienen fortalezas diferentes: un modelo puede ser mejor en refactoring y otro en generación de tests. `architect eval` te da datos objetivos.
+
+**Usa checks significativos.** Los checks determinan el 40% del score. Usa tests unitarios y linters que verifiquen que el código funciona, no solo que compila.
+
+**Establece budget por modelo.** Sin budget, un modelo lento podría gastar mucho más que otro. Con `--budget-per-model` nivelas el campo de juego.
+
+**Los worktrees permanecen para inspección.** Después de `architect eval`, cada modelo tiene su worktree intacto. Inspecciona manualmente el código del ganador antes de mergearlo.
+
+```bash
+# Evaluación con budget y timeout iguales
+architect eval "implementa autenticación JWT" \
+  --models gpt-4o,claude-sonnet-4-6 \
+  --check "pytest tests/" --check "ruff check src/" \
+  --budget-per-model 1.0 --timeout-per-model 300
+```
+
+---
+
+## Telemetry
+
+**Usa `console` para debugging.** El exporter `console` imprime spans en stderr — ideal para ver qué está pasando sin levantar infraestructura.
+
+**Usa `otlp` en producción.** Conecta a Jaeger, Grafana Tempo o cualquier backend OpenTelemetry para monitoreo centralizado.
+
+**Usa `json-file` para análisis offline.** Escribe trazas a un archivo JSON que puedes procesar con jq, pandas o cualquier herramienta de análisis.
+
+**Telemetry es completamente opcional.** Sin las dependencias de OpenTelemetry instaladas, se usa un NoopTracer transparente sin impacto en rendimiento.
+
+---
+
+## Presets
+
+**Usa `architect init` como punto de partida.** Los presets generan una configuración base que puedes personalizar. Es más rápido que empezar desde cero.
+
+**Elige el preset que más se acerque a tu caso.**
+
+| Situación | Preset recomendado |
+|-----------|-------------------|
+| Proyecto Python nuevo | `python` |
+| Proyecto React/TypeScript | `node-react` |
+| Pipeline de CI/CD | `ci` |
+| Producción con datos sensibles | `paranoid` |
+| Prototipo rápido | `yolo` |
+
+**Personaliza después de init.** Los archivos generados (`.architect.md`, `config.yaml`) son editables. Ajusta hooks, guardrails y convenciones a las necesidades específicas de tu proyecto.
+
+**El preset `paranoid` es ideal para onboarding de equipos.** Incluye guardrails estrictos, code rules de seguridad y auto-review — asegura que el agente no haga nada peligroso mientras el equipo se familiariza.
 
 ---
 

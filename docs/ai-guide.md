@@ -134,6 +134,22 @@ except Exception:
     return messages  # retorna original sin cambios
 ```
 
+### 12. `dispatch_subagent` hereda tools del agente padre
+
+La tool `dispatch_subagent` (v1.0.0) crea sub-agentes con contexto aislado. Los sub-agentes solo tienen acceso a tools de lectura (explore, test, review). Nunca pueden modificar archivos ni ejecutar comandos peligrosos. El resultado del sub-agente se devuelve como `ToolResult` al agente padre.
+
+### 13. OpenTelemetry es opcional y nunca rompe la ejecución
+
+`ArchitectTracer` y `NoopTracer` comparten la misma interfaz. Si OpenTelemetry no está instalado o la configuración es inválida, se usa `NoopTracer` silenciosamente. Las trazas nunca bloquean el loop del agente ni causan errores visibles.
+
+### 14. `CodeHealthAnalyzer` requiere `radon` como dependencia opcional
+
+Si `radon` no está instalado, `architect health` retorna un error informativo. Las métricas de complejidad ciclomática dependen de radon. El resto de métricas (líneas, funciones) funcionan con el parser AST estándar.
+
+### 15. `CompetitiveEval` es determinista y reproducible
+
+Los scoring weights (correctness=40, quality=30, efficiency=20, style=10) están hardcodeados. El evaluador ejecuta cada modelo con el mismo prompt y compara resultados. Los resultados incluyen coste y tiempo por modelo.
+
 ---
 
 ## Patrones establecidos
@@ -361,6 +377,11 @@ except Exception as e:
 | Auto-review | `agents/reviewer.py` → `AutoReviewer`, `ReviewResult` |
 | Phase C configs | `config/schema.py` → `RalphLoopConfig`, `ParallelRunsConfig`, `CheckpointsConfig`, `AutoReviewConfig` |
 | Phase C CLI commands | `cli.py` → `loop`, `pipeline`, `parallel`, `parallel-cleanup` |
+| Dispatch sub-agentes (v1.0.0) | `tools/dispatch.py` → `DispatchSubagentTool` |
+| Code health metrics (v1.0.0) | `features/health.py` → `CodeHealthAnalyzer`, `HealthSnapshot`, `HealthDelta` |
+| Evaluación competitiva (v1.0.0) | `features/eval.py` → `CompetitiveEval`, `CompetitiveResult` |
+| OpenTelemetry trazas (v1.0.0) | `telemetry/otel.py` → `ArchitectTracer`, `NoopTracer` |
+| Presets e init (v1.0.0) | `features/presets.py` → `PresetManager`, `PRESETS` |
 
 ---
 
