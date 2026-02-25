@@ -9,14 +9,25 @@ Herramienta CLI headless y agéntica para orquestar agentes de IA sobre archivos
 **Requisitos**: Python 3.12+
 
 ```bash
+# Instalar desde PyPI
+pip install architect-ai-cli
+
 # Desde el repositorio
-git clone https://github.com/tu-usuario/architect-cli
+git clone https://github.com/Diego303/architect-cli
 cd architect-cli
 pip install -e .
 
 # Verificar instalación
 architect --version
 architect run --help
+```
+
+**Extras opcionales:**
+
+```bash
+pip install architect-ai-cli[dev]        # pytest, black, ruff, mypy
+pip install architect-ai-cli[telemetry]  # OpenTelemetry (trazas OTLP)
+pip install architect-ai-cli[health]     # radon (complejidad ciclomática)
 ```
 
 **Dependencias principales**: `litellm`, `click`, `pydantic`, `httpx`, `structlog`, `tenacity`

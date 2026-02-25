@@ -4,6 +4,12 @@ Análisis automático de métricas de calidad del código antes y después de un
 
 Implementado en `src/architect/core/health.py`. Disponible desde v1.0.0 (Plan base v4 Phase D — D2).
 
+> **Requisito**: Para métricas precisas de complejidad ciclomática, instalar el extra `health`:
+> ```bash
+> pip install architect-ai-cli[health]
+> ```
+> Sin este extra, la complejidad se estima con un conteo AST simplificado (menos preciso).
+
 ---
 
 ## Concepto
@@ -148,7 +154,7 @@ health:
 pip install radon
 
 # O instalar con el extra
-pip install architect[health]
+pip install architect-ai-cli[health]
 ```
 
 Sin `radon`, el análisis funciona pero usa un conteo AST simplificado para la complejidad.

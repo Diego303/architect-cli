@@ -72,7 +72,10 @@ Cada petición se traduce internamente a un `architect run "..." --mode yolo --j
 ## Requisitos
 
 ```bash
-# Instalar architect
+# Desde Pypi
+pip install architect-ai-cli
+
+# O desde GitHub
 git clone -b main --single-branch https://github.com/Diego303/architect-cli.git
 cd architect-cli && pip install -e .
 
@@ -1179,6 +1182,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Instalar architect
+# Desde Pypi
+RUN pip install architect-ai-cli
+
+# O desde GitHub
 RUN git clone -b main --single-branch \
       https://github.com/Diego303/architect-cli.git /opt/architect-cli && \
     cd /opt/architect-cli && pip install --no-cache-dir -e .

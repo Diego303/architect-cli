@@ -103,10 +103,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Clonar e instalar architect desde el repositorio
-RUN git clone -b main --single-branch https://github.com/Diego303/architect-cli.git /opt/architect-cli && \
-    cd /opt/architect-cli && \
-    pip install --no-cache-dir -e .
+# Instalar architect desde PyPI
+RUN pip install --no-cache-dir architect-ai-cli
 
 # Directorio de trabajo por defecto (montaje del código fuente)
 RUN mkdir -p /workspace
@@ -173,10 +171,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --gid 1000 architect && \
     useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash architect
 
-# Clonar e instalar architect (como root, antes de cambiar de usuario)
-RUN git clone -b main --single-branch https://github.com/Diego303/architect-cli.git /opt/architect-cli && \
-    cd /opt/architect-cli && \
-    pip install --no-cache-dir -e .
+# Instalar architect desde PyPI (como root, antes de cambiar de usuario)
+RUN pip install --no-cache-dir architect-ai-cli
 
 # Crear directorios de trabajo con permisos correctos
 RUN mkdir -p /workspace && chown architect:architect /workspace
@@ -248,10 +244,8 @@ RUN dnf install -y --nodocs git-core && \
     dnf clean all && \
     rm -rf /var/cache/dnf
 
-# Clonar e instalar architect desde el repositorio
-RUN git clone -b main --single-branch https://github.com/Diego303/architect-cli.git /opt/architect-cli && \
-    cd /opt/architect-cli && \
-    pip install --no-cache-dir -e .
+# Instalar architect desde PyPI
+RUN pip install --no-cache-dir architect-ai-cli
 
 # Crear workspace con permisos para GID 0 (grupo root en OpenShift)
 RUN mkdir -p /workspace && \
@@ -293,7 +287,7 @@ CMD ["--help"]
 
 3. **UBI 9 base**: Red Hat Universal Base Image 9 con Python 3.12. Soportada y certificada para OpenShift.
 
-4. **Instalación via `git clone`**: Se clona el repositorio directamente en el contenedor y se instala en modo editable (`pip install -e .`), garantizando siempre la última versión de `main`.
+4. **Instalación via PyPI**: Se instala directamente desde PyPI con `pip install architect-ai-cli`.
 
 ---
 

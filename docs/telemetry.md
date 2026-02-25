@@ -4,6 +4,12 @@ Trazabilidad opcional con OpenTelemetry para monitorear sesiones, llamadas LLM y
 
 Implementado en `src/architect/telemetry/otel.py`. Disponible desde v1.0.0 (Plan base v4 Phase D — D4).
 
+> **Requisito**: Este módulo requiere el extra `telemetry`. Instalar con:
+> ```bash
+> pip install architect-ai-cli[telemetry]
+> ```
+> Sin este extra, se usa un `NoopTracer` transparente sin impacto en rendimiento.
+
 ---
 
 ## Concepto
@@ -34,7 +40,7 @@ telemetry:
 
 ```bash
 # Instalar el extra de telemetry
-pip install architect[telemetry]
+pip install architect-ai-cli[telemetry]
 
 # O instalar manualmente
 pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
