@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "architect"
+name = "architect-ai-cli"
 version = "1.0.0"
 description = "Herramienta CLI headless y agentica para orquestar agentes de IA"
 readme = "README.md"
@@ -77,3 +77,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --cov=src/architect --cov-report=term-missing"
+
+[project.urls]
+Homepage = "https://diego303.github.io/architect-docs/"
+Repository = "https://github.com/Diego303/architect-cli"

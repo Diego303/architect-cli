@@ -895,7 +895,7 @@ auto_review:
 
 **Activa `--health` en refactorizaciones grandes.** El delta de métricas muestra si la refactorización realmente mejoró la calidad: menos complejidad, menos duplicados, funciones más cortas.
 
-**Instala `radon` para métricas precisas.** Sin radon, la complejidad ciclomática se estima con AST (menos preciso). Con `pip install architect[health]` obtienes métricas exactas.
+**Instala `radon` para métricas precisas.** Sin radon, la complejidad ciclomática se estima con AST (menos preciso). Con `pip install architect-ai-cli[health]` obtienes métricas exactas.
 
 **Configura `health.enabled: true` para monitoreo continuo.** En vez de pasar `--health` cada vez, actívalo en config para que siempre se analice la calidad.
 

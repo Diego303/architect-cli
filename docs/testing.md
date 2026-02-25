@@ -2,6 +2,12 @@
 
 Documento actualizado el 2026-02-24. Refleja el estado actual de todos los tests. Versión: v1.0.0.
 
+> **Requisito**: Para ejecutar los tests y herramientas de calidad, instalar el extra `dev`:
+> ```bash
+> pip install architect-ai-cli[dev]
+> ```
+> Incluye: `pytest`, `pytest-cov`, `pytest-asyncio`, `black`, `ruff`, `mypy`.
+
 ## Resultado global
 
 ### Scripts de integración (`scripts/`)

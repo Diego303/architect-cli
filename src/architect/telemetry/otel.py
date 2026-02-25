@@ -159,7 +159,7 @@ class ArchitectTracer:
         elif enabled and not OTEL_AVAILABLE:
             self.log.warning(
                 "telemetry.otel_not_available",
-                msg="OpenTelemetry no instalado. Instala con: pip install architect[telemetry]",
+                msg="OpenTelemetry no instalado. Instala con: pip install architect-ai-cli[telemetry]",
             )
 
     def _setup(
@@ -413,7 +413,7 @@ def create_tracer(
     if not OTEL_AVAILABLE:
         logger.warning(
             "telemetry.otel_not_installed",
-            msg="OpenTelemetry no disponible. Instala con: pip install architect[telemetry]",
+            msg="OpenTelemetry no disponible. Instala con: pip install architect-ai-cli[telemetry]",
         )
         return NoopTracer()
 

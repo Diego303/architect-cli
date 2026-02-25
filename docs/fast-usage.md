@@ -7,6 +7,15 @@ Instalación, configuración mínima y los comandos más útiles para el día a 
 ## Instalación
 
 ```bash
+# Desde Pypi
+pip install architect-ai-cli
+
+# Extras opcionales
+pip install architect-ai-cli[dev]        # pytest, black, ruff, mypy
+pip install architect-ai-cli[telemetry]  # OpenTelemetry (trazas OTLP)
+pip install architect-ai-cli[health]     # radon (complejidad ciclomática)
+
+# O desde GitHub
 git clone -b main --single-branch https://github.com/Diego303/architect-cli.git
 cd architect-cli && pip install -e .
 
@@ -459,12 +468,12 @@ sessions:
   auto_save: true
   cleanup_after_days: 7
 
-# Telemetry (opcional, requiere pip install architect[telemetry])
+# Telemetry (opcional, requiere pip install architect-ai-cli[telemetry])
 telemetry:
   enabled: false
   exporter: console        # otlp | console | json-file
 
-# Health (opcional, requiere pip install architect[health] para radon)
+# Health (opcional, requiere pip install architect-ai-cli[health] para radon)
 health:
   enabled: false
   include_patterns: ["**/*.py"]
