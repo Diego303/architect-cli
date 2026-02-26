@@ -165,6 +165,8 @@ class AgentState:
         # Añadir resumen de costes si está disponible
         if self.cost_tracker is not None and self.cost_tracker.has_data():
             output_dict["costs"] = self.cost_tracker.summary()
+            # Top-level convenience key for parallel workers and scripts
+            output_dict["cost"] = self.cost_tracker.total_cost_usd
 
         return output_dict
 

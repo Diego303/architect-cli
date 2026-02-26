@@ -233,10 +233,14 @@ class RunCommandTool(BaseTool):
                 success=success,
             )
 
+            error_msg = None
+            if not success:
+                error_msg = stderr if stderr else f"Comando falló con exit code {result.returncode}"
+
             return ToolResult(
                 success=success,
                 output=output,
-                error=stderr if not success and stderr else None,
+                error=error_msg,
             )
 
         except subprocess.TimeoutExpired:

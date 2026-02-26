@@ -71,5 +71,4 @@ workspace/
 .architect/
 
 #Planes y informes
-plan-v4-features.md
-INFORME_QA_FASE_A.md
+tmp/

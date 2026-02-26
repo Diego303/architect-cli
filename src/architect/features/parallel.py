@@ -374,13 +374,15 @@ def _run_worker_process(
         # Parsear output JSON
         try:
             data = json.loads(proc.stdout)
+            # Cost can be at top-level "cost" or nested in "costs.total_cost_usd"
+            cost = data.get("cost", 0) or data.get("costs", {}).get("total_cost_usd", 0)
             return WorkerResult(
                 worker_id=worker_id,
                 branch=branch,
                 model=model or "default",
                 status=data.get("status", "unknown"),
                 steps=data.get("steps", 0),
-                cost=data.get("cost", 0),
+                cost=cost,
                 duration=duration,
                 files_modified=data.get("files_modified", []),
                 worktree_path=worktree_path,

@@ -164,6 +164,16 @@ class CostTracker:
         """Retorna True si hay al menos un step registrado."""
         return len(self._steps) > 0
 
+    def is_budget_exceeded(self) -> bool:
+        """Retorna True si el coste total ya supera el budget configurado.
+
+        Útil para pre-LLM checks: evita hacer llamadas LLM adicionales
+        si el presupuesto ya fue superado.
+        """
+        if self._budget_usd is None:
+            return False
+        return self.total_cost_usd > self._budget_usd
+
     # ------------------------------------------------------------------
     # Resumen
     # ------------------------------------------------------------------
