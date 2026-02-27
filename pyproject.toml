@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "architect-ai-cli"
-version = "1.0.0"
+version = "1.0.1"
 description = "Herramienta CLI headless y agentica para orquestar agentes de IA"
 readme = "README.md"
 requires-python = ">=3.12"

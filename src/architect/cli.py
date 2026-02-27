@@ -68,7 +68,7 @@ EXIT_TIMEOUT = 5
 EXIT_INTERRUPTED = 130
 
 # Versión actual
-_VERSION = "1.0.0"
+_VERSION = "1.0.1"
 
 
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
