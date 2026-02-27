@@ -496,7 +496,17 @@ class AgentLoop:
             self.hlog.safety_net("max_steps", step=step, max_steps=self.agent_config.max_steps)
             return StopReason.MAX_STEPS
 
-        # 3. Timeout total — watchdog de tiempo
+        # 3. Budget — watchdog de coste (pre-LLM check)
+        if self.cost_tracker and self.cost_tracker.is_budget_exceeded():
+            self.log.warning(
+                "safety.budget_exceeded",
+                step=step,
+                total_cost=self.cost_tracker.total_cost_usd,
+            )
+            self.hlog.safety_net("budget_exceeded", step=step)
+            return StopReason.BUDGET_EXCEEDED
+
+        # 4. Timeout total — watchdog de tiempo
         if self.timeout and (time.time() - self._start_time) > self.timeout:
             self.log.warning("safety.timeout", elapsed=time.time() - self._start_time)
             self.hlog.safety_net("timeout")
@@ -535,6 +545,34 @@ class AgentLoop:
             state.final_output = (
                 f"Interrumpido por el usuario. "
                 f"Pasos completados: {state.current_step}."
+            )
+            return state
+
+        # BUDGET_EXCEEDED: corte inmediato, NO gastar más dinero en resumen
+        if reason == StopReason.BUDGET_EXCEEDED:
+            cost_info = ""
+            if self.cost_tracker:
+                cost_info = f" Coste total: ${self.cost_tracker.total_cost_usd:.4f}."
+            state.status = "partial"
+            state.final_output = (
+                f"Presupuesto excedido.{cost_info} "
+                f"Pasos completados: {state.current_step}."
+            )
+            # Skip LLM summary call — no point spending more money
+            state.status = "partial"
+            self._save_session(state, state.messages[1]["content"] if len(state.messages) > 1 else "", state.current_step)
+            self.log.info(
+                "agent.loop.complete",
+                status=state.status,
+                stop_reason=state.stop_reason.value,
+                total_steps=state.current_step,
+                total_tool_calls=state.total_tool_calls,
+            )
+            self.hlog.loop_complete(
+                status=state.status,
+                stop_reason=state.stop_reason.value,
+                total_steps=state.current_step,
+                total_tool_calls=state.total_tool_calls,
             )
             return state
 

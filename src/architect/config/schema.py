@@ -6,7 +6,7 @@ valores por defecto y serialización.
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,7 +36,7 @@ class LLMConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Configuración de un agente específico."""
 
-    system_prompt: str
+    system_prompt: str = ""
     allowed_tools: list[str] = Field(default_factory=list)
     confirm_mode: Literal["confirm-all", "confirm-sensitive", "yolo"] = "confirm-sensitive"
     max_steps: int = 20
@@ -515,6 +515,22 @@ class GuardrailsConfig(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    def model_post_init(self, __context: Any) -> None:
+        """Auto-enable guardrails when any rule is configured."""
+        if not self.enabled:
+            has_rules = (
+                bool(self.protected_files)
+                or bool(self.blocked_commands)
+                or self.max_files_modified is not None
+                or self.max_lines_changed is not None
+                or self.max_commands_executed is not None
+                or self.require_test_after_edit
+                or bool(self.quality_gates)
+                or bool(self.code_rules)
+            )
+            if has_rules:
+                object.__setattr__(self, "enabled", True)
 
 
 class MemoryConfig(BaseModel):

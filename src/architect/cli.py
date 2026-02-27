@@ -1137,6 +1137,8 @@ def cleanup(older_than_days: int, config: Path | None) -> None:
     help="Path al archivo de configuración YAML",
 )
 @click.option("--worktree", is_flag=True, help="Usar git worktree aislado")
+@click.option("--report", "report_format", type=click.Choice(["json", "markdown", "github"]), default=None, help="Formato del reporte")
+@click.option("--report-file", "report_file", type=click.Path(), default=None, help="Archivo de salida para el reporte")
 @click.option("--quiet", is_flag=True, help="Modo silencioso")
 def loop_cmd(
     task: str,
@@ -1150,6 +1152,8 @@ def loop_cmd(
     model: str | None,
     config: Path | None,
     worktree: bool,
+    report_format: str | None,
+    report_file: str | None,
     quiet: bool,
 ) -> None:
     """Ejecuta un Ralph Loop: iterar hasta que los checks pasen.
@@ -1265,8 +1269,20 @@ def loop_cmd(
                 workspace_root=ws_root,
             )
 
+        # v4-A1: Hooks para iteraciones del loop
+        iter_hook_executor: HookExecutor | None = None
+        if iter_app_config.hooks:
+            iter_hooks_registry = _build_hooks_registry(iter_app_config)
+            if iter_hooks_registry.has_hooks():
+                ws_root = str(Path(iter_workspace_config.root).resolve())
+                iter_hook_executor = HookExecutor(
+                    registry=iter_hooks_registry,
+                    workspace_root=ws_root,
+                )
+
         engine = ExecutionEngine(
             registry, iter_app_config, confirm_mode="yolo",
+            hook_executor=iter_hook_executor,
             guardrails=iter_guardrails,
         )
 
@@ -1274,6 +1290,7 @@ def loop_cmd(
             llm, engine, agent_config, ctx,
             context_manager=context_mgr,
             cost_tracker=cost_tracker_iter,
+            hook_executor=iter_hook_executor,
             guardrails=iter_guardrails,
         )
 
@@ -1310,6 +1327,36 @@ def loop_cmd(
                 f"steps={it.steps_taken} cost=${it.cost:.4f}",
                 err=True,
             )
+
+    # v4-B2: Generar reporte si se pidió
+    if report_format:
+        exec_report = ExecutionReport(
+            task=task,
+            agent=agent,
+            model=model or (app_config.llm.model if app_config else "unknown"),
+            status="success" if result.success else "failed",
+            duration_seconds=round(result.total_duration, 2),
+            steps=sum(it.steps_taken for it in result.iterations),
+            total_cost=result.total_cost,
+            files_modified=[],
+            errors=[],
+            timeline=[],
+            stop_reason=result.stop_reason,
+            git_diff=collect_git_diff(workspace),
+        )
+        gen = ReportGenerator(exec_report)
+        report_content = {
+            "json": gen.to_json,
+            "markdown": gen.to_markdown,
+            "github": gen.to_github_pr_comment,
+        }[report_format]()
+
+        if report_file:
+            Path(report_file).write_text(report_content, encoding="utf-8")
+            if not quiet:
+                click.echo(f"Reporte guardado en {report_file}", err=True)
+        else:
+            click.echo(report_content)
 
     sys.exit(EXIT_SUCCESS if result.success else EXIT_FAILED)
 
@@ -1444,6 +1491,8 @@ def parallel_cleanup_cmd() -> None:
     type=click.Path(exists=True, path_type=Path),
     help="Path al archivo de configuración YAML",
 )
+@click.option("--report", "report_format", type=click.Choice(["json", "markdown", "github"]), default=None, help="Formato del reporte")
+@click.option("--report-file", "report_file", type=click.Path(), default=None, help="Archivo de salida para el reporte")
 @click.option("--quiet", is_flag=True, help="Modo silencioso")
 def pipeline_cmd(
     pipeline_file: str,
@@ -1451,6 +1500,8 @@ def pipeline_cmd(
     from_step: str | None,
     dry_run: bool,
     config: Path | None,
+    report_format: str | None,
+    report_file: str | None,
     quiet: bool,
 ) -> None:
     """Ejecuta un workflow YAML multi-step.
@@ -1531,8 +1582,19 @@ def pipeline_cmd(
                 workspace_root=workspace,
             )
 
+        # v4-A1: Hooks para steps del pipeline
+        pipe_hook_executor: HookExecutor | None = None
+        if app_config.hooks:
+            pipe_hooks_registry = _build_hooks_registry(app_config)
+            if pipe_hooks_registry.has_hooks():
+                pipe_hook_executor = HookExecutor(
+                    registry=pipe_hooks_registry,
+                    workspace_root=workspace,
+                )
+
         engine = ExecutionEngine(
             registry, app_config, confirm_mode="yolo",
+            hook_executor=pipe_hook_executor,
             guardrails=pipe_guardrails,
         )
 
@@ -1540,6 +1602,7 @@ def pipeline_cmd(
             llm, engine, agent_config, ctx,
             context_manager=context_mgr,
             cost_tracker=cost_tracker_iter,
+            hook_executor=pipe_hook_executor,
             guardrails=pipe_guardrails,
         )
 
@@ -1575,6 +1638,43 @@ def pipeline_cmd(
                 click.echo(f"    Error: {r.error[:100]}", err=True)
 
     all_ok = all(r.status in ("success", "skipped", "dry_run") for r in results)
+
+    # v4-B2: Generar reporte si se pidió
+    if report_format:
+        total_cost = sum(r.cost for r in results)
+        total_duration = sum(r.duration for r in results)
+        pipeline_errors = [f"{r.step_name}: {r.error}" for r in results if r.error]
+        exec_report = ExecutionReport(
+            task=f"Pipeline: {pipeline_file}",
+            agent="pipeline",
+            model=app_config.llm.model if app_config else "unknown",
+            status="success" if all_ok else "failed",
+            duration_seconds=round(total_duration, 2),
+            steps=len(results),
+            total_cost=total_cost,
+            files_modified=[],
+            errors=pipeline_errors,
+            timeline=[
+                {"step": i, "tool": r.step_name, "duration": round(r.duration, 2)}
+                for i, r in enumerate(results)
+            ],
+            stop_reason=None,
+            git_diff=collect_git_diff(workspace),
+        )
+        gen = ReportGenerator(exec_report)
+        report_content = {
+            "json": gen.to_json,
+            "markdown": gen.to_markdown,
+            "github": gen.to_github_pr_comment,
+        }[report_format]()
+
+        if report_file:
+            Path(report_file).write_text(report_content, encoding="utf-8")
+            if not quiet:
+                click.echo(f"Reporte guardado en {report_file}", err=True)
+        else:
+            click.echo(report_content)
+
     sys.exit(EXIT_SUCCESS if all_ok else EXIT_FAILED)
 
 

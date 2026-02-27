@@ -273,15 +273,17 @@ def test_graceful_close():
     else:
         fail("MAX_STEPS → final_output del LLM", f"got '{result_state2.final_output}'")
 
-    # Test: si LLM falla en close, se genera fallback
+    # Test: BUDGET_EXCEEDED → corte inmediato sin llamar al LLM
     loop3 = _make_loop()
     loop3.llm.completion.side_effect = RuntimeError("LLM unavailable")
     state3 = AgentState()
     result_state3 = loop3._graceful_close(state3, StopReason.BUDGET_EXCEEDED, None)
-    if result_state3.final_output and "budget_exceeded" in result_state3.final_output:
-        ok("LLM falla en close → fallback con reason")
+    if result_state3.final_output and "Presupuesto excedido" in result_state3.final_output:
+        ok("BUDGET_EXCEEDED → corte inmediato sin LLM")
     else:
-        fail("LLM falla en close → fallback con reason", f"got '{result_state3.final_output}'")
+        fail("BUDGET_EXCEEDED → corte inmediato sin LLM", f"got '{result_state3.final_output}'")
+    loop3.llm.completion.assert_not_called()
+    ok("BUDGET_EXCEEDED → LLM no llamado (ahorra dinero)")
 
 
 # ── Tests: run() flujo básico ────────────────────────────────────────────────

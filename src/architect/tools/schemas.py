@@ -5,7 +5,7 @@ Cada tool define su schema de argumentos como un modelo Pydantic,
 lo que proporciona validación automática y generación de JSON Schema.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ReadFileArgs(BaseModel):
@@ -228,5 +228,13 @@ class RunCommandArgs(BaseModel):
             "Ejemplo: {'DEBUG': '1', 'PYTHONPATH': 'src'}"
         ),
     )
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _normalize_timeout(cls, v: int) -> int:
+        """Auto-convert milliseconds to seconds when LLM sends ms values."""
+        if isinstance(v, (int, float)) and v > 600:
+            return max(1, min(600, int(v / 1000)))
+        return int(v) if isinstance(v, float) else v
 
     model_config = {"extra": "forbid"}
