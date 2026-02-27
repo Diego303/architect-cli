@@ -54,7 +54,7 @@ except ImportError:
 
 # Nombre y versión del servicio para las trazas
 SERVICE_NAME = "architect"
-SERVICE_VERSION = "1.0.0"
+SERVICE_VERSION = "1.0.1"
 
 
 class NoopSpan:

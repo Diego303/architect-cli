@@ -1,246 +1,246 @@
 # architect
 
-Herramienta CLI headless y agéntica para orquestar agentes de IA sobre archivos locales y servicios MCP remotos. Diseñada para funcionar sin supervisión en CI, cron y pipelines.
+Headless, agentic CLI tool for orchestrating AI agents over local files and remote MCP services. Designed to run unattended in CI, cron jobs, and pipelines.
 
 ---
 
-## Instalación
+## Installation
 
-**Requisitos**: Python 3.12+
+**Requirements**: Python 3.12+
 
 ```bash
-# Instalar desde PyPI
+# Install from PyPI
 pip install architect-ai-cli
 
-# Desde el repositorio
+# From the repository
 git clone https://github.com/Diego303/architect-cli
 cd architect-cli
 pip install -e .
 
-# Verificar instalación
+# Verify installation
 architect --version
 architect run --help
 ```
 
-**Extras opcionales:**
+**Optional extras:**
 
 ```bash
 pip install architect-ai-cli[dev]        # pytest, black, ruff, mypy
-pip install architect-ai-cli[telemetry]  # OpenTelemetry (trazas OTLP)
-pip install architect-ai-cli[health]     # radon (complejidad ciclomática)
+pip install architect-ai-cli[telemetry]  # OpenTelemetry (OTLP traces)
+pip install architect-ai-cli[health]     # radon (cyclomatic complexity)
 ```
 
-**Dependencias principales**: `litellm`, `click`, `pydantic`, `httpx`, `structlog`, `tenacity`
+**Main dependencies**: `litellm`, `click`, `pydantic`, `httpx`, `structlog`, `tenacity`
 
 ---
 
 ## Quickstart
 
 ```bash
-# Configurar API key
+# Set API key
 export LITELLM_API_KEY="sk-..."
 
-# Analizar un proyecto (solo lectura, seguro)
-architect run "resume qué hace este proyecto" -a resume
+# Analyze a project (read-only, safe)
+architect run "summarize what this project does" -a resume
 
-# Revisar código
-architect run "revisa main.py y encuentra problemas" -a review
+# Review code
+architect run "review main.py and find issues" -a review
 
-# Generar un plan detallado (sin modificar archivos)
-architect run "planifica cómo añadir tests al proyecto" -a plan
+# Generate a detailed plan (without modifying files)
+architect run "plan how to add tests to the project" -a plan
 
-# Modificar archivos — build planifica y ejecuta en un solo paso
-architect run "añade docstrings a todas las funciones de utils.py"
+# Modify files — build plans and executes in a single step
+architect run "add docstrings to all functions in utils.py"
 
-# Ejecutar sin confirmaciones (CI/automatización)
-architect run "genera un archivo README.md para este proyecto" --mode yolo
+# Run without confirmations (CI/automation)
+architect run "generate a README.md file for this project" --mode yolo
 
-# Ver qué haría sin ejecutar nada
-architect run "reorganiza la estructura de carpetas" --dry-run
+# See what it would do without executing anything
+architect run "reorganize the folder structure" --dry-run
 
-# Limitar tiempo total de ejecución
-architect run "refactoriza el módulo de auth" --timeout 300
+# Limit total execution time
+architect run "refactor the auth module" --timeout 300
 ```
 
 ---
 
-## Comandos
+## Commands
 
-### `architect run` — ejecutar tarea
+### `architect run` — execute task
 
 ```
-architect run PROMPT [opciones]
+architect run PROMPT [options]
 ```
 
-**Argumento**:
-- `PROMPT` — Descripción de la tarea en lenguaje natural
+**Argument**:
+- `PROMPT` — Task description in natural language
 
-**Opciones principales**:
+**Main options**:
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `-c, --config PATH` | Archivo de configuración YAML |
-| `-a, --agent NAME` | Agente a usar: `plan`, `build`, `resume`, `review`, o custom |
-| `-m, --mode MODE` | Modo de confirmación: `confirm-all`, `confirm-sensitive`, `yolo` |
-| `-w, --workspace PATH` | Directorio de trabajo (workspace root) |
-| `--dry-run` | Simular ejecución sin cambios reales |
+| `-c, --config PATH` | YAML configuration file |
+| `-a, --agent NAME` | Agent to use: `plan`, `build`, `resume`, `review`, or custom |
+| `-m, --mode MODE` | Confirmation mode: `confirm-all`, `confirm-sensitive`, `yolo` |
+| `-w, --workspace PATH` | Working directory (workspace root) |
+| `--dry-run` | Simulate execution without real changes |
 
-**Opciones LLM**:
+**LLM options**:
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--model MODEL` | Modelo a usar (`gpt-4o`, `claude-sonnet-4-6`, etc.) |
-| `--api-base URL` | URL base de la API |
-| `--api-key KEY` | API key directa |
-| `--no-stream` | Desactivar streaming |
-| `--timeout N` | Tiempo máximo total de ejecución en segundos (watchdog global) |
+| `--model MODEL` | Model to use (`gpt-4o`, `claude-sonnet-4-6`, etc.) |
+| `--api-base URL` | API base URL |
+| `--api-key KEY` | Direct API key |
+| `--no-stream` | Disable streaming |
+| `--timeout N` | Maximum total execution time in seconds (global watchdog) |
 
-**Opciones de output y reportes**:
+**Output and reports options**:
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `-v / -vv / -vvv` | Nivel de verbose técnico (sin `-v` solo se muestran los pasos del agente) |
-| `--log-level LEVEL` | Nivel de log: `human` (default), `debug`, `info`, `warn`, `error` |
-| `--log-file PATH` | Guardar logs JSON estructurados en archivo |
-| `--json` | Salida en formato JSON (compatible con `jq`) |
-| `--quiet` | Modo silencioso (solo resultado final en stdout) |
-| `--max-steps N` | Límite máximo de pasos del agente |
-| `--budget N` | Límite de coste en USD (detiene el agente si se supera) |
-| `--report FORMAT` | Genera reporte de ejecución: `json`, `markdown`, `github` |
-| `--report-file PATH` | Guarda el reporte en archivo en vez de stdout |
+| `-v / -vv / -vvv` | Technical verbose level (without `-v` only agent steps are shown) |
+| `--log-level LEVEL` | Log level: `human` (default), `debug`, `info`, `warn`, `error` |
+| `--log-file PATH` | Save structured JSON logs to file |
+| `--json` | JSON output format (compatible with `jq`) |
+| `--quiet` | Silent mode (only final result to stdout) |
+| `--max-steps N` | Maximum agent steps limit |
+| `--budget N` | Cost limit in USD (stops the agent if exceeded) |
+| `--report FORMAT` | Generate execution report: `json`, `markdown`, `github` |
+| `--report-file PATH` | Save report to file instead of stdout |
 
-**Opciones de sesiones y CI/CD**:
+**Session and CI/CD options**:
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--session ID` | Reanuda una sesión guardada previamente |
-| `--confirm-mode MODE` | Alias CI-friendly: `yolo`, `confirm-sensitive`, `confirm-all` |
-| `--context-git-diff REF` | Inyecta `git diff REF` como contexto (ej: `origin/main`) |
-| `--exit-code-on-partial N` | Exit code personalizado para status `partial` (default: 2) |
+| `--session ID` | Resume a previously saved session |
+| `--confirm-mode MODE` | CI-friendly alias: `yolo`, `confirm-sensitive`, `confirm-all` |
+| `--context-git-diff REF` | Inject `git diff REF` as context (e.g., `origin/main`) |
+| `--exit-code-on-partial N` | Custom exit code for `partial` status (default: 2) |
 
-**Opciones de análisis y evaluación**:
+**Analysis and evaluation options**:
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--self-eval off\|basic\|full` | Auto-evaluación del resultado: `off` (sin coste extra), `basic` (una llamada extra, marca como `partial` si falla), `full` (reintenta con prompt de corrección hasta `max_retries` veces) |
-| `--health` | Ejecutar análisis de salud del código antes/después — muestra delta de complejidad, funciones largas y duplicados |
+| `--self-eval off\|basic\|full` | Result self-evaluation: `off` (no extra cost), `basic` (one extra call, marks as `partial` if fails), `full` (retries with correction prompt up to `max_retries` times) |
+| `--health` | Run code health analysis before/after — shows complexity delta, long functions, and duplicates |
 
-**Opciones MCP**:
+**MCP options**:
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--disable-mcp` | Desactivar conexión a servidores MCP |
+| `--disable-mcp` | Disable connection to MCP servers |
 
 ---
 
-### `architect sessions` — listar sesiones guardadas
+### `architect sessions` — list saved sessions
 
 ```bash
 architect sessions
 ```
 
-Muestra una tabla con todas las sesiones guardadas: ID, status, pasos, coste y tarea.
+Shows a table with all saved sessions: ID, status, steps, cost, and task.
 
 ---
 
-### `architect resume` — reanudar sesión
+### `architect resume` — resume session
 
 ```bash
-architect resume SESSION_ID [opciones]
+architect resume SESSION_ID [options]
 ```
 
-Reanuda una sesión interrumpida. Carga el estado completo (mensajes, archivos modificados, coste acumulado) y continúa donde se dejó. Si el ID no existe, termina con exit code 3.
+Resumes an interrupted session. Loads the complete state (messages, modified files, accumulated cost) and continues where it left off. If the ID doesn't exist, exits with code 3.
 
 ---
 
-### `architect cleanup` — limpiar sesiones antiguas
+### `architect cleanup` — clean old sessions
 
 ```bash
-architect cleanup                  # elimina sesiones > 7 días
-architect cleanup --older-than 30  # elimina sesiones > 30 días
+architect cleanup                  # removes sessions > 7 days
+architect cleanup --older-than 30  # removes sessions > 30 days
 ```
 
 ---
 
-### `architect loop` — iteración automática (Ralph Loop)
+### `architect loop` — automatic iteration (Ralph Loop)
 
 ```
-architect loop PROMPT --check CMD [opciones]
+architect loop PROMPT --check CMD [options]
 ```
 
-Ejecuta un agente en bucle hasta que todos los checks (comandos shell) pasen. Cada iteración recibe un contexto limpio: solo la spec original, el diff acumulado, errores de la iteración anterior, y un progress.md auto-generado.
+Runs an agent in a loop until all checks (shell commands) pass. Each iteration receives a clean context: only the original spec, accumulated diff, errors from the previous iteration, and an auto-generated progress.md.
 
 ```bash
-# Loop hasta que tests y lint pasen
-architect loop "implementa la feature X" \
+# Loop until tests and lint pass
+architect loop "implement feature X" \
   --check "pytest tests/" \
   --check "ruff check src/" \
   --max-iterations 10 \
   --max-cost 5.0
 
-# Con spec file y worktree aislado
-architect loop "refactoriza el módulo auth" \
+# With spec file and isolated worktree
+architect loop "refactor the auth module" \
   --spec spec.md \
   --check "pytest" \
   --worktree \
   --model gpt-4o
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--check CMD` | Comando de verificación (repetible, requerido) |
-| `--spec PATH` | Archivo de especificación (se usa en vez del prompt) |
-| `--max-iterations N` | Máximo de iteraciones (default: 25) |
-| `--max-cost N` | Límite de coste en USD |
-| `--max-time N` | Límite de tiempo en segundos |
-| `--completion-tag TAG` | Tag que el agente emite al terminar (default: `COMPLETE`) |
-| `--agent NAME` | Agente a usar (default: `build`) |
-| `--model MODEL` | Modelo LLM |
-| `--worktree` | Ejecutar en un git worktree aislado |
-| `--quiet` | Solo resultado final |
+| `--check CMD` | Verification command (repeatable, required) |
+| `--spec PATH` | Specification file (used instead of prompt) |
+| `--max-iterations N` | Maximum iterations (default: 25) |
+| `--max-cost N` | Cost limit in USD |
+| `--max-time N` | Time limit in seconds |
+| `--completion-tag TAG` | Tag the agent emits when done (default: `COMPLETE`) |
+| `--agent NAME` | Agent to use (default: `build`) |
+| `--model MODEL` | LLM model |
+| `--worktree` | Run in an isolated git worktree |
+| `--quiet` | Only final result |
 
 ---
 
-### `architect pipeline` — ejecutar workflow YAML
+### `architect pipeline` — run YAML workflow
 
 ```
-architect pipeline FILE [opciones]
+architect pipeline FILE [options]
 ```
 
-Ejecuta un workflow multi-step definido en YAML. Cada paso puede tener su propio agente, modelo, checks, condiciones y variables.
+Runs a multi-step workflow defined in YAML. Each step can have its own agent, model, checks, conditions, and variables.
 
 ```bash
-# Ejecutar pipeline
+# Run pipeline
 architect pipeline ci/pipeline.yaml --var project=myapp --var env=staging
 
-# Ver plan sin ejecutar
+# Preview plan without executing
 architect pipeline ci/pipeline.yaml --dry-run
 
-# Reanudar desde un step
+# Resume from a step
 architect pipeline ci/pipeline.yaml --from-step deploy
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--var KEY=VALUE` | Variable para el pipeline (repetible) |
-| `--from-step NAME` | Reanudar desde un step específico |
-| `--dry-run` | Mostrar plan sin ejecutar |
-| `-c, --config PATH` | Archivo de configuración YAML |
-| `--quiet` | Solo resultado final |
+| `--var KEY=VALUE` | Pipeline variable (repeatable) |
+| `--from-step NAME` | Resume from a specific step |
+| `--dry-run` | Show plan without executing |
+| `-c, --config PATH` | YAML configuration file |
+| `--quiet` | Only final result |
 
-**Formato del YAML de pipeline**:
+**Pipeline YAML format**:
 
 ```yaml
-name: mi-pipeline
+name: my-pipeline
 steps:
   - name: analyze
     agent: plan
-    prompt: "Analiza el proyecto {{project}} en entorno {{env}}"
+    prompt: "Analyze project {{project}} in {{env}} environment"
     output_var: analysis
 
   - name: implement
     agent: build
-    prompt: "Implementa: {{analysis}}"
+    prompt: "Implement: {{analysis}}"
     model: gpt-4o
     checks:
       - "pytest tests/"
@@ -249,79 +249,79 @@ steps:
 
   - name: deploy
     agent: build
-    prompt: "Deploy a {{env}}"
+    prompt: "Deploy to {{env}}"
     condition: "env == 'production'"
 ```
 
 ---
 
-### `architect parallel` — ejecución paralela
+### `architect parallel` — parallel execution
 
 ```
-architect parallel --task CMD [opciones]
+architect parallel --task CMD [options]
 ```
 
-Ejecuta múltiples tareas en paralelo, cada una en un git worktree aislado.
+Runs multiple tasks in parallel, each in an isolated git worktree.
 
 ```bash
-# Tres tareas en paralelo
+# Three tasks in parallel
 architect parallel \
-  --task "añade tests a auth.py" \
-  --task "añade tests a users.py" \
-  --task "añade tests a billing.py" \
+  --task "add tests to auth.py" \
+  --task "add tests to users.py" \
+  --task "add tests to billing.py" \
   --workers 3
 
-# Con modelos diferentes por worker
+# With different models per worker
 architect parallel \
-  --task "optimiza queries" \
-  --task "mejora logging" \
+  --task "optimize queries" \
+  --task "improve logging" \
   --models gpt-4o,claude-sonnet-4-6
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--task CMD` | Tarea a ejecutar (repetible) |
-| `--workers N` | Número de workers paralelos (default: 3) |
-| `--models LIST` | Modelos separados por coma (round-robin entre workers) |
-| `--agent NAME` | Agente a usar (default: `build`) |
-| `--budget-per-worker N` | Límite de coste por worker |
-| `--timeout-per-worker N` | Límite de tiempo por worker |
-| `--config PATH` | Archivo de configuración YAML para workers |
-| `--api-base URL` | URL base de la API LLM para workers |
-| `--quiet` | Solo resultado final |
+| `--task CMD` | Task to execute (repeatable) |
+| `--workers N` | Number of parallel workers (default: 3) |
+| `--models LIST` | Comma-separated models (round-robin across workers) |
+| `--agent NAME` | Agent to use (default: `build`) |
+| `--budget-per-worker N` | Cost limit per worker |
+| `--timeout-per-worker N` | Time limit per worker |
+| `--config PATH` | YAML configuration file for workers |
+| `--api-base URL` | LLM API base URL for workers |
+| `--quiet` | Only final result |
 
 ```bash
-# Con configuración y API personalizadas
+# With custom config and API
 architect parallel \
-  --task "optimiza queries" \
+  --task "optimize queries" \
   --config ci/architect.yaml \
   --api-base http://proxy.internal:8000
 
-# Limpiar worktrees después de ejecutar
+# Clean up worktrees after execution
 architect parallel-cleanup
 ```
 
 ---
 
-### `architect eval` — evaluación competitiva multi-modelo
+### `architect eval` — competitive multi-model evaluation
 
 ```
-architect eval PROMPT [opciones]
+architect eval PROMPT [options]
 ```
 
-Ejecuta la misma tarea con múltiples modelos en paralelo y genera un ranking comparativo. Cada modelo se ejecuta en un git worktree aislado con los mismos checks de validación.
+Runs the same task with multiple models in parallel and generates a comparative ranking. Each model runs in an isolated git worktree with the same validation checks.
 
 ```bash
-# Comparar tres modelos
-architect eval "implementa autenticación JWT" \
+# Compare three models
+architect eval "implement JWT authentication" \
   --models gpt-4o,claude-sonnet-4-6,gemini-2.0-flash \
   --check "pytest tests/test_auth.py -q" \
   --check "ruff check src/" \
   --budget-per-model 1.0 \
   --report-file eval_report.md
 
-# Con timeout y agente personalizado
-architect eval "refactoriza utils.py" \
+# With timeout and custom agent
+architect eval "refactor utils.py" \
   --models gpt-4o,claude-sonnet-4-6 \
   --check "pytest" \
   --timeout-per-model 300 \
@@ -329,104 +329,104 @@ architect eval "refactoriza utils.py" \
   --max-steps 30
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--models LIST` | Modelos separados por coma (requerido) |
-| `--check CMD` | Comando de verificación (repetible, requerido) |
-| `--agent NAME` | Agente a usar (default: `build`) |
-| `--max-steps N` | Máximo de pasos por modelo (default: 50) |
-| `--budget-per-model N` | Límite de coste por modelo en USD |
-| `--timeout-per-model N` | Límite de tiempo por modelo en segundos |
-| `--report-file PATH` | Guardar reporte en archivo |
-| `--config PATH` | Archivo de configuración YAML |
-| `--api-base URL` | URL base de la API LLM |
+| `--models LIST` | Comma-separated models (required) |
+| `--check CMD` | Verification command (repeatable, required) |
+| `--agent NAME` | Agent to use (default: `build`) |
+| `--max-steps N` | Maximum steps per model (default: 50) |
+| `--budget-per-model N` | Cost limit per model in USD |
+| `--timeout-per-model N` | Time limit per model in seconds |
+| `--report-file PATH` | Save report to file |
+| `--config PATH` | YAML configuration file |
+| `--api-base URL` | LLM API base URL |
 
-**Sistema de puntuación** (100 puntos):
-- Checks pasados: 40 pts (proporcional)
+**Scoring system** (100 points):
+- Checks passed: 40 pts (proportional)
 - Status: 30 pts (success=30, partial=15, timeout=5, failed=0)
-- Eficiencia: 20 pts (menos pasos = mayor puntuación)
-- Coste: 10 pts (menor coste = mayor puntuación)
+- Efficiency: 20 pts (fewer steps = higher score)
+- Cost: 10 pts (lower cost = higher score)
 
 ---
 
-### `architect init` — inicializar proyecto con presets
+### `architect init` — initialize project with presets
 
 ```
-architect init [opciones]
+architect init [options]
 ```
 
-Genera configuración inicial (`.architect.md` + `config.yaml`) a partir de presets predefinidos.
+Generates initial configuration (`.architect.md` + `config.yaml`) from predefined presets.
 
 ```bash
-# Ver presets disponibles
+# View available presets
 architect init --list-presets
 
-# Inicializar proyecto Python
+# Initialize Python project
 architect init --preset python
 
-# Modo máxima seguridad (overwrite si ya existe)
+# Maximum security mode (overwrite if exists)
 architect init --preset paranoid --overwrite
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--preset NAME` | Preset a aplicar: `python`, `node-react`, `ci`, `paranoid`, `yolo` |
-| `--list-presets` | Mostrar presets disponibles |
-| `--overwrite` | Sobreescribir archivos existentes |
+| `--preset NAME` | Preset to apply: `python`, `node-react`, `ci`, `paranoid`, `yolo` |
+| `--list-presets` | Show available presets |
+| `--overwrite` | Overwrite existing files |
 
-**Presets disponibles**:
+**Available presets**:
 
-| Preset | Descripción |
+| Preset | Description |
 |--------|-------------|
-| `python` | Proyecto Python estándar — pytest, ruff, mypy, black, PEP 8, type hints |
-| `node-react` | Proyecto Node.js/React — TypeScript strict, ESLint, Prettier, Jest/Vitest |
-| `ci` | Modo headless CI/CD — yolo, sin streaming, autónomo |
-| `paranoid` | Máxima seguridad — confirm-all, guardrails estrictos, code rules, max 20 steps |
-| `yolo` | Sin restricciones — yolo, 100 steps, sin guardrails |
+| `python` | Standard Python project — pytest, ruff, mypy, black, PEP 8, type hints |
+| `node-react` | Node.js/React project — TypeScript strict, ESLint, Prettier, Jest/Vitest |
+| `ci` | Headless CI/CD mode — yolo, no streaming, autonomous |
+| `paranoid` | Maximum security — confirm-all, strict guardrails, code rules, max 20 steps |
+| `yolo` | No restrictions — yolo, 100 steps, no guardrails |
 
 ---
 
-### `architect agents` — listar agentes
+### `architect agents` — list agents
 
 ```bash
-architect agents                   # agentes por defecto
-architect agents -c config.yaml   # incluye custom del YAML
+architect agents                   # default agents
+architect agents -c config.yaml   # includes custom from YAML
 ```
 
-Lista todos los agentes disponibles con su modo de confirmación.
+Lists all available agents with their confirmation mode.
 
 ---
 
-### `architect validate-config` — validar configuración
+### `architect validate-config` — validate configuration
 
 ```bash
 architect validate-config -c config.yaml
 ```
 
-Valida la sintaxis y los valores del archivo de configuración antes de ejecutar.
+Validates the syntax and values of the configuration file before execution.
 
 ---
 
-## Agentes
+## Agents
 
-Un agente define el **rol**, las **tools disponibles** y el **nivel de confirmación**.
+An agent defines the **role**, **available tools**, and **confirmation level**.
 
-El agente por defecto es **`build`** (se usa automáticamente si no se especifica `-a`): analiza el proyecto, elabora un plan interno y lo ejecuta en un solo paso, sin necesitar un agente `plan` previo.
+The default agent is **`build`** (used automatically if `-a` is not specified): it analyzes the project, creates an internal plan, and executes it in a single step, without needing a prior `plan` agent.
 
-| Agente | Descripción | Tools | Confirmación | Pasos |
-|--------|-------------|-------|-------------|-------|
-| `build` | Planifica y ejecuta modificaciones | todas (edición, búsqueda, lectura, `run_command`, `dispatch_subagent`) | `confirm-sensitive` | 50 |
-| `plan` | Analiza y genera un plan detallado | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
-| `resume` | Lee y resume información | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 |
-| `review` | Revisión de código y mejoras | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
+| Agent | Description | Tools | Confirmation | Steps |
+|-------|-------------|-------|-------------|-------|
+| `build` | Plans and executes modifications | all (editing, search, read, `run_command`, `dispatch_subagent`) | `confirm-sensitive` | 50 |
+| `plan` | Analyzes and generates a detailed plan | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
+| `resume` | Reads and summarizes information | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 15 |
+| `review` | Code review and improvements | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | `yolo` | 20 |
 
-**Agentes custom** en `config.yaml`:
+**Custom agents** in `config.yaml`:
 
 ```yaml
 agents:
   deploy:
     system_prompt: |
-      Eres un agente de deployment...
+      You are a deployment agent...
     allowed_tools:
       - read_file
       - list_files
@@ -437,31 +437,31 @@ agents:
 
 ---
 
-## Modos de confirmación
+## Confirmation Modes
 
-| Modo | Comportamiento |
-|------|---------------|
-| `confirm-all` | Toda acción requiere confirmación interactiva |
-| `confirm-sensitive` | Solo acciones que modifican el sistema (write, delete) |
-| `yolo` | Sin confirmaciones — ni tools ni comandos (para CI/scripts). La seguridad se garantiza por la blocklist de comandos destructivos |
+| Mode | Behavior |
+|------|----------|
+| `confirm-all` | Every action requires interactive confirmation |
+| `confirm-sensitive` | Only actions that modify the system (write, delete) |
+| `yolo` | No confirmations — neither tools nor commands (for CI/scripts). Safety is guaranteed by the destructive commands blocklist |
 
-> En entornos sin TTY (`--mode confirm-sensitive` en CI), el sistema lanza un error claro. Usa `--mode yolo` o `--dry-run` en pipelines.
+> In environments without TTY (`--mode confirm-sensitive` in CI), the system raises a clear error. Use `--mode yolo` or `--dry-run` in pipelines.
 
 ---
 
-## Configuración
+## Configuration
 
-Copia `config.example.yaml` como punto de partida:
+Copy `config.example.yaml` as a starting point:
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-Estructura mínima:
+Minimal structure:
 
 ```yaml
 llm:
-  model: gpt-4o-mini          # o claude-sonnet-4-6, ollama/llama3, etc.
+  model: gpt-4o-mini          # or claude-sonnet-4-6, ollama/llama3, etc.
   api_key_env: LITELLM_API_KEY
   timeout: 60
   retries: 2
@@ -476,62 +476,62 @@ logging:
   verbose: 0
 ```
 
-### Variables de entorno
+### Environment Variables
 
-| Variable | Equivalente config | Descripción |
-|----------|--------------------|-------------|
-| `LITELLM_API_KEY` | `llm.api_key_env` | API key del proveedor LLM |
-| `ARCHITECT_MODEL` | `llm.model` | Modelo LLM |
-| `ARCHITECT_API_BASE` | `llm.api_base` | URL base de la API |
-| `ARCHITECT_LOG_LEVEL` | `logging.level` | Nivel de logging |
-| `ARCHITECT_WORKSPACE` | `workspace.root` | Directorio de trabajo |
+| Variable | Config equivalent | Description |
+|----------|-------------------|-------------|
+| `LITELLM_API_KEY` | `llm.api_key_env` | LLM provider API key |
+| `ARCHITECT_MODEL` | `llm.model` | LLM model |
+| `ARCHITECT_API_BASE` | `llm.api_base` | API base URL |
+| `ARCHITECT_LOG_LEVEL` | `logging.level` | Logging level |
+| `ARCHITECT_WORKSPACE` | `workspace.root` | Working directory |
 
 ---
 
-## Salida y códigos de salida
+## Output and Exit Codes
 
-**Separación stdout/stderr**:
-- Streaming del LLM → **stderr** (no rompe pipes)
-- Logs y progreso → **stderr**
-- Resultado final del agente → **stdout**
+**stdout/stderr separation**:
+- LLM streaming → **stderr** (doesn't break pipes)
+- Logs and progress → **stderr**
+- Agent's final result → **stdout**
 - `--json` output → **stdout**
 
 ```bash
-# Parsear resultado con jq
-architect run "resume el proyecto" --quiet --json | jq .status
+# Parse result with jq
+architect run "summarize the project" --quiet --json | jq .status
 
-# Capturar resultado, ver logs
-architect run "analiza main.py" -v 2>logs.txt
+# Capture result, view logs
+architect run "analyze main.py" -v 2>logs.txt
 
-# Solo resultado (sin logs)
-architect run "genera README" --quiet --mode yolo
+# Result only (no logs)
+architect run "generate README" --quiet --mode yolo
 ```
 
-**Códigos de salida**:
+**Exit codes**:
 
-| Código | Significado |
-|--------|-------------|
-| `0` | Éxito (`success`) |
-| `1` | Fallo del agente (`failed`) |
-| `2` | Parcial — hizo algo pero no completó (`partial`) |
-| `3` | Error de configuración |
-| `4` | Error de autenticación LLM |
+| Code | Meaning |
+|------|---------|
+| `0` | Success (`success`) |
+| `1` | Agent failure (`failed`) |
+| `2` | Partial — did something but didn't complete (`partial`) |
+| `3` | Configuration error |
+| `4` | LLM authentication error |
 | `5` | Timeout |
-| `130` | Interrumpido (Ctrl+C) |
+| `130` | Interrupted (Ctrl+C) |
 
 ---
 
-## Formato JSON (`--json`)
+## JSON Format (`--json`)
 
 ```bash
-architect run "analiza el proyecto" -a review --quiet --json
+architect run "analyze the project" -a review --quiet --json
 ```
 
 ```json
 {
   "status": "success",
   "stop_reason": null,
-  "output": "El proyecto consiste en...",
+  "output": "The project consists of...",
   "steps": 3,
   "tools_used": [
     {"name": "list_files", "success": true},
@@ -543,72 +543,72 @@ architect run "analiza el proyecto" -a review --quiet --json
 }
 ```
 
-**`stop_reason`**: indica por qué terminó el agente. `null` = terminó naturalmente. Otros valores: `max_steps`, `timeout`, `budget_exceeded`, `context_full`, `user_interrupt`, `llm_error`.
+**`stop_reason`**: indicates why the agent stopped. `null` = terminated naturally. Other values: `max_steps`, `timeout`, `budget_exceeded`, `context_full`, `user_interrupt`, `llm_error`.
 
-Cuando un watchdog activa (`max_steps`, `timeout`, etc.), el agente recibe una instrucción de cierre y hace una última llamada al LLM para resumir qué completó y qué queda pendiente antes de terminar.
+When a watchdog triggers (`max_steps`, `timeout`, etc.), the agent receives a shutdown instruction and makes one last LLM call to summarize what was completed and what remains pending before terminating.
 
 ---
 
 ## Logging
 
-Por defecto, architect muestra los pasos del agente en un formato legible con iconos:
+By default, architect displays agent steps in a human-readable format with icons:
 
 ```
-🔄 Paso 1 → Llamada al LLM (6 mensajes)
-   ✓ LLM respondió con 2 tool calls
+🔄 Step 1 → LLM call (6 messages)
+   ✓ LLM responded with 2 tool calls
 
    🔧 read_file → src/main.py
       ✓ OK
 
-   🔧 edit_file → src/main.py (3→5 líneas)
+   🔧 edit_file → src/main.py (3→5 lines)
       ✓ OK
       🔍 Hook ruff: ✓
 
-🔄 Paso 2 → Llamada al LLM (10 mensajes)
-   ✓ LLM respondió con texto final
+🔄 Step 2 → LLM call (10 messages)
+   ✓ LLM responded with final text
 
-✅ Agente completado (2 pasos)
-   Razón: LLM decidió que terminó
-   Coste: $0.0042
+✅ Agent completed (2 steps)
+   Reason: LLM decided it was done
+   Cost: $0.0042
 ```
 
-Las tools MCP se distinguen visualmente: `🌐 mcp_github_search → query (MCP: github)`
+MCP tools are visually distinguished: `🌐 mcp_github_search → query (MCP: github)`
 
 ```bash
-# Solo pasos legibles (default — nivel HUMAN)
+# Human-readable steps only (default — HUMAN level)
 architect run "..."
 
-# Nivel HUMAN + logs técnicos por step
+# HUMAN level + technical logs per step
 architect run "..." -v
 
-# Detalle completo (args, respuestas LLM)
+# Full detail (args, LLM responses)
 architect run "..." -vv
 
-# Todo (HTTP, payloads)
+# Everything (HTTP, payloads)
 architect run "..." -vvv
 
-# Sin logs (resultado solo)
+# No logs (result only)
 architect run "..." --quiet
 
-# Logs a archivo JSON + consola
+# Logs to JSON file + console
 architect run "..." -v --log-file logs/session.jsonl
 
-# Analizar logs después
+# Analyze logs afterwards
 cat logs/session.jsonl | jq 'select(.event == "tool.call")'
 ```
 
-**Pipelines de logging independientes**:
-- **HUMAN** (stderr, default): pasos, tool calls, hooks — formato legible con iconos, sin ruido técnico
-- **Técnico** (stderr, con `-v`): debug de LLM, tokens, retries — excluye mensajes HUMAN
-- **JSON file** (archivo, con `--log-file`): todos los eventos estructurados
+**Independent logging pipelines**:
+- **HUMAN** (stderr, default): steps, tool calls, hooks — readable format with icons, no technical noise
+- **Technical** (stderr, with `-v`): LLM debug, tokens, retries — excludes HUMAN messages
+- **JSON file** (file, with `--log-file`): all structured events
 
-Ver [`docs/logging.md`](docs/logging.md) para detalles de la arquitectura de logging.
+See [`docs/logging.md`](docs/logging.md) for logging architecture details.
 
 ---
 
-## Hooks del Lifecycle
+## Lifecycle Hooks
 
-Sistema completo de hooks que se ejecutan en 10 puntos del lifecycle del agente. Permiten interceptar, bloquear o modificar operaciones.
+Complete hook system that runs at 10 points in the agent lifecycle. Allows intercepting, blocking, or modifying operations.
 
 ```yaml
 hooks:
@@ -633,22 +633,22 @@ hooks:
     - command: "python scripts/post_run.py"
 ```
 
-**Eventos disponibles**: `pre_tool_use`, `post_tool_use`, `pre_llm_call`, `post_llm_call`, `session_start`, `session_end`, `on_error`, `budget_warning`, `context_compress`, `agent_complete`
+**Available events**: `pre_tool_use`, `post_tool_use`, `pre_llm_call`, `post_llm_call`, `session_start`, `session_end`, `on_error`, `budget_warning`, `context_compress`, `agent_complete`
 
-**Protocolo de exit codes**:
-- `0` = ALLOW (continuar; si stdout contiene JSON con `updatedInput`, se modifica el input)
-- `2` = BLOCK (abortar la operación)
-- Otro = error (warning en logs, se continúa)
+**Exit code protocol**:
+- `0` = ALLOW (continue; if stdout contains JSON with `updatedInput`, the input is modified)
+- `2` = BLOCK (abort the operation)
+- Other = error (warning in logs, execution continues)
 
-**Variables de entorno** inyectadas: `ARCHITECT_EVENT`, `ARCHITECT_TOOL`, `ARCHITECT_WORKSPACE`, `ARCHITECT_FILE` (si aplica)
+**Injected environment variables**: `ARCHITECT_EVENT`, `ARCHITECT_TOOL`, `ARCHITECT_WORKSPACE`, `ARCHITECT_FILE` (if applicable)
 
-**Backward compatible**: la sección `post_edit` sigue funcionando y se mapea a `post_tool_use` con matcher de tools de edición.
+**Backward compatible**: the `post_edit` section still works and maps to `post_tool_use` with editing tools matcher.
 
 ---
 
 ## Guardrails
 
-Capa de seguridad determinista evaluada **antes** que los hooks. No desactivable por el LLM.
+Deterministic security layer evaluated **before** hooks. Cannot be disabled by the LLM.
 
 ```yaml
 guardrails:
@@ -664,10 +664,10 @@ guardrails:
   code_rules:
     - pattern: "TODO|FIXME"
       severity: warn
-      message: "Código con TODOs pendientes"
+      message: "Code with pending TODOs"
     - pattern: "eval\\("
       severity: block
-      message: "eval() no permitido"
+      message: "eval() not allowed"
   quality_gates:
     - name: tests
       command: "pytest --tb=short -q"
@@ -677,51 +677,51 @@ guardrails:
       required: false
 ```
 
-**Quality gates**: se ejecutan cuando el agente declara completado. Si un gate `required` falla, el agente recibe feedback y sigue trabajando hasta que pase.
+**Quality gates**: executed when the agent declares completion. If a `required` gate fails, the agent receives feedback and keeps working until it passes.
 
 ---
 
-## Skills y .architect.md
+## Skills and .architect.md
 
-El agente carga automáticamente contexto de proyecto desde `.architect.md`, `AGENTS.md` o `CLAUDE.md` en la raíz del workspace e inyecta su contenido en el system prompt.
+The agent automatically loads project context from `.architect.md`, `AGENTS.md`, or `CLAUDE.md` in the workspace root and injects its content into the system prompt.
 
-**Skills especializadas** se descubren en `.architect/skills/` y `.architect/installed-skills/`:
+**Specialized skills** are discovered in `.architect/skills/` and `.architect/installed-skills/`:
 
 ```
 .architect/
 ├── skills/
 │   └── django/
-│       └── SKILL.md        # frontmatter YAML + contenido
+│       └── SKILL.md        # YAML frontmatter + content
 └── installed-skills/
     └── react-patterns/
         └── SKILL.md
 ```
 
-Cada `SKILL.md` puede tener un frontmatter YAML con `globs` para activarse solo cuando los archivos relevantes están en juego:
+Each `SKILL.md` can have a YAML frontmatter with `globs` to activate only when relevant files are in play:
 
 ```yaml
 ---
 name: django
-description: Patrones Django para el proyecto
+description: Django patterns for the project
 globs: ["*.py", "*/models.py", "*/views.py"]
 ---
-# Instrucciones para Django
-Usa class-based views siempre que sea posible...
+# Django Instructions
+Use class-based views whenever possible...
 ```
 
 ```bash
-# Gestión de skills
+# Skill management
 architect skill list
-architect skill create mi-skill
+architect skill create my-skill
 architect skill install github-user/repo/path/to/skill
-architect skill remove mi-skill
+architect skill remove my-skill
 ```
 
 ---
 
-## Memoria Procedural
+## Procedural Memory
 
-El agente detecta correcciones del usuario y las persiste entre sesiones en `.architect/memory.md`.
+The agent detects user corrections and persists them across sessions in `.architect/memory.md`.
 
 ```yaml
 memory:
@@ -729,36 +729,36 @@ memory:
   auto_detect_corrections: true
 ```
 
-Cuando el usuario corrige al agente (ej. "no uses print, usa logging"), el patrón se guarda y se inyecta en futuras sesiones como contexto adicional en el system prompt.
+When the user corrects the agent (e.g., "don't use print, use logging"), the pattern is saved and injected in future sessions as additional context in the system prompt.
 
-El archivo `.architect/memory.md` es editable manualmente y sigue el formato:
+The `.architect/memory.md` file is manually editable and follows the format:
 ```
-- [2026-02-22] correction: No usar print(), usar logging
-- [2026-02-22] pattern: Siempre ejecutar tests después de editar
+- [2026-02-22] correction: Don't use print(), use logging
+- [2026-02-22] pattern: Always run tests after editing
 ```
 
 ---
 
-## Control de costes
+## Cost Control
 
 ```yaml
 costs:
-  budget_usd: 2.0         # Detiene el agente si supera $2
-  warn_at_usd: 1.5        # Avisa en logs al llegar a $1.5
+  budget_usd: 2.0         # Stops the agent if it exceeds $2
+  warn_at_usd: 1.5        # Warns in logs when reaching $1.5
 ```
 
 ```bash
-# Límite de presupuesto por CLI
+# Budget limit via CLI
 architect run "..." --budget 1.0
 ```
 
-El coste acumulado aparece en el output `--json` bajo `costs` y con `--show-costs` al final de la ejecución (funciona tanto en modo streaming como sin streaming). Cuando se supera el presupuesto, el agente recibe una instrucción de cierre y hace un último resumen antes de terminar (`stop_reason: "budget_exceeded"`).
+Accumulated cost appears in the `--json` output under `costs` and with `--show-costs` at the end of execution (works with both streaming and non-streaming modes). When the budget is exceeded, the agent receives a shutdown instruction and produces one last summary before terminating (`stop_reason: "budget_exceeded"`).
 
 ---
 
 ## MCP (Model Context Protocol)
 
-Conecta architect a herramientas remotas vía HTTP:
+Connect architect to remote tools via HTTP:
 
 ```yaml
 mcp:
@@ -772,104 +772,104 @@ mcp:
       token_env: DB_TOKEN
 ```
 
-Las tools MCP se descubren automáticamente al iniciar y se inyectan en el `allowed_tools` del agente activo (no necesitas listarlas en la config del agente). Son indistinguibles de las tools locales para el LLM. Si un servidor no está disponible, el agente continúa sin esas tools.
+MCP tools are automatically discovered at startup and injected into the active agent's `allowed_tools` (no need to list them in the agent config). They are indistinguishable from local tools for the LLM. If a server is unavailable, the agent continues without those tools.
 
 ```bash
-# Con MCP
-architect run "abre un PR con los cambios" --mode yolo
+# With MCP
+architect run "open a PR with the changes" --mode yolo
 
-# Sin MCP
-architect run "analiza el proyecto" --disable-mcp
+# Without MCP
+architect run "analyze the project" --disable-mcp
 ```
 
 ---
 
-## Sesiones y Resume
+## Sessions and Resume
 
-El agente guarda su estado automáticamente después de cada paso. Si una ejecución se interrumpe (Ctrl+C, timeout, error), puedes reanudarla:
+The agent automatically saves its state after each step. If an execution is interrupted (Ctrl+C, timeout, error), you can resume it:
 
 ```bash
-# Ejecutar una tarea larga
-architect run "refactoriza todo el módulo de auth" --budget 5.0
-# → Interrumpido por timeout o Ctrl+C
+# Run a long task
+architect run "refactor the entire auth module" --budget 5.0
+# → Interrupted by timeout or Ctrl+C
 
-# Ver sesiones guardadas
+# View saved sessions
 architect sessions
 # ID                     Status       Steps  Cost    Task
-# 20260223-143022-a1b2   interrupted  12     $1.23   refactoriza todo el módulo de auth
+# 20260223-143022-a1b2   interrupted  12     $1.23   refactor the entire auth module
 
-# Reanudar donde se quedó
+# Resume where it left off
 architect resume 20260223-143022-a1b2
 
-# Limpiar sesiones antiguas
+# Clean up old sessions
 architect cleanup --older-than 7
 ```
 
-Las sesiones se guardan en `.architect/sessions/` como archivos JSON. Mensajes largos (>50) se truncan automáticamente a los últimos 30 para mantener el tamaño manejable.
+Sessions are saved in `.architect/sessions/` as JSON files. Long messages (>50) are automatically truncated to the last 30 to keep the size manageable.
 
 ---
 
-## Reportes de ejecución
+## Execution Reports
 
-Genera reportes detallados de lo que hizo el agente, en tres formatos:
+Generate detailed reports of what the agent did, in three formats:
 
 ```bash
-# Reporte JSON (ideal para CI/CD)
-architect run "añade tests" --mode yolo --report json
+# JSON report (ideal for CI/CD)
+architect run "add tests" --mode yolo --report json
 
-# Reporte Markdown (para documentación)
-architect run "refactoriza utils" --mode yolo --report markdown --report-file report.md
+# Markdown report (for documentation)
+architect run "refactor utils" --mode yolo --report markdown --report-file report.md
 
-# Comentario GitHub PR (con secciones collapsible)
-architect run "revisa los cambios" --mode yolo --report github --report-file pr-comment.md
+# GitHub PR comment (with collapsible sections)
+architect run "review the changes" --mode yolo --report github --report-file pr-comment.md
 ```
 
-El reporte incluye: resumen (tarea, agente, modelo, status, duración, pasos, coste), archivos modificados con líneas añadidas/eliminadas, quality gates ejecutados, errores encontrados, timeline de cada paso y git diff.
+The report includes: summary (task, agent, model, status, duration, steps, cost), modified files with added/removed lines, executed quality gates, errors found, timeline of each step, and git diff.
 
 ---
 
-## Ralph Loop (Iteración Automática)
+## Ralph Loop (Automatic Iteration)
 
-El Ralph Loop ejecuta un agente iterativamente hasta que todos los checks pasen. Cada iteración usa un **contexto limpio** — el agente recibe solamente:
+The Ralph Loop runs an agent iteratively until all checks pass. Each iteration uses a **clean context** — the agent receives only:
 
-1. La spec original (archivo o prompt)
-2. El diff acumulado de todas las iteraciones anteriores
-3. Los errores de checks de la iteración anterior
-4. Un `progress.md` auto-generado con el historial
+1. The original spec (file or prompt)
+2. The accumulated diff from all previous iterations
+3. Check errors from the previous iteration
+4. An auto-generated `progress.md` with history
 
 ```bash
-# Iterar hasta que tests y lint pasen
-architect loop "implementa autenticación JWT" \
+# Iterate until tests and lint pass
+architect loop "implement JWT authentication" \
   --check "pytest tests/test_auth.py" \
   --check "ruff check src/auth/" \
   --max-iterations 5 \
   --max-cost 3.0
 
-# Con spec file detallado
-architect loop "implementar según spec" \
+# With detailed spec file
+architect loop "implement per spec" \
   --spec requirements/auth-spec.md \
   --check "pytest" \
   --worktree
 ```
 
-**Safety nets**: El loop se detiene si se agotan las iteraciones (`max_iterations`), el coste (`max_cost`) o el tiempo (`max_time`). El resultado indica el motivo de parada.
+**Safety nets**: The loop stops if iterations (`max_iterations`), cost (`max_cost`), or time (`max_time`) are exhausted. The result indicates the stop reason.
 
-**Worktree**: Con `--worktree`, el loop ejecuta en un git worktree aislado. Si todos los checks pasan, el resultado incluye la ruta al worktree para inspección o merge.
+**Worktree**: With `--worktree`, the loop runs in an isolated git worktree. If all checks pass, the result includes the worktree path for inspection or merge.
 
 ---
 
-## Pipeline Mode (Workflows Multi-Step)
+## Pipeline Mode (Multi-Step Workflows)
 
-Los pipelines definen workflows secuenciales donde cada paso puede tener su propio agente, modelo, checks y configuración.
+Pipelines define sequential workflows where each step can have its own agent, model, checks, and configuration.
 
-**Características**:
-- **Variables**: `{{nombre}}` en prompts, sustituidas desde `--var` o desde `output_var` de steps anteriores
-- **Condiciones**: `condition` evalúa una expresión; el step se salta si es falsa
-- **Output variables**: `output_var` captura la salida de un step como variable para los siguientes
-- **Checks**: comandos shell post-step que verifican el resultado
-- **Checkpoints**: `checkpoint: true` crea un git commit automático al completar el step
-- **Resume**: `--from-step` permite reanudar un pipeline desde un step específico
-- **Dry-run**: `--dry-run` muestra el plan sin ejecutar agentes
+**Features**:
+- **Variables**: `{{name}}` in prompts, substituted from `--var` or from `output_var` of previous steps
+- **Conditions**: `condition` evaluates an expression; the step is skipped if false
+- **Output variables**: `output_var` captures a step's output as a variable for subsequent steps
+- **Checks**: post-step shell commands that verify the result
+- **Checkpoints**: `checkpoint: true` creates an automatic git commit upon step completion
+- **Resume**: `--from-step` allows resuming a pipeline from a specific step
+- **Dry-run**: `--dry-run` shows the plan without executing agents
 
 ```yaml
 # pipeline.yaml
@@ -877,12 +877,12 @@ name: feature-pipeline
 steps:
   - name: plan
     agent: plan
-    prompt: "Planifica cómo implementar {{feature}}"
+    prompt: "Plan how to implement {{feature}}"
     output_var: plan_output
 
   - name: implement
     agent: build
-    prompt: "Ejecuta este plan: {{plan_output}}"
+    prompt: "Execute this plan: {{plan_output}}"
     model: gpt-4o
     checks:
       - "pytest tests/ -q"
@@ -890,7 +890,7 @@ steps:
 
   - name: review
     agent: review
-    prompt: "Revisa la implementación de {{feature}}"
+    prompt: "Review the implementation of {{feature}}"
     condition: "run_review == 'true'"
 ```
 
@@ -902,81 +902,81 @@ architect pipeline pipeline.yaml \
 
 ---
 
-## Ejecución Paralela
+## Parallel Execution
 
-Ejecuta múltiples tareas en paralelo, cada una en un git worktree aislado con `ProcessPoolExecutor`.
+Run multiple tasks in parallel, each in an isolated git worktree with `ProcessPoolExecutor`.
 
 ```bash
 architect parallel \
-  --task "añade tests unitarios a auth.py" \
-  --task "añade tests unitarios a users.py" \
-  --task "añade tests unitarios a billing.py" \
+  --task "add unit tests to auth.py" \
+  --task "add unit tests to users.py" \
+  --task "add unit tests to billing.py" \
   --workers 3 \
   --budget-per-worker 2.0
 ```
 
-Cada worker:
-- Se ejecuta en un git worktree independiente (aislamiento total)
-- Puede usar un modelo diferente (con `--models` se asignan round-robin)
-- Tiene su propio budget y timeout
-- El resultado incluye archivos modificados, coste, duración y ruta al worktree
+Each worker:
+- Runs in an independent git worktree (total isolation)
+- Can use a different model (with `--models` they are assigned round-robin)
+- Has its own budget and timeout
+- The result includes modified files, cost, duration, and worktree path
 
 ```bash
-# Limpiar worktrees después
+# Clean up worktrees afterwards
 architect parallel-cleanup
 ```
 
 ---
 
-## Checkpoints y Rollback
+## Checkpoints and Rollback
 
-Los checkpoints son git commits con prefijo especial (`architect:checkpoint`) que permiten restaurar el workspace a un punto anterior. Se crean automáticamente en pipelines (con `checkpoint: true`) y pueden usarse en el Ralph Loop.
+Checkpoints are git commits with a special prefix (`architect:checkpoint`) that allow restoring the workspace to a previous point. They are created automatically in pipelines (with `checkpoint: true`) and can be used in the Ralph Loop.
 
 ```bash
-# Los checkpoints se crean automáticamente en pipelines con checkpoint: true
-# Para ver checkpoints creados:
+# Checkpoints are created automatically in pipelines with checkpoint: true
+# To view created checkpoints:
 git log --oneline --grep="architect:checkpoint"
 ```
 
-El `CheckpointManager` permite:
-- **Crear** checkpoints (stage all + commit con prefijo)
-- **Listar** checkpoints existentes parseando `git log`
-- **Rollback** a un checkpoint específico (por step o commit hash)
-- **Verificar** si hay cambios desde un checkpoint
+The `CheckpointManager` allows:
+- **Creating** checkpoints (stage all + commit with prefix)
+- **Listing** existing checkpoints by parsing `git log`
+- **Rolling back** to a specific checkpoint (by step or commit hash)
+- **Verifying** if there are changes since a checkpoint
 
 ---
 
 ## Auto-Review
 
-Después de una ejecución de build, un reviewer con **contexto limpio** puede inspeccionar los cambios. El reviewer recibe solo el diff y la tarea original — sin historial del builder — y tiene acceso exclusivo a tools de lectura.
+After a build execution, a reviewer with **clean context** can inspect the changes. The reviewer receives only the diff and the original task — without the builder's history — and has exclusive access to read-only tools.
 
 ```yaml
-# Activar auto-review en config
+# Enable auto-review in config
 auto_review:
   enabled: true
   model: gpt-4o
 ```
 
-El reviewer busca:
-- Bugs y errores lógicos
-- Problemas de seguridad
-- Violaciones de convenciones del proyecto
-- Mejoras de rendimiento o legibilidad
-- Tests faltantes
+The reviewer looks for:
+- Bugs and logic errors
+- Security issues
+- Project convention violations
+- Performance or readability improvements
+- Missing tests
 
-Si encuentra issues, genera un prompt de corrección que puede alimentar al builder para un fix-pass.
+If issues are found, it generates a correction prompt that can feed the builder for a fix-pass.
 
 ---
 
 ## Code Health Delta
 
-Análisis automático de métricas de calidad del código antes y después de una ejecución. Muestra un delta de complejidad ciclomática, funciones largas, duplicados y más.
+Automatic code quality metrics analysis before and after an execution. Shows a delta of cyclomatic complexity, long functions, duplicates, and more.
 
 ```bash
-# Activar con flag
-architect run "refactoriza el módulo de auth" --health
+# Enable with flag
+architect run "refactor the auth module" --health
 
-# O activar permanentemente en config
+# Or enable permanently in config
 ```
 
 ```yaml
@@ -986,106 +986,106 @@ health:
   exclude_dirs: [".git", "venv", "__pycache__"]
 ```
 
-**Métricas analizadas**:
-- Complejidad ciclomática (requiere `radon` instalado, fallback a AST si no)
-- Líneas por función
-- Funciones nuevas/eliminadas
-- Bloques de código duplicado (ventana de 6 líneas, hash MD5)
-- Funciones largas (>50 líneas)
-- Funciones complejas (>10 de complejidad)
+**Analyzed metrics**:
+- Cyclomatic complexity (requires `radon` installed, falls back to AST if not)
+- Lines per function
+- New/removed functions
+- Duplicate code blocks (6-line sliding window, MD5 hash)
+- Long functions (>50 lines)
+- Complex functions (>10 complexity)
 
-El reporte se muestra en stderr al finalizar la ejecución como tabla markdown con indicadores de mejora/degradación.
+The report is displayed on stderr at the end of execution as a markdown table with improvement/degradation indicators.
 
 ---
 
-## Evaluación Competitiva
+## Competitive Evaluation
 
-La evaluación competitiva ejecuta la misma tarea con múltiples modelos y genera un ranking basado en calidad, eficiencia y coste.
+Competitive evaluation runs the same task with multiple models and generates a ranking based on quality, efficiency, and cost.
 
 ```bash
-architect eval "implementa autenticación JWT" \
+architect eval "implement JWT authentication" \
   --models gpt-4o,claude-sonnet-4-6 \
   --check "pytest tests/" \
   --check "ruff check src/" \
   --budget-per-model 1.0
 ```
 
-Cada modelo se ejecuta en un git worktree aislado (reutiliza la infraestructura de `ParallelRunner`). Después de la ejecución, se corren los checks en cada worktree y se genera un ranking comparativo.
+Each model runs in an isolated git worktree (reuses `ParallelRunner` infrastructure). After execution, checks are run in each worktree and a comparative ranking is generated.
 
-**Reporte generado**: tabla con status, pasos, coste, tiempo, checks pasados y puntuación compuesta. Los worktrees permanecen para inspección manual.
+**Generated report**: table with status, steps, cost, time, passed checks, and composite score. Worktrees remain for manual inspection.
 
 ---
 
-## Sub-Agentes (Dispatch)
+## Sub-Agents (Dispatch)
 
-El agente principal puede delegar sub-tareas especializadas mediante la tool `dispatch_subagent`. Cada sub-agente se ejecuta con un `AgentLoop` fresco con contexto aislado y tools limitadas.
+The main agent can delegate specialized sub-tasks via the `dispatch_subagent` tool. Each sub-agent runs with a fresh `AgentLoop` with isolated context and limited tools.
 
-**Tipos de sub-agente**:
+**Sub-agent types**:
 
-| Tipo | Tools disponibles | Uso |
-|------|-------------------|-----|
-| `explore` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | Investigar código, buscar patrones |
-| `test` | Explore + `run_command` | Ejecutar tests, verificar comportamiento |
-| `review` | Explore (solo lectura) | Revisar código, análisis de calidad |
+| Type | Available tools | Use case |
+|------|----------------|----------|
+| `explore` | `read_file`, `list_files`, `search_code`, `grep`, `find_files` | Investigate code, search patterns |
+| `test` | Explore + `run_command` | Run tests, verify behavior |
+| `review` | Explore (read-only) | Review code, quality analysis |
 
-Cada sub-agente tiene un máximo de 15 pasos y su resumen se trunca a 1000 caracteres para evitar contaminar el contexto del agente principal.
+Each sub-agent has a maximum of 15 steps and its summary is truncated to 1000 characters to avoid polluting the main agent's context.
 
 ---
 
 ## OpenTelemetry Traces
 
-Trazabilidad opcional con OpenTelemetry para monitorear sesiones, llamadas LLM y ejecución de tools.
+Optional traceability with OpenTelemetry for monitoring sessions, LLM calls, and tool execution.
 
 ```yaml
 telemetry:
   enabled: true
   exporter: otlp          # otlp | console | json-file
   endpoint: http://localhost:4317
-  trace_file: .architect/traces.json  # para json-file
+  trace_file: .architect/traces.json  # for json-file
 ```
 
-**Exportadores soportados**:
-- **otlp**: Envía spans vía gRPC (compatible con Jaeger, Grafana Tempo, etc.)
-- **console**: Imprime spans en stderr (debugging)
-- **json-file**: Escribe spans en archivo JSON
+**Supported exporters**:
+- **otlp**: Sends spans via gRPC (compatible with Jaeger, Grafana Tempo, etc.)
+- **console**: Prints spans to stderr (debugging)
+- **json-file**: Writes spans to a JSON file
 
-**Atributos semánticos** (GenAI Semantic Conventions):
+**Semantic attributes** (GenAI Semantic Conventions):
 - `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cost`
 - `architect.task`, `architect.agent`, `architect.session_id`, `architect.tool_name`
 
-**Dependencias opcionales**: `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp`. Si no están instaladas, se usa un `NoopTracer` transparente sin impacto en rendimiento.
+**Optional dependencies**: `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp`. If not installed, a transparent `NoopTracer` with no performance impact is used.
 
 ---
 
-## Presets de configuración
+## Configuration Presets
 
-Los presets generan `.architect.md` y `config.yaml` con configuraciones predefinidas según el tipo de proyecto.
+Presets generate `.architect.md` and `config.yaml` with predefined configurations based on project type.
 
 ```bash
-# Ver presets disponibles
+# View available presets
 architect init --list-presets
 
-# Inicializar para proyecto Python
+# Initialize for Python project
 architect init --preset python
-# → Crea .architect.md (convenciones) + config.yaml (hooks: ruff, mypy)
+# → Creates .architect.md (conventions) + config.yaml (hooks: ruff, mypy)
 
-# Modo paranoid (máxima seguridad)
+# Paranoid mode (maximum security)
 architect init --preset paranoid
-# → confirm-all, max 20 steps, code rules estrictos, quality gates
+# → confirm-all, max 20 steps, strict code rules, quality gates
 ```
 
-Los archivos generados son editables — sirven como punto de partida. Con `--overwrite` se reemplazan archivos existentes.
+Generated files are editable — they serve as a starting point. Use `--overwrite` to replace existing files.
 
 ---
 
-## Uso en CI/CD
+## CI/CD Usage
 
-### Ejemplo básico — GitHub Actions
+### Basic Example — GitHub Actions
 
 ```yaml
-- name: Refactorizar código
+- name: Refactor code
   run: |
-    architect run "actualiza los imports obsoletos en src/" \
+    architect run "update obsolete imports in src/" \
       --mode yolo \
       --quiet \
       --json \
@@ -1093,28 +1093,28 @@ Los archivos generados son editables — sirven como punto de partida. Con `--ov
       -c ci/architect.yaml \
     | tee result.json
 
-- name: Verificar resultado
+- name: Verify result
   run: |
     STATUS=$(cat result.json | jq -r .status)
     if [ "$STATUS" != "success" ]; then
-      echo "architect falló con status: $STATUS ($(cat result.json | jq -r .stop_reason))"
+      echo "architect failed with status: $STATUS ($(cat result.json | jq -r .stop_reason))"
       exit 1
     fi
 ```
 
-### Ejemplo avanzado — con reportes, dry-run y git diff
+### Advanced Example — with reports, dry-run, and git diff
 
 ```yaml
-- name: Dry run primero (ver qué haría)
+- name: Dry run first (see what it would do)
   run: |
-    architect run "añade docstrings a todas las funciones" \
+    architect run "add docstrings to all functions" \
       --dry-run \
       --confirm-mode yolo \
       --json
 
-- name: Ejecutar con contexto del PR
+- name: Execute with PR context
   run: |
-    architect run "revisa y mejora los cambios de este PR" \
+    architect run "review and improve this PR's changes" \
       --confirm-mode yolo \
       --context-git-diff origin/main \
       --report github \
@@ -1123,12 +1123,12 @@ Los archivos generados son editables — sirven como punto de partida. Con `--ov
       --timeout 600 \
       --exit-code-on-partial 0
 
-- name: Comentar en PR
+- name: Comment on PR
   if: always()
   run: gh pr comment $PR_NUMBER --body-file pr-report.md
 ```
 
-### Config para CI
+### CI Config
 
 ```yaml
 # ci/architect.yaml
@@ -1154,19 +1154,19 @@ hooks:
 
 ---
 
-## Seguridad
+## Security
 
-- **Path traversal**: todas las operaciones de archivos están confinadas al `workspace.root`. Intentos de acceder a `../../etc/passwd` son bloqueados.
-- **delete_file** requiere `workspace.allow_delete: true` explícito en config.
-- **run_command**: blocklist de comandos destructivos (`rm -rf /`, `sudo`, `dd`, `mkfs`, `curl|bash`, etc.) activa siempre, independientemente del modo de confirmación. Clasificación dinámica (safe/dev/dangerous) para políticas de confirmación en modos `confirm-sensitive` y `confirm-all`. El directorio de trabajo está siempre confinado al workspace.
-- **Tools MCP** son marcadas como sensibles por defecto (requieren confirmación en `confirm-sensitive`).
-- **API keys** nunca se loggean, solo el nombre de la variable de entorno.
+- **Path traversal**: all file operations are confined to `workspace.root`. Attempts to access `../../etc/passwd` are blocked.
+- **delete_file** requires explicit `workspace.allow_delete: true` in config.
+- **run_command**: destructive commands blocklist (`rm -rf /`, `sudo`, `dd`, `mkfs`, `curl|bash`, etc.) always active, regardless of confirmation mode. Dynamic classification (safe/dev/dangerous) for confirmation policies in `confirm-sensitive` and `confirm-all` modes. Working directory is always confined to the workspace.
+- **MCP tools** are marked as sensitive by default (require confirmation in `confirm-sensitive`).
+- **API keys** are never logged, only the environment variable name.
 
 ---
 
-## Proveedores LLM soportados
+## Supported LLM Providers
 
-Cualquier proveedor soportado por [LiteLLM](https://docs.litellm.ai/docs/providers):
+Any provider supported by [LiteLLM](https://docs.litellm.ai/docs/providers):
 
 ```bash
 # OpenAI
@@ -1178,104 +1178,110 @@ LITELLM_API_KEY=sk-ant-... architect run "..." --model claude-sonnet-4-6
 # Google Gemini
 LITELLM_API_KEY=... architect run "..." --model gemini/gemini-2.0-flash
 
-# Ollama (local, sin API key)
+# Ollama (local, no API key)
 architect run "..." --model ollama/llama3 --api-base http://localhost:11434
 
-# LiteLLM Proxy (para equipos)
+# LiteLLM Proxy (for teams)
 architect run "..." --api-base http://proxy.internal:8000
 ```
 
 ---
 
-## Arquitectura
+## Architecture
 
 ```
 architect run PROMPT
     │
     ├── load_config()          YAML + env vars + CLI flags
-    ├── configure_logging()    3 pipelines: HUMAN + técnico + JSON file
-    ├── ToolRegistry           tools locales (fs, edición, búsqueda, run_command) + MCP remotas
-    ├── RepoIndexer            árbol del workspace → inyectado en system prompt
-    ├── LLMAdapter             LiteLLM con retries selectivos + prompt caching
+    ├── configure_logging()    3 pipelines: HUMAN + technical + JSON file
+    ├── ToolRegistry           local tools (fs, editing, search, run_command) + remote MCP
+    ├── RepoIndexer            workspace tree → injected into system prompt
+    ├── LLMAdapter             LiteLLM with selective retries + prompt caching
     ├── ContextManager         pruning: compress + enforce_window + is_critically_full
-    ├── HookExecutor           10 eventos del lifecycle, exit code protocol
-    ├── GuardrailsEngine       seguridad determinista (before hooks)
-    ├── SkillsLoader           .architect.md + skills por glob
-    ├── ProceduralMemory       correcciones del usuario entre sesiones
-    ├── CostTracker            coste acumulado + watchdog de presupuesto
-    ├── SessionManager         persistencia de sesiones (save/load/resume)
-    ├── DryRunTracker          registro de acciones sin ejecutar (--dry-run)
-    ├── CheckpointManager      git commits con rollback (architect:checkpoint)
-    ├── ArchitectTracer        OpenTelemetry spans (session/llm/tool) o NoopTracer
-    ├── CodeHealthAnalyzer     métricas de calidad antes/después (--health)
+    ├── HookExecutor           10 lifecycle events, exit code protocol
+    ├── GuardrailsEngine       deterministic security (before hooks)
+    ├── SkillsLoader           .architect.md + skills by glob
+    ├── ProceduralMemory       user corrections across sessions
+    ├── CostTracker            accumulated cost + budget watchdog
+    ├── SessionManager         session persistence (save/load/resume)
+    ├── DryRunTracker          action recording without execution (--dry-run)
+    ├── CheckpointManager      git commits with rollback (architect:checkpoint)
+    ├── ArchitectTracer        OpenTelemetry spans (session/llm/tool) or NoopTracer
+    ├── CodeHealthAnalyzer     quality metrics before/after (--health)
     │
-    ├── RalphLoop              iteración automática hasta que checks pasen
-    │       └── agent_factory() → AgentLoop fresco por iteración (contexto limpio)
-    ├── PipelineRunner         workflows YAML multi-step con variables/condiciones
-    │       └── agent_factory() → AgentLoop fresco por step
-    ├── ParallelRunner         ejecución paralela en git worktrees aislados
-    │       └── ProcessPoolExecutor → workers con `architect run` en worktrees
-    ├── CompetitiveEval        evaluación comparativa multi-modelo sobre ParallelRunner
-    ├── AutoReviewer           review post-build con contexto limpio (solo diff + tarea)
-    ├── PresetManager          generación de .architect.md + config.yaml desde presets
-    ├── DispatchSubagentTool   delegación de sub-tareas (explore/test/review)
+    ├── RalphLoop              automatic iteration until checks pass
+    │       └── agent_factory() → fresh AgentLoop per iteration (clean context)
+    ├── PipelineRunner         multi-step YAML workflows with variables/conditions
+    │       └── agent_factory() → fresh AgentLoop per step
+    ├── ParallelRunner         parallel execution in isolated git worktrees
+    │       └── ProcessPoolExecutor → workers with `architect run` in worktrees
+    ├── CompetitiveEval        comparative multi-model evaluation over ParallelRunner
+    ├── AutoReviewer           post-build review with clean context (diff + task only)
+    ├── PresetManager          .architect.md + config.yaml generation from presets
+    ├── DispatchSubagentTool   sub-task delegation (explore/test/review)
     │
-    └── AgentLoop (while True — el LLM decide cuándo parar)
+    └── AgentLoop (while True — the LLM decides when to stop)
             │
             ├── _check_safety_nets()   max_steps / budget / timeout / context_full
-            │       └── si salta → _graceful_close(): última LLM call sin tools
-            │                         el agente resume qué hizo y qué queda pendiente
-            ├── context_manager.manage()     compress + enforce_window si necesario
-            ├── hooks: pre_llm_call          → interceptar antes de LLM
-            ├── llm.completion()             → streaming chunks a stderr
-            ├── hooks: post_llm_call         → interceptar después de LLM
-            ├── si no hay tool_calls         → LLM_DONE, fin natural
-            ├── guardrails.check()           → seguridad determinista (antes de hooks)
+            │       └── if triggered → _graceful_close(): last LLM call without tools
+            │                         agent summarizes what was done and what remains
+            ├── context_manager.manage()     compress + enforce_window if needed
+            ├── hooks: pre_llm_call          → intercept before LLM
+            ├── llm.completion()             → streaming chunks to stderr
+            ├── hooks: post_llm_call         → intercept after LLM
+            ├── if no tool_calls             → LLM_DONE, natural end
+            ├── guardrails.check()           → deterministic security (before hooks)
             ├── hooks: pre_tool_use          → ALLOW / BLOCK / MODIFY
-            ├── engine.execute_tool_calls()  → paralelo si posible → confirmar → ejecutar
-            ├── hooks: post_tool_use         → lint/test → feedback al LLM si falla
-            └── repetir
+            ├── engine.execute_tool_calls()  → parallel if possible → confirm → execute
+            ├── hooks: post_tool_use         → lint/test → feedback to LLM if fails
+            └── repeat
 ```
 
-**Razones de parada** (`stop_reason` en el output JSON):
+**Stop reasons** (`stop_reason` in JSON output):
 
-| Razón | Descripción |
-|-------|-------------|
-| `null` / `llm_done` | El LLM decidió que terminó (terminación natural) |
-| `max_steps` | Watchdog: límite de pasos alcanzado |
-| `budget_exceeded` | Watchdog: límite de coste superado |
-| `context_full` | Watchdog: context window lleno (>95%) |
-| `timeout` | Watchdog: tiempo total excedido |
-| `user_interrupt` | El usuario hizo Ctrl+C / SIGTERM (corte inmediato) |
-| `llm_error` | Error irrecuperable del LLM |
+| Reason | Description |
+|--------|-------------|
+| `null` / `llm_done` | The LLM decided it was done (natural termination) |
+| `max_steps` | Watchdog: step limit reached |
+| `budget_exceeded` | Watchdog: cost limit exceeded |
+| `context_full` | Watchdog: context window full (>95%) |
+| `timeout` | Watchdog: total time exceeded |
+| `user_interrupt` | User pressed Ctrl+C / SIGTERM (immediate cut) |
+| `llm_error` | Unrecoverable LLM error |
 
-**Decisiones de diseño**:
-- Sync-first (predecible, debuggable; el loop principal es ~300 líneas sin magia)
-- Sin LangChain/LangGraph (el loop es directo y controlado)
-- Pydantic v2 como fuente de verdad para schemas y validación
-- Errores de tools devueltos al LLM como resultado (no rompen el loop)
-- stdout limpio para pipes, todo lo demás a stderr
-- Watchdogs piden cierre limpio — el agente nunca termina a mitad de frase
+**Design decisions**:
+- Sync-first (predictable, debuggable; the main loop is ~300 lines without magic)
+- No LangChain/LangGraph (the loop is direct and controlled)
+- Pydantic v2 as the source of truth for schemas and validation
+- Tool errors returned to the LLM as results (don't break the loop)
+- Clean stdout for pipes, everything else to stderr
+- Watchdogs request graceful shutdown — the agent never terminates mid-sentence
 
 ---
 
-## Historial de versiones
+## Version History
 
-| Versión | Funcionalidad |
-|---------|---------------|
-| v0.9.0 | **Edición incremental**: `edit_file` (str-replace exacto) y `apply_patch` (unified diff) |
-| v0.10.0 | **Indexer + búsqueda**: árbol del repo en el system prompt, `search_code`, `grep`, `find_files` |
-| v0.11.0 | **Context management**: truncado de tool results, compresión de pasos con LLM, hard limit, parallel tool calls |
-| v0.12.0 | **Self-evaluation**: `--self-eval basic/full` evalúa y reintenta automáticamente |
-| v0.13.0 | **`run_command`**: ejecución de comandos (tests, linters) con 4 capas de seguridad |
+| Version | Features |
+|---------|----------|
+| v0.9.0 | **Incremental editing**: `edit_file` (exact str-replace) and `apply_patch` (unified diff) |
+| v0.10.0 | **Indexer + search**: repo tree in system prompt, `search_code`, `grep`, `find_files` |
+| v0.11.0 | **Context management**: tool result truncation, step compression with LLM, hard limit, parallel tool calls |
+| v0.12.0 | **Self-evaluation**: `--self-eval basic/full` evaluates and retries automatically |
+| v0.13.0 | **`run_command`**: command execution (tests, linters) with 4 security layers |
 | v0.14.0 | **Cost tracking**: `CostTracker`, `--budget`, prompt caching, `LocalLLMCache` |
-| v0.15.0 | **v3-core** — rediseño del núcleo: `while True` loop, safety nets con cierre limpio, `PostEditHooks`, nivel de log HUMAN, `StopReason`, `ContextManager.manage()` |
-| v0.15.2 | **Human logging con iconos** — formato visual alineado con plan v3: 🔄🔧🌐✅⚡❌📦🔍, distinción MCP, eventos nuevos (`llm_response`), coste en completado |
-| v0.15.3 | **Fix pipeline structlog** — human logging funciona sin `--log-file`; `wrap_for_formatter` siempre activo |
-| v0.16.0 | **v4 Phase A** — hooks lifecycle (10 eventos, exit code protocol), guardrails deterministas, skills ecosystem (.architect.md), memoria procedural |
-| v0.16.1 | **QA Phase A** — 228 verificaciones, 5 bugs corregidos (ToolResult import, CostTracker.total, YAML off, schema shadowing), 24 scripts alineados |
-| v0.16.2 | **QA2** — `--show-costs` funciona con streaming, `--mode yolo` nunca pide confirmación (ni para `dangerous`), `--timeout` es watchdog de sesión (no sobreescribe `llm.timeout`), MCP tools auto-inyectadas en `allowed_tools`, `get_schemas` defensivo |
-| v0.17.0 | **v4 Phase B** — sesiones persistentes con resume, reportes multi-formato (JSON/Markdown/GitHub PR), 10 flags CI/CD nativos (`--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`), dry-run/preview mode, 3 nuevos comandos (`sessions`, `resume`, `cleanup`) |
-| v0.18.0 | **v4 Phase C** — Ralph Loop (iteración automática con checks), Pipeline Mode (workflows YAML multi-step con variables, condiciones, checkpoints), ejecución paralela en worktrees git, checkpoints con rollback, auto-review post-build con contexto limpio, 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
-| v0.19.0 | **v4 Phase D** — Evaluación competitiva multi-modelo (`architect eval`), inicialización por presets (`architect init` con 5 presets), análisis de salud del código (`--health` con delta de complejidad/duplicados), sub-agentes delegados (`dispatch_subagent` con tipos explore/test/review), trazabilidad OpenTelemetry (session/llm/tool spans), 7 bugfixes de QA (code_rules pre-ejecución, dispatch wiring, telemetry wiring, health wiring, parallel config propagation) |
-| **v1.0.0** | **Release estable** — Primera versión pública. Culminación de Plan V4 (Phases A+B+C+D) sobre core v3. 15 comandos CLI, 11+ tools, 4 agentes, hooks + guardrails + skills + memoria, sesiones + reportes + CI/CD, Ralph Loop + pipelines + parallel + checkpoints + auto-review, sub-agentes + health + eval + telemetry + presets. 687 tests, 31 E2E checks. |
+| v0.15.0 | **v3-core** — core redesign: `while True` loop, safety nets with graceful shutdown, `PostEditHooks`, HUMAN log level, `StopReason`, `ContextManager.manage()` |
+| v0.15.2 | **Human logging with icons** — visual format aligned with v3 plan: 🔄🔧🌐✅⚡❌📦🔍, MCP distinction, new events (`llm_response`), cost in completion |
+| v0.15.3 | **Fix structlog pipeline** — human logging works without `--log-file`; `wrap_for_formatter` always active |
+| v0.16.0 | **v4 Phase A** — lifecycle hooks (10 events, exit code protocol), deterministic guardrails, skills ecosystem (.architect.md), procedural memory |
+| v0.16.1 | **QA Phase A** — 228 verifications, 5 bugs fixed (ToolResult import, CostTracker.total, YAML off, schema shadowing), 24 aligned scripts |
+| v0.16.2 | **QA2** — `--show-costs` works with streaming, `--mode yolo` never asks for confirmation (not even for `dangerous`), `--timeout` is session watchdog (doesn't override `llm.timeout`), MCP tools auto-injected into `allowed_tools`, defensive `get_schemas` |
+| v0.17.0 | **v4 Phase B** — persistent sessions with resume, multi-format reports (JSON/Markdown/GitHub PR), 10 native CI/CD flags (`--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`), dry-run/preview mode, 3 new commands (`sessions`, `resume`, `cleanup`) |
+| v0.18.0 | **v4 Phase C** — Ralph Loop (automatic iteration with checks), Pipeline Mode (multi-step YAML workflows with variables, conditions, checkpoints), parallel execution in git worktrees, checkpoints with rollback, post-build auto-review with clean context, 4 new commands (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
+| v0.19.0 | **v4 Phase D** — Competitive multi-model evaluation (`architect eval`), preset initialization (`architect init` with 5 presets), code health analysis (`--health` with complexity/duplicates delta), delegated sub-agents (`dispatch_subagent` with explore/test/review types), OpenTelemetry traceability (session/llm/tool spans), 7 QA bugfixes (code_rules pre-execution, dispatch wiring, telemetry wiring, health wiring, parallel config propagation) |
+| **v1.0.0** | **Stable release** — First public version. Culmination of Plan V4 (Phases A+B+C+D) on v3 core. 15 CLI commands, 11+ tools, 4 agents, hooks + guardrails + skills + memory, sessions + reports + CI/CD, Ralph Loop + pipelines + parallel + checkpoints + auto-review, sub-agents + health + eval + telemetry + presets. 687 tests, 31 E2E checks. |
+
+---
+
+## License
+
+[MIT](LICENSE)

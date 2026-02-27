@@ -230,4 +230,4 @@ class TestConstants:
         assert SERVICE_NAME == "architect"
 
     def test_service_version(self):
-        assert SERVICE_VERSION == "1.0.0"
+        assert SERVICE_VERSION == "1.0.1"
