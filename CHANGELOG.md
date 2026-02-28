@@ -24,11 +24,13 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 #### Añadido
 
 - **`_infer_report_format()`** — Cuando se usa `--report-file` sin `--report`, el formato se infiere automáticamente de la extensión: `.json` → json, `.md`/`.markdown` → markdown, `.html` → github, otro → markdown. (`src/architect/cli.py`)
-- **8 tests nuevos** — `TestInferReportFormat` cubre extensiones conocidas, desconocidas, sin extensión, paths con directorios y case-insensitive. (`tests/test_reports/test_reports.py`)
+- **`_write_report_file()`** — Escritura robusta de reportes: crea directorios padres automáticamente, con fallback al directorio actual si falla, y notificación al usuario si no se puede escribir. Reemplaza los 4 `Path.write_text()` directos en `run`, `loop`, `pipeline` y `eval`. (`src/architect/cli.py`)
+- **13 tests nuevos** — `TestInferReportFormat` (8 tests: extensiones, case-insensitive, paths con directorios) + `TestWriteReportFile` (5 tests: creación de directorios, fallback, fallo total, sobreescritura). (`tests/test_reports/test_reports.py`)
 
 #### Corregido
 
 - **`--report-file` sin `--report` no generaba reporte** — La lógica de generación estaba condicionada a `if report_format:`, que era `None` cuando no se pasaba `--report`. Ahora se infiere el formato de la extensión del archivo en los 3 puntos de generación: `run`, `loop` y `pipeline`. (`src/architect/cli.py`)
+- **`--report-file` con directorio inexistente crasheaba** — `Path.write_text()` no crea directorios padres, causando `FileNotFoundError` con rutas como `reports/ralph-run.json`. Ahora `_write_report_file()` crea los directorios automáticamente. (`src/architect/cli.py`)
 
 #### Cambiado
 
@@ -37,7 +39,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 #### Tests
 
-- **725 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 guardrails + 8 reports)
+- **730 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 guardrails + 13 reports)
 - 31 E2E checks pasando sin cambios
 
 ---

@@ -27,12 +27,19 @@ Se detectó un gap de seguridad: `protected_files` bloqueaba escritura/edición/
 
 **Solución**: `_infer_report_format()` infiere el formato de la extensión (`.json` → json, `.md` → markdown, `.html` → github, default: markdown). Aplicado en los 3 comandos: `run`, `loop`, `pipeline`.
 
+### Reports: Creación automática de directorios para `--report-file`
+
+`--report-file reports/ralph-run.json` crasheaba con `FileNotFoundError` si el directorio `reports/` no existía.
+
+**Solución**: `_write_report_file()` centraliza la escritura en los 4 puntos (`run`, `loop`, `pipeline`, `eval`) con estrategia de fallback: (1) crear directorios padres y escribir, (2) si falla → escribir en directorio actual, (3) si ambos fallan → notificar al usuario sin crashear.
+
 | Cambio | Archivo |
 |--------|---------|
 | Helper `_infer_report_format()` + inferencia en 3 puntos de generación | `src/architect/cli.py` |
-| 8 tests nuevos (TestInferReportFormat) | `tests/test_reports/test_reports.py` |
+| Helper `_write_report_file()` + reemplazo de 4 `Path.write_text()` directos | `src/architect/cli.py` |
+| 13 tests nuevos (TestInferReportFormat + TestWriteReportFile) | `tests/test_reports/test_reports.py` |
 
-**Tests**: 725 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+**Tests**: 730 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
 
 ---
 
@@ -135,7 +142,7 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | Métrica | Valor |
 |---------|-------|
 | **Versión** | 1.1.0 |
-| **Tests unitarios** | 725 passed, 9 skipped, 0 failures |
+| **Tests unitarios** | 730 passed, 9 skipped, 0 failures |
 | **E2E checks** | 31 |
 | **Comandos CLI** | 15 |
 | **Tools del agente** | 11+ (locales + MCP + dispatch) |

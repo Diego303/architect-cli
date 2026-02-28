@@ -79,6 +79,40 @@ _REPORT_EXT_MAP: dict[str, str] = {
 }
 
 
+def _write_report_file(report_file: str, content: str) -> str | None:
+    """Escribe el reporte en el archivo indicado, creando directorios si es necesario.
+
+    Estrategia:
+    1. Crear directorios padres e intentar escribir en la ruta original.
+    2. Si falla, intentar escribir solo el nombre del archivo en el directorio actual.
+    3. Si ambos fallan, retornar mensaje de error.
+
+    Returns:
+        Ruta donde se guardó el archivo, o None si no se pudo escribir.
+    """
+    target = Path(report_file)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return str(target)
+    except OSError:
+        pass
+
+    # Fallback: escribir en el directorio actual
+    fallback = Path(target.name)
+    try:
+        fallback.write_text(content, encoding="utf-8")
+        click.echo(
+            f"No se pudo crear '{target.parent}'. "
+            f"Reporte guardado en '{fallback}' (directorio actual).",
+            err=True,
+        )
+        return str(fallback)
+    except OSError as e:
+        click.echo(f"No se pudo guardar el reporte: {e}", err=True)
+        return None
+
+
 def _infer_report_format(report_file: str) -> str:
     """Infiere el formato de reporte a partir de la extensión del archivo.
 
@@ -788,9 +822,9 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
 
             report_file = kwargs.get("report_file")
             if report_file:
-                Path(report_file).write_text(report_content, encoding="utf-8")
-                if not kwargs.get("quiet"):
-                    click.echo(f"Reporte guardado en {report_file}", err=True)
+                saved_path = _write_report_file(report_file, report_content)
+                if saved_path and not kwargs.get("quiet"):
+                    click.echo(f"Reporte guardado en {saved_path}", err=True)
             else:
                 click.echo(report_content, err=True)
 
@@ -1374,9 +1408,9 @@ def loop_cmd(
         }[report_format]()
 
         if report_file:
-            Path(report_file).write_text(report_content, encoding="utf-8")
-            if not quiet:
-                click.echo(f"Reporte guardado en {report_file}", err=True)
+            saved_path = _write_report_file(report_file, report_content)
+            if saved_path and not quiet:
+                click.echo(f"Reporte guardado en {saved_path}", err=True)
         else:
             click.echo(report_content)
 
@@ -1693,9 +1727,9 @@ def pipeline_cmd(
         }[report_format]()
 
         if report_file:
-            Path(report_file).write_text(report_content, encoding="utf-8")
-            if not quiet:
-                click.echo(f"Reporte guardado en {report_file}", err=True)
+            saved_path = _write_report_file(report_file, report_content)
+            if saved_path and not quiet:
+                click.echo(f"Reporte guardado en {saved_path}", err=True)
         else:
             click.echo(report_content)
 
@@ -1834,8 +1868,9 @@ def eval_cmd(
     report = evaluator.generate_report(results)
 
     if report_file:
-        Path(report_file).write_text(report, encoding="utf-8")
-        click.echo(f"\nReporte guardado en: {report_file}")
+        saved_path = _write_report_file(report_file, report)
+        if saved_path:
+            click.echo(f"\nReporte guardado en: {saved_path}")
     else:
         click.echo(report)
 

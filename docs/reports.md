@@ -27,7 +27,7 @@ architect run "tarea" --mode yolo --report-file pr.html        # → github
 | Flag | Descripción |
 |------|-------------|
 | `--report FORMAT` | Formato del reporte: `json`, `markdown`, `github` |
-| `--report-file PATH` | Guarda el reporte en archivo. Si `--report` no se especifica, el formato se infiere de la extensión: `.json` → json, `.md` → markdown, `.html` → github (default: markdown) |
+| `--report-file PATH` | Guarda el reporte en archivo. Si `--report` no se especifica, el formato se infiere de la extensión: `.json` → json, `.md` → markdown, `.html` → github (default: markdown). Los directorios padres se crean automáticamente si no existen. |
 
 ---
 
@@ -224,5 +224,5 @@ GATES_PASSED=$(jq '[.quality_gates[] | select(.passed)] | length' report.json)
 ## Archivos
 
 - **Módulo**: `src/architect/features/report.py`
-- **CLI**: flags `--report` y `--report-file` en `src/architect/cli.py` (incluye `_infer_report_format()` para inferencia por extensión)
-- **Tests**: `tests/test_reports/` (29 tests: 20 originales + 8 inferencia + 1 fix) + `scripts/test_phase_b.py` sección B2 (8 tests, 24 checks)
+- **CLI**: flags `--report` y `--report-file` en `src/architect/cli.py` (incluye `_infer_report_format()` para inferencia por extensión y `_write_report_file()` para escritura robusta con creación de directorios)
+- **Tests**: `tests/test_reports/` (34 tests: 20 originales + 8 inferencia + 5 escritura + 1 fix) + `scripts/test_phase_b.py` sección B2 (8 tests, 24 checks)

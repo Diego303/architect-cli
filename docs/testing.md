@@ -56,7 +56,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | `tests/test_skills/` | 31 | SkillsLoader, SkillInstaller |
 | `tests/test_memory/` | 32 | ProceduralMemory, correction patterns |
 | `tests/test_sessions/` | 22 | SessionManager, SessionState, generate_session_id |
-| `tests/test_reports/` | 29 | ExecutionReport, ReportGenerator, collect_git_diff, _infer_report_format |
+| `tests/test_reports/` | 34 | ExecutionReport, ReportGenerator, collect_git_diff, _infer_report_format, _write_report_file |
 | `tests/test_dryrun/` | 23 | DryRunTracker, PlannedAction, WRITE_TOOLS/READ_TOOLS |
 | `tests/test_ralph/` | 90 | RalphLoop, RalphConfig, LoopIteration, RalphLoopResult |
 | `tests/test_pipelines/` | 83 | PipelineRunner, PipelineConfig, PipelineStep, variables, conditions |
@@ -69,7 +69,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | `tests/test_telemetry/` | 20 (9 skip) | ArchitectTracer, NoopTracer, NoopSpan, create_tracer, SERVICE_VERSION |
 | `tests/test_presets/` | 37 | PresetManager, AVAILABLE_PRESETS, apply, list_presets |
 | `tests/test_bugfixes/` | 41 | Validación BUG-3 a BUG-7 (code_rules, dispatch, telemetry, health, parallel) |
-| **TOTAL pytest** | **717** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
+| **TOTAL pytest** | **730** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
