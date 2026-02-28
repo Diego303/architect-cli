@@ -22,7 +22,19 @@ __all__ = [
     "PipelineRunner",
     "PipelineStep",
     "PipelineStepResult",
+    "PipelineValidationError",
 ]
+
+
+class PipelineValidationError(ValueError):
+    """Error de validación del YAML de pipeline."""
+
+
+# Campos válidos en cada step del pipeline.
+_VALID_STEP_FIELDS = frozenset({
+    "name", "agent", "prompt", "model", "checkpoint",
+    "condition", "output_var", "checks", "timeout",
+})
 
 # Type alias for agent factory.
 AgentFactory = Callable[..., Any]
@@ -361,6 +373,84 @@ class PipelineRunner:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _validate_steps(steps_data: list[Any], path: str) -> list["PipelineStep"]:
+        """Valida y parsea los steps del pipeline YAML.
+
+        Validaciones:
+        - Al menos 1 step definido.
+        - Cada step debe tener 'prompt' no vacío.
+        - Campos desconocidos generan error (ej: 'task' en vez de 'prompt').
+        - Cada step debe tener 'name'.
+
+        Args:
+            steps_data: Lista cruda de steps del YAML.
+            path: Path del archivo (para mensajes de error).
+
+        Returns:
+            Lista de PipelineStep validados.
+
+        Raises:
+            PipelineValidationError: Si alguna validación falla.
+        """
+        if not steps_data:
+            raise PipelineValidationError(
+                f"Pipeline '{path}' no tiene steps definidos."
+            )
+
+        errors: list[str] = []
+        steps: list[PipelineStep] = []
+
+        for i, s in enumerate(steps_data):
+            step_label = s.get("name", f"step-{i + 1}") if isinstance(s, dict) else f"step-{i + 1}"
+
+            if not isinstance(s, dict):
+                errors.append(f"  {step_label}: debe ser un objeto YAML, no {type(s).__name__}")
+                continue
+
+            # Detectar campos desconocidos
+            unknown = set(s.keys()) - _VALID_STEP_FIELDS
+            for field_name in sorted(unknown):
+                hint = ""
+                if field_name == "task":
+                    hint = " (¿quisiste decir 'prompt'?)"
+                errors.append(f"  {step_label}: campo desconocido '{field_name}'{hint}")
+
+            # Validar prompt requerido y no vacío
+            prompt = s.get("prompt")
+            if not prompt or not str(prompt).strip():
+                if "task" in s:
+                    errors.append(
+                        f"  {step_label}: falta 'prompt' (el campo 'task' no es válido, usa 'prompt')"
+                    )
+                else:
+                    errors.append(f"  {step_label}: falta 'prompt' o está vacío")
+                continue
+
+            # Parsear step válido
+            checks = s.get("checks", [])
+            if isinstance(checks, str):
+                checks = [checks]
+            steps.append(PipelineStep(
+                name=s.get("name", f"step-{i + 1}"),
+                agent=s.get("agent", "build"),
+                prompt=str(prompt),
+                model=s.get("model"),
+                checkpoint=s.get("checkpoint", False),
+                condition=s.get("condition"),
+                output_var=s.get("output_var"),
+                checks=checks,
+                timeout=s.get("timeout"),
+            ))
+
+        if errors:
+            error_list = "\n".join(errors)
+            raise PipelineValidationError(
+                f"Pipeline '{path}' tiene errores de validación:\n{error_list}"
+            )
+
+        return steps
+
     @classmethod
     def from_yaml(
         cls,
@@ -383,6 +473,7 @@ class PipelineRunner:
         Raises:
             FileNotFoundError: Si el archivo no existe.
             yaml.YAMLError: Si el YAML es inválido.
+            PipelineValidationError: Si el contenido del YAML no es válido.
         """
         yaml_path = Path(path)
         if not yaml_path.exists():
@@ -390,28 +481,10 @@ class PipelineRunner:
 
         data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
         if not data or not isinstance(data, dict):
-            raise ValueError(f"Invalid pipeline YAML: {path}")
+            raise PipelineValidationError(f"Invalid pipeline YAML: {path}")
 
         steps_data = data.get("steps", [])
-        steps: list[PipelineStep] = []
-        for s in steps_data:
-            if not isinstance(s, dict):
-                continue
-            # Extraer checks como lista
-            checks = s.get("checks", [])
-            if isinstance(checks, str):
-                checks = [checks]
-            steps.append(PipelineStep(
-                name=s.get("name", f"step-{len(steps) + 1}"),
-                agent=s.get("agent", "build"),
-                prompt=s.get("prompt", ""),
-                model=s.get("model"),
-                checkpoint=s.get("checkpoint", False),
-                condition=s.get("condition"),
-                output_var=s.get("output_var"),
-                checks=checks,
-                timeout=s.get("timeout"),
-            ))
+        steps = cls._validate_steps(steps_data, path)
 
         # Mergear variables del YAML y las de CLI (CLI tiene prioridad)
         yaml_vars = data.get("variables", {}) or {}

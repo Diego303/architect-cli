@@ -32,6 +32,15 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - **`--report-file` sin `--report` no generaba reporte** — La lógica de generación estaba condicionada a `if report_format:`, que era `None` cuando no se pasaba `--report`. Ahora se infiere el formato de la extensión del archivo en los 3 puntos de generación: `run`, `loop` y `pipeline`. (`src/architect/cli.py`)
 - **`--report-file` con directorio inexistente crasheaba** — `Path.write_text()` no crea directorios padres, causando `FileNotFoundError` con rutas como `reports/ralph-run.json`. Ahora `_write_report_file()` crea los directorios automáticamente. (`src/architect/cli.py`)
 
+### Pipelines: Validación de YAML antes de ejecutar
+
+#### Añadido
+
+- **`PipelineValidationError`** — Excepción dedicada para errores de validación de pipeline YAML. Hereda de `ValueError` para backward compatibility. (`src/architect/features/pipelines.py`)
+- **`_validate_steps()`** — Validación completa del YAML antes de ejecutar: `prompt` requerido y no vacío, campos desconocidos rechazados (con hint `task` → "¿quisiste decir `prompt`?"), al menos 1 step, entradas non-dict rechazadas. Recopila todos los errores en un solo mensaje. (`src/architect/features/pipelines.py`)
+- **CLI captura `PipelineValidationError`** — Muestra error limpio sin traceback y sale con `EXIT_CONFIG_ERROR` (3). (`src/architect/cli.py`)
+- **9 tests nuevos** — `TestPipelineYamlValidation`: `task` rechazado con hint, prompt vacío, prompt missing, no steps, campos desconocidos, errores coleccionados, YAML válido pasa, whitespace-only rechazado, `steps` key missing. (`tests/test_pipelines/test_pipelines.py`)
+
 #### Cambiado
 
 - **`check_file_access()` ahora usa el parámetro `action`** — El método ya recibía `action` pero lo ignoraba. Ahora diferencia entre acciones de lectura (solo `sensitive_files`) y escritura (`protected_files` + `sensitive_files`). Backward compatible: todos los callers existentes pasan acciones de escritura. (`src/architect/core/guardrails.py`)
@@ -39,7 +48,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 #### Tests
 
-- **730 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 guardrails + 13 reports)
+- **739 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 guardrails + 13 reports + 9 pipeline validation)
 - 31 E2E checks pasando sin cambios
 
 ---

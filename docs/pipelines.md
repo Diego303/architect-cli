@@ -238,6 +238,62 @@ architect pipeline workflow.yaml --from-step implement
 
 ---
 
+## Validación del YAML (v1.1.0)
+
+Antes de ejecutar, el pipeline valida el YAML completamente. Si hay errores, se muestra un mensaje descriptivo y se sale con exit code 3 (`CONFIG_ERROR`) sin ejecutar ningún step.
+
+### Reglas de validación
+
+| Regla | Descripción |
+|-------|-------------|
+| `prompt` requerido | Cada step debe tener un campo `prompt` no vacío |
+| Campos válidos | Solo se permiten: `name`, `agent`, `prompt`, `model`, `checkpoint`, `condition`, `output_var`, `checks`, `timeout` |
+| Campos desconocidos | Se rechazan con error. El campo `task` incluye hint: "¿quisiste decir `prompt`?" |
+| Al menos 1 step | El pipeline debe tener al menos un step definido |
+| Formato de step | Cada step debe ser un objeto YAML (dict), no un string u otro tipo |
+| Prompt no whitespace-only | Un prompt con solo espacios o saltos de línea se rechaza |
+
+### Ejemplo de error
+
+```yaml
+# pipeline-malo.yaml
+name: bad-pipeline
+steps:
+  - name: analyze
+    task: "Analiza el proyecto"    # ← campo incorrecto
+  - name: implement
+    prompt: ""                      # ← prompt vacío
+  - name: deploy
+    prompt: "Deploy"
+    priority: high                  # ← campo desconocido
+```
+
+```bash
+$ architect pipeline pipeline-malo.yaml
+Error de validación: Pipeline 'pipeline-malo.yaml' tiene errores de validación:
+  analyze: campo desconocido 'task' (¿quisiste decir 'prompt'?)
+  analyze: falta 'prompt' (el campo 'task' no es válido, usa 'prompt')
+  implement: falta 'prompt' o está vacío
+  deploy: campo desconocido 'priority'
+```
+
+Todos los errores se recopilan y se muestran juntos en un solo mensaje, facilitando la corrección.
+
+### API: `PipelineValidationError`
+
+```python
+from architect.features.pipelines import PipelineValidationError
+
+try:
+    runner = PipelineRunner.from_yaml(path, variables, agent_factory)
+except PipelineValidationError as e:
+    print(f"YAML inválido: {e}")
+```
+
+`PipelineValidationError` hereda de `ValueError` para backward compatibility.
+
+---
+
 ## Flujo interno
 
 ```
@@ -245,6 +301,7 @@ architect pipeline workflow.yaml --var feature="auth"
   │
   ├── 1. PipelineRunner.from_yaml(path, variables)
   │       ├── yaml.safe_load(file)
+  │       ├── _validate_steps(steps_data) → PipelineValidationError si hay errores
   │       ├── Merge variables YAML + CLI
   │       └── Construir PipelineConfig con steps
   │

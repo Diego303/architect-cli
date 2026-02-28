@@ -59,7 +59,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | `tests/test_reports/` | 34 | ExecutionReport, ReportGenerator, collect_git_diff, _infer_report_format, _write_report_file |
 | `tests/test_dryrun/` | 23 | DryRunTracker, PlannedAction, WRITE_TOOLS/READ_TOOLS |
 | `tests/test_ralph/` | 90 | RalphLoop, RalphConfig, LoopIteration, RalphLoopResult |
-| `tests/test_pipelines/` | 83 | PipelineRunner, PipelineConfig, PipelineStep, variables, conditions |
+| `tests/test_pipelines/` | 92 | PipelineRunner, PipelineConfig, PipelineStep, variables, conditions, YAML validation |
 | `tests/test_checkpoints/` | 48 | CheckpointManager, Checkpoint, create/list/rollback |
 | `tests/test_reviewer/` | 47 | AutoReviewer, ReviewResult, build_fix_prompt, get_recent_diff |
 | `tests/test_parallel/` | 43 | ParallelRunner, ParallelConfig, WorkerResult, worktrees |
@@ -69,7 +69,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | `tests/test_telemetry/` | 20 (9 skip) | ArchitectTracer, NoopTracer, NoopSpan, create_tracer, SERVICE_VERSION |
 | `tests/test_presets/` | 37 | PresetManager, AVAILABLE_PRESETS, apply, list_presets |
 | `tests/test_bugfixes/` | 41 | Validación BUG-3 a BUG-7 (code_rules, dispatch, telemetry, health, parallel) |
-| **TOTAL pytest** | **730** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
+| **TOTAL pytest** | **739** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -190,7 +190,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | Archivo fuente | Test file(s) | Qué se prueba |
 |---|---|---|
 | `features/ralph.py` | `tests/test_ralph/` (90 tests) | RalphLoop — iteración completa, contexto limpio por iteración, safety nets (max_iterations, max_cost, max_time), _run_checks (subprocess, exit codes), _build_iteration_prompt (con checks fallidos y outputs), RalphConfig dataclass, LoopIteration, RalphLoopResult, stop_reason (5 valores), worktree isolation, agent_factory pattern |
-| `features/pipelines.py` | `tests/test_pipelines/` (83 tests) | PipelineRunner — ejecución secuencial, _substitute_variables ({{name}}), _check_condition (shell exit code), _run_checks, _create_checkpoint, from_step resume, dry_run mode, PipelineConfig/PipelineStep dataclasses, PipelineStepResult, output_var captura, pasos condicionados, YAML parsing |
+| `features/pipelines.py` | `tests/test_pipelines/` (92 tests) | PipelineRunner — ejecución secuencial, _substitute_variables ({{name}}), _check_condition (shell exit code), _run_checks, _create_checkpoint, from_step resume, dry_run mode, PipelineConfig/PipelineStep dataclasses, PipelineStepResult, PipelineValidationError, _validate_steps (prompt requerido, campos desconocidos, hint task→prompt, non-dict steps), output_var captura, pasos condicionados, YAML parsing |
 | `features/parallel.py` | `tests/test_parallel/` (43 tests) | ParallelRunner — _create_worktrees, _run_worker (subprocess), cleanup_worktrees, round-robin de tareas y modelos, WorkerResult dataclass, ParallelConfig, WORKTREE_PREFIX, ProcessPoolExecutor, error handling por worker |
 | `features/checkpoints.py` | `tests/test_checkpoints/` (48 tests) | CheckpointManager — create (git add + commit), list_checkpoints (git log --grep, format %H\|%s\|%at), rollback (git reset --hard), get_latest, has_changes_since, Checkpoint dataclass (frozen), short_hash, CHECKPOINT_PREFIX, no-changes → None |
 | `agents/reviewer.py` | `tests/test_reviewer/` (47 tests) | AutoReviewer — review_changes (contexto limpio, agent_factory), build_fix_prompt, get_recent_diff (subprocess git diff), ReviewResult dataclass, REVIEW_SYSTEM_PROMPT, detección "sin issues" (case-insensitive), error handling (LLM failure → ReviewResult con error), AutoReviewConfig |
@@ -277,7 +277,7 @@ Tras la implementación de v4 Phase B:
 
 Tras la implementación de Phase C:
 
-1. Se crearon tests unitarios pytest: `tests/test_ralph/` (90), `tests/test_pipelines/` (83), `tests/test_checkpoints/` (48), `tests/test_reviewer/` (47), `tests/test_parallel/` (43)
+1. Se crearon tests unitarios pytest: `tests/test_ralph/` (90), `tests/test_pipelines/` (92), `tests/test_checkpoints/` (48), `tests/test_reviewer/` (47), `tests/test_parallel/` (43)
 2. Se creó `scripts/test_phase_c_e2e.py` con 31 tests E2E (C1-C5 + combinados)
 3. Se detectaron y corrigieron 3 bugs (QA4):
    - **BUG-1**: `RalphLoop` ejecutaba iteraciones compartiendo contexto — corregido para crear agente FRESCO por iteración via `agent_factory`

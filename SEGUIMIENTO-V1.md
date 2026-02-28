@@ -39,7 +39,24 @@ Se detectó un gap de seguridad: `protected_files` bloqueaba escritura/edición/
 | Helper `_write_report_file()` + reemplazo de 4 `Path.write_text()` directos | `src/architect/cli.py` |
 | 13 tests nuevos (TestInferReportFormat + TestWriteReportFile) | `tests/test_reports/test_reports.py` |
 
-**Tests**: 730 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+### Pipelines: Validación estricta de YAML antes de ejecutar
+
+Un pipeline YAML con campos incorrectos (ej: `task:` en vez de `prompt:`) se lanzaba sin error, ejecutando steps con prompts vacíos que consumían tokens sin resultado útil.
+
+**Solución**: Validación completa del YAML antes de ejecutar con `_validate_steps()`:
+- `prompt` requerido y no vacío en cada step
+- Campos desconocidos rechazados (con hint: `task` → "¿quisiste decir `prompt`?")
+- Al menos 1 step definido
+- Entradas non-dict rechazadas
+- Todos los errores recopilados en un solo mensaje
+
+| Cambio | Archivo |
+|--------|---------|
+| `PipelineValidationError` + `_VALID_STEP_FIELDS` + `_validate_steps()` | `src/architect/features/pipelines.py` |
+| CLI captura `PipelineValidationError` → exit code 3 sin traceback | `src/architect/cli.py` |
+| 9 tests nuevos (TestPipelineYamlValidation) | `tests/test_pipelines/test_pipelines.py` |
+
+**Tests**: 739 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
 
 ---
 
@@ -142,7 +159,7 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | Métrica | Valor |
 |---------|-------|
 | **Versión** | 1.1.0 |
-| **Tests unitarios** | 730 passed, 9 skipped, 0 failures |
+| **Tests unitarios** | 739 passed, 9 skipped, 0 failures |
 | **E2E checks** | 31 |
 | **Comandos CLI** | 15 |
 | **Tools del agente** | 11+ (locales + MCP + dispatch) |

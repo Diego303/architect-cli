@@ -1,6 +1,6 @@
 # Troubleshooting y Diagnostico
 
-Guia de resolucion de problemas para architect-cli v1.0.0. Organizada por sintomas: identifica el problema, diagnostica la causa y aplica la solucion concreta.
+Guia de resolucion de problemas para architect-cli v1.1.0. Organizada por sintomas: identifica el problema, diagnostica la causa y aplica la solucion concreta.
 
 ---
 
@@ -702,7 +702,29 @@ git branch -D architect/parallel-1           # eliminar branches
 git branch -D architect/parallel-2
 ```
 
-### 6.4 Pipeline: variables no se resuelven
+### 6.4 Pipeline: YAML con campos incorrectos (v1.1.0)
+
+**Sintoma**: al ejecutar `architect pipeline`, se muestra `Error de validación: Pipeline 'file.yaml' tiene errores de validación:` seguido de una lista de errores, y el proceso sale con exit code 3.
+
+**Causa**: el YAML del pipeline tiene campos incorrectos, prompts vacíos, o campos desconocidos. Desde v1.1.0, el pipeline valida el YAML antes de ejecutar.
+
+**Solucion**:
+
+```bash
+# Revisar el mensaje de error — lista TODOS los problemas de una vez
+architect pipeline pipeline.yaml
+# Error de validación: Pipeline 'pipeline.yaml' tiene errores de validación:
+#   analyze: campo desconocido 'task' (¿quisiste decir 'prompt'?)
+#   analyze: falta 'prompt' (el campo 'task' no es válido, usa 'prompt')
+```
+
+**Errores comunes**:
+- `task:` en vez de `prompt:` — usar `prompt:` (el hint lo indica)
+- Prompt vacío `prompt: ""` — cada step necesita un prompt con contenido
+- Campos inventados (`priority:`, `description:`) — solo los 9 campos válidos: `name`, `agent`, `prompt`, `model`, `checkpoint`, `condition`, `output_var`, `checks`, `timeout`
+- Steps como strings en vez de objetos YAML
+
+### 6.5 Pipeline: variables no se resuelven
 
 **Sintoma**: el prompt del pipeline contiene literalmente `{{variable}}` en lugar del valor esperado. El agente recibe el template sin resolver.
 
@@ -730,7 +752,7 @@ architect pipeline pipeline.yaml --var target_dir=lib/ --var test_command="npm t
 architect pipeline pipeline.yaml --dry-run
 ```
 
-### 6.5 Checkpoints: no se crean
+### 6.6 Checkpoints: no se crean
 
 **Sintoma**: `architect history` no muestra checkpoints. El log no tiene eventos `checkpoint.created`.
 
@@ -758,7 +780,7 @@ git log --oneline --grep="architect:checkpoint"
 
 **Nota**: los checkpoints son git commits con prefijo `architect:checkpoint`. Si el workspace no tiene cambios staged, no se crea commit. Si `git add -A` no captura nada nuevo, el checkpoint se salta silenciosamente.
 
-### 6.6 Auto-review: no detecta issues
+### 6.7 Auto-review: no detecta issues
 
 **Sintoma**: el auto-review siempre reporta "Sin issues encontrados" aunque hay problemas evidentes.
 

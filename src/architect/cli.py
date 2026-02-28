@@ -44,7 +44,7 @@ from .features.ralph import RalphConfig, RalphLoop
 # v4-C2: Parallel Runs
 from .features.parallel import ParallelConfig, ParallelRunner
 # v4-C3: Pipelines
-from .features.pipelines import PipelineRunner
+from .features.pipelines import PipelineRunner, PipelineValidationError
 # v4-C4: Checkpoints
 from .features.checkpoints import CheckpointManager
 # v4-C5: Auto-Review
@@ -1662,9 +1662,13 @@ def pipeline_cmd(
             guardrails=pipe_guardrails,
         )
 
-    runner = PipelineRunner.from_yaml(
-        pipeline_file, vars_dict, agent_factory, workspace_root=workspace,
-    )
+    try:
+        runner = PipelineRunner.from_yaml(
+            pipeline_file, vars_dict, agent_factory, workspace_root=workspace,
+        )
+    except PipelineValidationError as e:
+        click.echo(f"Error de validación: {e}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
 
     if dry_run and not quiet:
         click.echo(runner.get_plan_summary(), err=True)

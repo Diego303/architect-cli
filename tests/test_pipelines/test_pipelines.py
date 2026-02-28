@@ -28,6 +28,7 @@ from architect.features.pipelines import (
     PipelineRunner,
     PipelineStep,
     PipelineStepResult,
+    PipelineValidationError,
 )
 
 
@@ -1125,8 +1126,8 @@ steps:
 
         assert runner.variables["cli_var"] == "val"
 
-    def test_yaml_skips_non_dict_steps(self, workspace: Path) -> None:
-        """from_yaml ignora entradas de steps que no son diccionarios."""
+    def test_yaml_rejects_non_dict_steps(self, workspace: Path) -> None:
+        """from_yaml rechaza entradas de steps que no son diccionarios."""
         yaml_file = workspace / "pipeline.yaml"
         yaml_file.write_text(
             """
@@ -1140,10 +1141,167 @@ steps:
             encoding="utf-8",
         )
         factory = _make_factory()
-        runner = PipelineRunner.from_yaml(str(yaml_file), {}, factory, str(workspace))
+        with pytest.raises(PipelineValidationError, match="debe ser un objeto YAML"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, factory, str(workspace))
 
-        assert len(runner.config.steps) == 1
-        assert runner.config.steps[0].name == "valid"
+
+# ── Tests: Pipeline YAML Validation ─────────────────────────────────────
+
+
+class TestPipelineYamlValidation:
+    """Tests para validación de YAML de pipelines."""
+
+    @pytest.fixture
+    def workspace(self, tmp_path: Path) -> Path:
+        return tmp_path
+
+    def test_rejects_task_field_with_hint(self, workspace: Path) -> None:
+        """Rechaza 'task' y sugiere usar 'prompt'."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps:
+  - name: build
+    agent: build
+    task: "do something"
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="quisiste decir 'prompt'"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+
+    def test_rejects_empty_prompt(self, workspace: Path) -> None:
+        """Rechaza steps con prompt vacío."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps:
+  - name: build
+    agent: build
+    prompt: ""
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="falta 'prompt' o está vacío"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+
+    def test_rejects_missing_prompt(self, workspace: Path) -> None:
+        """Rechaza steps sin prompt."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps:
+  - name: build
+    agent: build
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="falta 'prompt' o está vacío"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+
+    def test_rejects_no_steps(self, workspace: Path) -> None:
+        """Rechaza pipeline sin steps."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps: []
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="no tiene steps definidos"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+
+    def test_rejects_unknown_fields(self, workspace: Path) -> None:
+        """Rechaza campos desconocidos en steps."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps:
+  - name: build
+    prompt: "do it"
+    foo: bar
+    baz: 123
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="campo desconocido 'baz'"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+
+    def test_collects_all_errors(self, workspace: Path) -> None:
+        """Reporta todos los errores de validación, no solo el primero."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps:
+  - name: step1
+    task: "wrong field"
+  - name: step2
+    agent: build
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError) as exc_info:
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+        error_msg = str(exc_info.value)
+        assert "step1" in error_msg
+        assert "step2" in error_msg
+
+    def test_valid_yaml_passes(self, workspace: Path) -> None:
+        """YAML válido pasa la validación correctamente."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: my-pipeline
+steps:
+  - name: plan
+    prompt: "Create a plan"
+  - name: build
+    agent: build
+    prompt: "Build it"
+    checkpoint: true
+  - name: test
+    prompt: "Run tests"
+    checks:
+      - "pytest"
+""",
+            encoding="utf-8",
+        )
+        runner = PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+        assert len(runner.config.steps) == 3
+        assert runner.config.steps[0].prompt == "Create a plan"
+
+    def test_whitespace_only_prompt_rejected(self, workspace: Path) -> None:
+        """Prompt con solo espacios se rechaza."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+steps:
+  - name: build
+    prompt: "   "
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="falta 'prompt' o está vacío"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
+
+    def test_missing_steps_key(self, workspace: Path) -> None:
+        """Pipeline sin la clave 'steps' falla."""
+        yaml_file = workspace / "pipeline.yaml"
+        yaml_file.write_text(
+            """
+name: test
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(PipelineValidationError, match="no tiene steps definidos"):
+            PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
 
 # ── Tests: PipelineRunner.__init__ ───────────────────────────────────────
