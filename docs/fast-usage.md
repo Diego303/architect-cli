@@ -242,7 +242,10 @@ Reglas deterministas de seguridad. Se evalúan ANTES que los hooks.
 ```yaml
 guardrails:
   enabled: true
-  protected_files: [".env", "*.pem"]
+  # Bloquea lectura Y escritura (secrets que el LLM no debe ver)
+  sensitive_files: [".env*", "*.pem", "*.key"]
+  # Bloquea solo escritura (el LLM puede leer pero no modificar)
+  protected_files: ["Dockerfile", "deploy/**"]
   max_files_modified: 10
   quality_gates:
     - name: tests
@@ -447,7 +450,8 @@ hooks:
 
 guardrails:
   enabled: true
-  protected_files: [".env"]
+  sensitive_files: [".env*", "*.pem", "*.key"]  # bloquea lectura + escritura
+  protected_files: ["config/production.yaml"]     # bloquea solo escritura
   quality_gates:
     - name: tests
       command: "pytest tests/ -x"

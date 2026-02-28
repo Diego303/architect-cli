@@ -7,6 +7,42 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [1.1.0] - 2026-02-28
+
+### Guardrails: `sensitive_files` — Protección de lectura y escritura
+
+#### Añadido
+
+- **`sensitive_files` en GuardrailsConfig** — Nuevo campo que bloquea LECTURA y ESCRITURA de archivos sensibles. A diferencia de `protected_files` (que solo bloquea escritura), `sensitive_files` impide que el agente lea el contenido de archivos como `.env`, `*.pem`, `*.key`, evitando que secrets se envíen al proveedor de LLM. (`src/architect/config/schema.py`)
+- **Detección de lecturas shell** — Nuevo regex `_READ_CMD_RE` y helper `_extract_read_targets()` que detectan comandos `cat`, `head`, `tail`, `less`, `more` intentando leer archivos sensibles. (`src/architect/core/guardrails.py`)
+- **`read_file` en guardrails check** — El tool `read_file` ahora pasa por `check_file_access()` en el ExecutionEngine, bloqueándose si el archivo está en `sensitive_files`. (`src/architect/execution/engine.py`)
+- **Auto-enable** — `sensitive_files` activa automáticamente el sistema de guardrails si tiene patrones configurados, igual que `protected_files` y otros campos. (`src/architect/config/schema.py`)
+- **30 tests nuevos** — `TestSensitiveFiles` (22 tests: lectura bloqueada, escritura bloqueada, protected vs sensitive, shell reads, shell redirects, basename matching), `TestExtractReadTargets` (6 tests), `TestGuardrailsConfigSchema` ampliado (3 tests). (`tests/test_guardrails/test_guardrails.py`)
+
+#### Cambiado
+
+- **`check_file_access()` ahora usa el parámetro `action`** — El método ya recibía `action` pero lo ignoraba. Ahora diferencia entre acciones de lectura (solo `sensitive_files`) y escritura (`protected_files` + `sensitive_files`). Backward compatible: todos los callers existentes pasan acciones de escritura. (`src/architect/core/guardrails.py`)
+- **`check_command()` ampliado** — Las redirecciones shell (`>`, `>>`, `| tee`) ahora se verifican contra `protected_files` + `sensitive_files` combinados. (`src/architect/core/guardrails.py`)
+
+#### Tests
+
+- **717 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 nuevos)
+- 31 E2E checks pasando sin cambios
+
+---
+
+## [1.0.1] - 2026-02-26
+
+### Correcciones post-release
+
+#### Corregido
+
+- Correcciones de errores encontrados en tests tras la release v1.0.0
+- Correcciones generales de estabilidad
+- Traducciones y documentos de LICENCIA y SEGURIDAD
+
+---
+
 ## [1.0.0] - 2026-02-24
 
 ### Release 1.0.0 — Primera versión estable

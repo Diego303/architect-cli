@@ -133,7 +133,8 @@ class HooksConfig(BaseModel):
 ```python
 class GuardrailsConfig(BaseModel):
     enabled:                bool              = False
-    protected_files:        list[str]         = []     # glob patterns
+    protected_files:        list[str]         = []     # glob patterns (write-only)
+    sensitive_files:        list[str]         = []     # glob patterns (read + write)
     blocked_commands:       list[str]         = []     # regex patterns
     max_files_modified:     int | None        = None
     max_lines_changed:      int | None        = None
@@ -565,13 +566,16 @@ class HookRunResult:
 
 ## GuardrailsEngine (`core/guardrails.py`) — v4-A2
 
-Motor de seguridad determinista evaluado ANTES que los hooks.
+Motor de seguridad determinista evaluado ANTES que los hooks. Soporta `protected_files` (solo escritura) y `sensitive_files` (lectura + escritura, v1.1.0).
 
 ```python
 class GuardrailsEngine:
     def __init__(self, config: GuardrailsConfig, workspace_root: str): ...
 
-    def check_file_access(self, file_path: str, action: str) -> tuple[bool, str]: ...
+    def check_file_access(self, file_path: str, action: str) -> tuple[bool, str]:
+        # sensitive_files: blocks ALL actions (read + write)
+        # protected_files: blocks only write actions
+        ...
     def check_command(self, command: str) -> tuple[bool, str]: ...
     def check_edit_limits(self, file_path: str, lines_added: int, lines_removed: int) -> tuple[bool, str]: ...
     def check_code_rules(self, content: str, file_path: str) -> list[tuple[str, str]]: ...

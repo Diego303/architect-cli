@@ -5,8 +5,10 @@ v4-A2: Los guardrails se evalúan ANTES que los hooks de usuario y son
 reglas DETERMINISTAS que no dependen del LLM ni pueden ser desactivadas.
 
 Funciones:
-- check_file_access: Proteger archivos sensibles (.env, *.pem, etc.)
+- check_file_access: Proteger archivos (protected_files: solo escritura,
+  sensitive_files: lectura y escritura)
 - check_command: Bloquear comandos peligrosos (rm -rf /, git push --force, etc.)
+  y detectar lecturas shell (cat, head, tail) a archivos sensibles
 - check_edit_limits: Limitar archivos/líneas modificados
 - check_code_rules: Escanear contenido escrito contra patrones regex
 - run_quality_gates: Ejecutar checks al completar (lint, tests, typecheck)
@@ -41,6 +43,14 @@ _REDIRECT_RE = re.compile(
     r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"  # | tee file o | tee -a file
 )
 
+# Regex para detectar comandos que leen archivos
+# Captura: cat file, head file, head -n 10 file, tail -5 file, less file, more file
+_READ_CMD_RE = re.compile(
+    r"\b(?:cat|head|tail|less|more)\s+"
+    r"(?:-[^\s]+(?:\s+\d+)?\s+)*"  # Flags opcionales con args numéricos (-n 10, -5)
+    r"([^\s;|&>]+)"                # Archivo destino
+)
+
 
 def _extract_redirect_targets(command: str) -> list[str]:
     """Extrae los archivos destino de redirecciones shell.
@@ -56,6 +66,26 @@ def _extract_redirect_targets(command: str) -> list[str]:
         target = match.group(1) or match.group(2)
         if target:
             # Quitar comillas
+            target = target.strip("'\"")
+            targets.append(target)
+    return targets
+
+
+def _extract_read_targets(command: str) -> list[str]:
+    """Extrae los archivos que un comando shell intenta leer.
+
+    Detecta: cat file, head file, tail file, less file, more file.
+
+    Args:
+        command: Comando shell completo.
+
+    Returns:
+        Lista de paths de archivos que el comando lee.
+    """
+    targets: list[str] = []
+    for match in _READ_CMD_RE.finditer(command):
+        target = match.group(1)
+        if target:
             target = target.strip("'\"")
             targets.append(target)
     return targets
@@ -90,31 +120,60 @@ class GuardrailsEngine:
         self.log = logger.bind(component="guardrails")
 
     def check_file_access(self, file_path: str, action: str) -> tuple[bool, str]:
-        """Verifica si un archivo está protegido.
+        """Verifica si un archivo está protegido o es sensible.
+
+        - sensitive_files: bloquea TODA acción (lectura y escritura).
+        - protected_files: bloquea solo acciones de escritura.
 
         Args:
             file_path: Path del archivo a acceder.
-            action: Tipo de acción ('write_file', 'edit_file', 'delete_file').
+            action: Tipo de acción ('read_file', 'write_file', 'edit_file',
+                    'delete_file', 'apply_patch').
 
         Returns:
             Tupla (allowed, reason). Si allowed=False, reason explica por qué.
         """
-        for pattern in self.config.protected_files:
+        path_name = Path(file_path).name
+
+        # 1. Sensitive files: bloquea TODA acción (read + write)
+        for pattern in self.config.sensitive_files:
             if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(
-                Path(file_path).name, pattern
+                path_name, pattern
             ):
-                reason = f"Archivo protegido por guardrail: {file_path} (patrón: {pattern})"
-                self.log.warning("guardrail.file_blocked", file=file_path, pattern=pattern)
+                reason = (
+                    f"Archivo sensible bloqueado por guardrail: {file_path} "
+                    f"(patrón: {pattern})"
+                )
+                self.log.warning(
+                    "guardrail.sensitive_file_blocked",
+                    file=file_path,
+                    pattern=pattern,
+                    action=action,
+                )
                 return False, reason
+
+        # 2. Protected files: bloquea solo escritura/edición/borrado
+        _write_actions = ("write_file", "edit_file", "delete_file", "apply_patch")
+        if action in _write_actions:
+            for pattern in self.config.protected_files:
+                if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(
+                    path_name, pattern
+                ):
+                    reason = f"Archivo protegido por guardrail: {file_path} (patrón: {pattern})"
+                    self.log.warning("guardrail.file_blocked", file=file_path, pattern=pattern)
+                    return False, reason
+
         return True, ""
 
     def check_command(self, command: str) -> tuple[bool, str]:
         """Verifica si un comando está bloqueado.
 
-        Comprueba dos cosas:
+        Comprueba tres cosas:
         1. El comando contra la lista de blocked_commands (regex).
-        2. Si el comando redirige output a un archivo protegido
-           (shell redirection: >, >>, tee → protected_files).
+        2. Si el comando redirige output a un archivo protegido o sensible
+           (shell redirection: >, >>, tee → protected_files + sensitive_files).
+        3. Si el comando lee un archivo sensible
+           (cat, head, tail, less, more → sensitive_files).
 
         Args:
             command: Comando shell a verificar.
@@ -132,11 +191,12 @@ class GuardrailsEngine:
                 self.log.warning("guardrail.invalid_regex", pattern=pattern)
                 continue
 
-        # Verificar que el comando no redirige output a archivos protegidos
-        if self.config.protected_files:
+        # Verificar que el comando no redirige output a archivos protegidos/sensibles
+        write_patterns = list(self.config.protected_files) + list(self.config.sensitive_files)
+        if write_patterns:
             redirect_targets = _extract_redirect_targets(command)
             for target in redirect_targets:
-                for pattern in self.config.protected_files:
+                for pattern in write_patterns:
                     if fnmatch.fnmatch(target, pattern) or fnmatch.fnmatch(
                         Path(target).name, pattern
                     ):
@@ -146,6 +206,26 @@ class GuardrailsEngine:
                         )
                         self.log.warning(
                             "guardrail.command_redirect_blocked",
+                            command=command[:60],
+                            target=target,
+                            pattern=pattern,
+                        )
+                        return False, reason
+
+        # Verificar que el comando no lee archivos sensibles (cat, head, tail, etc.)
+        if self.config.sensitive_files:
+            read_targets = _extract_read_targets(command)
+            for target in read_targets:
+                for pattern in self.config.sensitive_files:
+                    if fnmatch.fnmatch(target, pattern) or fnmatch.fnmatch(
+                        Path(target).name, pattern
+                    ):
+                        reason = (
+                            f"Comando bloqueado: intenta leer archivo sensible "
+                            f"'{target}' (patrón: {pattern})"
+                        )
+                        self.log.warning(
+                            "guardrail.command_read_blocked",
                             command=command[:60],
                             target=target,
                             pattern=pattern,

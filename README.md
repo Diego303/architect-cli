@@ -652,10 +652,19 @@ Deterministic security layer evaluated **before** hooks. Cannot be disabled by t
 
 ```yaml
 guardrails:
+  # Write-only protection: blocks write/edit/delete, allows read
   protected_files:
-    - "*.env"
-    - "secrets/**"
+    - "config/production.yaml"
     - ".git/**"
+
+  # Full protection: blocks ALL access including read (v1.1.0)
+  sensitive_files:
+    - ".env"
+    - ".env.*"
+    - "*.pem"
+    - "*.key"
+    - "secrets/**"
+
   blocked_commands:
     - "rm -rf /"
     - "DROP TABLE"
@@ -676,6 +685,10 @@ guardrails:
       command: "ruff check src/"
       required: false
 ```
+
+**`protected_files` vs `sensitive_files`**: `protected_files` blocks write/edit/delete operations but allows the agent to read the file. `sensitive_files` blocks **all** access including reads — the agent cannot see the file contents. Use `sensitive_files` for secrets (`.env`, private keys) to prevent them from being sent to the LLM provider.
+
+**Shell command detection**: `sensitive_files` also blocks shell reads (`cat`, `head`, `tail`, `less`) and shell redirects (`>`, `>>`, `| tee`) targeting sensitive files.
 
 **Quality gates**: executed when the agent declares completion. If a `required` gate fails, the agent receives feedback and keeps working until it passes.
 
@@ -1279,6 +1292,8 @@ architect run PROMPT
 | v0.18.0 | **v4 Phase C** — Ralph Loop (automatic iteration with checks), Pipeline Mode (multi-step YAML workflows with variables, conditions, checkpoints), parallel execution in git worktrees, checkpoints with rollback, post-build auto-review with clean context, 4 new commands (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
 | v0.19.0 | **v4 Phase D** — Competitive multi-model evaluation (`architect eval`), preset initialization (`architect init` with 5 presets), code health analysis (`--health` with complexity/duplicates delta), delegated sub-agents (`dispatch_subagent` with explore/test/review types), OpenTelemetry traceability (session/llm/tool spans), 7 QA bugfixes (code_rules pre-execution, dispatch wiring, telemetry wiring, health wiring, parallel config propagation) |
 | **v1.0.0** | **Stable release** — First public version. Culmination of Plan V4 (Phases A+B+C+D) on v3 core. 15 CLI commands, 11+ tools, 4 agents, hooks + guardrails + skills + memory, sessions + reports + CI/CD, Ralph Loop + pipelines + parallel + checkpoints + auto-review, sub-agents + health + eval + telemetry + presets. 687 tests, 31 E2E checks. |
+| v1.0.1 | **Bugfixes** — Test fixes and general stability corrections after initial release. |
+| **v1.1.0** | **`sensitive_files` guardrail** — New `sensitive_files` field blocks both read and write access to secret files (`.env`, `*.pem`, `*.key`). Shell read detection (`cat`, `head`, `tail`). `protected_files` remains write-only (backward compatible). 717 tests. |
 
 ---
 

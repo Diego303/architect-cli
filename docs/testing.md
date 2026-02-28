@@ -1,6 +1,6 @@
 # Testing — Resumen completo de cobertura
 
-Documento actualizado el 2026-02-24. Refleja el estado actual de todos los tests. Versión: v1.0.0.
+Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests. Versión: v1.1.0.
 
 > **Requisito**: Para ejecutar los tests y herramientas de calidad, instalar el extra `dev`:
 > ```bash
@@ -52,7 +52,7 @@ Documento actualizado el 2026-02-24. Refleja el estado actual de todos los tests
 | Directorio | Tests | Qué cubre |
 |---|:---:|---|
 | `tests/test_hooks/` | 29 | HookExecutor, HooksRegistry, HookEvent |
-| `tests/test_guardrails/` | 24 | GuardrailsEngine, quality gates, code rules |
+| `tests/test_guardrails/` | 71 | GuardrailsEngine, sensitive_files, protected_files, quality gates, code rules, shell read detection |
 | `tests/test_skills/` | 31 | SkillsLoader, SkillInstaller |
 | `tests/test_memory/` | 32 | ProceduralMemory, correction patterns |
 | `tests/test_sessions/` | 22 | SessionManager, SessionState, generate_session_id |
@@ -69,7 +69,7 @@ Documento actualizado el 2026-02-24. Refleja el estado actual de todos los tests
 | `tests/test_telemetry/` | 20 (9 skip) | ArchitectTracer, NoopTracer, NoopSpan, create_tracer, SERVICE_VERSION |
 | `tests/test_presets/` | 37 | PresetManager, AVAILABLE_PRESETS, apply, list_presets |
 | `tests/test_bugfixes/` | 41 | Validación BUG-3 a BUG-7 (code_rules, dispatch, telemetry, health, parallel) |
-| **TOTAL pytest** | **687** | **Phases A + B + C + D + Bugfixes** |
+| **TOTAL pytest** | **717** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -170,7 +170,7 @@ Documento actualizado el 2026-02-24. Refleja el estado actual de todos los tests
 | Archivo fuente | Test file(s) | Qué se prueba |
 |---|---|---|
 | `core/hooks.py` | `test_phase15` (29 tests) | HookEvent (10 valores), HookDecision (3 valores), HookResult, HookConfig, HooksRegistry (registro, get_hooks, has_hooks), HookExecutor (_build_env, execute_hook, run_event con matcher/file_patterns, run_post_edit backward-compat), exit code protocol (0=ALLOW, 2=BLOCK, otro=Error), async hooks, timeout |
-| `core/guardrails.py` | `test_phase16` (24 tests) | GuardrailsEngine — check_file_access (protected_files globs), check_command (blocked_commands regex), check_edit_limits (max_files/lines), check_code_rules (severity warn/block), record_command/record_edit, should_force_test, run_quality_gates (subprocess, timeout, required vs optional), state tracking |
+| `core/guardrails.py` | `test_phase16` (24 tests), `tests/test_guardrails/` (71 tests) | GuardrailsEngine — sensitive_files (bloquea lectura+escritura), protected_files (bloquea solo escritura), shell read detection (`cat/head/tail` a sensibles), check_command (blocked_commands regex + redirect/read checks), check_edit_limits (max_files/lines), check_code_rules (severity warn/block), record_command/record_edit, should_force_test, run_quality_gates (subprocess, timeout, required vs optional), state tracking |
 | `skills/loader.py` | `test_phase17` (31 tests) | SkillsLoader — load_project_context (.architect.md, AGENTS.md, CLAUDE.md), discover_skills (local + installed), _parse_skill (YAML frontmatter), get_relevant_skills (glob matching), build_system_context; SkillInfo dataclass |
 | `skills/installer.py` | `test_phase17` | SkillInstaller — install_from_github (sparse checkout), create_local (plantilla SKILL.md), list_installed, uninstall |
 | `skills/memory.py` | `test_phase18` (32 tests) | ProceduralMemory — 6 CORRECTION_PATTERNS (direct, negation, clarification, should_be, wrong_approach, absolute_rule), detect_correction, add_correction (dedup), add_pattern, _load/_append_to_file, get_context, analyze_session_learnings |

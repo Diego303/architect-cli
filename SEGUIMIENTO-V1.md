@@ -1,8 +1,33 @@
-# Seguimiento de Implementación - architect CLI v1.0.0
+# Seguimiento de Implementación - architect CLI
 
-Este documento resume todo lo implementado hasta la release v1.0.0 del proyecto architect CLI.
+Este documento resume todo lo implementado en el proyecto architect CLI.
 
 Para el historial detallado de cada fase y tarea individual, consultar `SEGUIMIENTO.md` (archivo histórico).
+
+---
+
+## Release v1.1.0 — 2026-02-28
+
+### Guardrails: `sensitive_files` — Protección de lectura y escritura
+
+Se detectó un gap de seguridad: `protected_files` bloqueaba escritura/edición/borrado pero permitía al agente **leer** archivos sensibles como `.env`, `*.pem`, `*.key`. Esto exponía secrets al proveedor de LLM.
+
+**Solución**: Nuevo campo `sensitive_files` que bloquea **toda** acción (lectura + escritura), manteniendo `protected_files` solo para escritura (backward compatible).
+
+| Cambio | Archivo |
+|--------|---------|
+| Campo `sensitive_files: list[str]` + auto-enable en `model_post_init` | `src/architect/config/schema.py` |
+| `check_file_access()` diferencia read/write via `action`. Nuevo `_extract_read_targets()` para shell reads | `src/architect/core/guardrails.py` |
+| `read_file` añadido a guardrails check | `src/architect/execution/engine.py` |
+| 30 tests nuevos (TestSensitiveFiles, TestExtractReadTargets, schema) | `tests/test_guardrails/test_guardrails.py` |
+
+**Tests**: 717 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+
+---
+
+## Release v1.0.1 — 2026-02-26
+
+Correcciones de errores encontrados en tests y errores generales post-release v1.0.0. Traducciones y documentos de LICENCIA y SEGURIDAD.
 
 ---
 
@@ -47,7 +72,7 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | Tarea | Descripción |
 |-------|-------------|
 | A1 — Hooks Lifecycle | 10 eventos (pre/post tool, pre/post LLM, session, agent, error, budget, context), exit code protocol (0=allow, 2=block), variables de entorno, backward compatible con `post_edit` |
-| A2 — Guardrails | Archivos protegidos, comandos bloqueados, límites de edición, code_rules (warn/block), quality gates post-build |
+| A2 — Guardrails | Archivos protegidos (write-only), archivos sensibles (read+write, v1.1.0), comandos bloqueados, límites de edición, code_rules (warn/block), quality gates post-build |
 | A3 — Skills Ecosystem | `.architect.md` auto-cargado, skills por glob en `.architect/skills/`, `SKILL.md` con frontmatter, install desde GitHub |
 | A4 — Memoria Procedural | Detección de correcciones del usuario, persistencia en `.architect/memory.md`, inyección en system prompt |
 | QA1 | 228 verificaciones, 5 bugs corregidos |
@@ -94,12 +119,12 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 
 ---
 
-## Estadísticas finales v1.0.0
+## Estadísticas actuales v1.1.0
 
 | Métrica | Valor |
 |---------|-------|
-| **Versión** | 1.0.0 |
-| **Tests unitarios** | 687 passed, 9 skipped, 0 failures |
+| **Versión** | 1.1.0 |
+| **Tests unitarios** | 717 passed, 9 skipped, 0 failures |
 | **E2E checks** | 31 |
 | **Comandos CLI** | 15 |
 | **Tools del agente** | 11+ (locales + MCP + dispatch) |
@@ -134,7 +159,7 @@ architect history      Listar checkpoints
 
 ```
 src/architect/
-├── __init__.py            # __version__ = "1.0.0"
+├── __init__.py            # __version__ = "1.1.0"
 ├── cli.py                 # Entry point — 15 comandos Click
 ├── core/
 │   ├── loop.py            # AgentLoop — while True con safety nets
@@ -209,5 +234,5 @@ El Plan V4 está completo. Posibles direcciones futuras:
 - **Sin LangChain/LangGraph**: loop directo y controlado (~300 líneas)
 - **Tools nunca lanzan excepciones**: siempre retornan ToolResult
 - **stdout limpio**: solo resultado final y JSON, todo lo demás a stderr
-- **Guardrails antes de hooks**: seguridad determinista que el LLM no puede saltarse
+- **Guardrails antes de hooks**: seguridad determinista que el LLM no puede saltarse (`protected_files` write-only, `sensitive_files` read+write)
 - **Contexto limpio**: Ralph Loop, Pipeline, Auto-Review y Sub-agentes usan AgentLoop fresco

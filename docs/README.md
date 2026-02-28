@@ -23,7 +23,7 @@
 | [`fast-usage.md`](fast-usage.md) | **Guía rápida**: instalación, configuración mínima, comandos más útiles y referencia de flags |
 | [`mcp-server.md`](mcp-server.md) | **MCP Server**: cómo crear un servidor MCP que exponga architect como herramienta remota (server.py + tools.py completos) |
 | [`good-practices.md`](good-practices.md) | **Buenas prácticas**: prompts, agentes, edición, costes, hooks lifecycle, guardrails, skills, memoria, auto-evaluación, CI/CD, errores comunes |
-| [`security.md`](security.md) | **Modelo de seguridad**: 19 capas defensivas, modelo de amenazas, path traversal, command security, prompt injection, hardening |
+| [`security.md`](security.md) | **Modelo de seguridad**: 22 capas defensivas, modelo de amenazas, path traversal, command security, sensitive file protection, prompt injection, hardening |
 | [`sessions.md`](sessions.md) | **Sessions**: persistencia y resume — guardar, listar, reanudar y limpiar sesiones entre ejecuciones |
 | [`reports.md`](reports.md) | **Reports**: reportes de ejecución en JSON, Markdown y GitHub PR comment para CI/CD |
 | [`dryrun.md`](dryrun.md) | **Dry Run**: simulación de ejecución — DryRunTracker, WRITE_TOOLS/READ_TOOLS, plan de acciones |
@@ -83,7 +83,7 @@ architect run "refactoriza main.py" -a build --mode yolo
          │       ├─ llm.completion()      → streaming chunks a stderr
          │       ├─ cost_tracker.record() → coste del step; BudgetExceededError si excede
          │       ├─ engine.execute()      → guardrails → pre-hooks → validar → confirmar → tool → post-hooks
-         │       │       ├─ GuardrailsEngine   → check_file_access / check_command / check_edit_limits
+         │       │       ├─ GuardrailsEngine   → check_file_access (sensitive+protected) / check_command / check_edit_limits
          │       │       ├─ HookExecutor       → pre_tool_use (BLOCK/ALLOW) + post_tool_use (lint/etc)
          │       │       └─ PostEditHooks      → backward-compat v3-M4
          │       ├─ HumanLog              → eventos HUMAN (25) a stderr (pipeline separado)
@@ -101,7 +101,7 @@ architect run "refactoriza main.py" -a build --mode yolo
 
 **Stack**: Python 3.12+, Click, Pydantic v2, LiteLLM, httpx, structlog, tenacity.
 
-**Versión actual**: 1.0.0
+**Versión actual**: 1.1.0
 
 ---
 
@@ -125,3 +125,5 @@ architect run "refactoriza main.py" -a build --mode yolo
 | v0.18.0 | **Plan base v4 Phase C**: `RalphLoop` (iteración automática con checks, contexto limpio, worktrees), `PipelineRunner` (workflows YAML multi-step con variables, condiciones, checkpoints), `ParallelRunner` (ejecución paralela en git worktrees), `CheckpointManager` (git commits con rollback), `AutoReviewer` (review post-build con contexto limpio), 4 nuevos comandos (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
 | v0.19.0 | **Plan base v4 Phase D**: `DispatchSubagentTool` (sub-agentes explore/test/review), `CodeHealthAnalyzer` (delta de calidad con `--health`), `CompetitiveEval` (`architect eval` multi-modelo), `ArchitectTracer` (OpenTelemetry spans), `PresetManager` (`architect init` con 5 presets), 7 bugfixes QA |
 | **v1.0.0** | **Release estable** — Primera versión pública. Culminación del Plan base v4 (Phases A+B+C+D). 15 comandos CLI, 11+ tools, 4 agentes, 687 tests. |
+| **v1.0.1** | Bugfixes: correcciones de errores en tests y errores generales post-release. |
+| **v1.1.0** | **Sensitive file protection**: nuevo campo `sensitive_files` en guardrails que bloquea lectura+escritura de archivos con secrets (`.env`, `*.pem`, `*.key`). Shell read detection (`cat/head/tail`). 717 tests. |

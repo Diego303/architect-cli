@@ -592,8 +592,9 @@ Motor de reglas deterministas evaluado **ANTES** que los hooks en el pipeline de
 
 | Check | Método | Cuándo |
 |-------|--------|--------|
-| Archivos protegidos | `check_file_access()` | En tools de filesystem (write, edit, delete) |
-| Comandos bloqueados | `check_command()` | En `run_command` |
+| Archivos sensibles | `check_file_access()` | En **todas** las tools de filesystem (read, write, edit, delete) — bloquea lectura y escritura de `sensitive_files` |
+| Archivos protegidos | `check_file_access()` | En tools de escritura (write, edit, delete, patch) — bloquea solo escritura de `protected_files` |
+| Comandos bloqueados | `check_command()` | En `run_command` — incluye detección de lecturas shell (`cat`, `head`, `tail`) a archivos sensibles |
 | Límites de edición | `check_edit_limits()` | En tools de edición |
 | Reglas de código | `check_code_rules()` | En contenido escrito |
 | Quality gates | `run_quality_gates()` | Al completar el agente |

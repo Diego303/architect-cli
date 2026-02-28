@@ -552,27 +552,37 @@ cat debug.jsonl | jq 'select(.event == "hook.error" or .event == "agent.hook.com
 
 ### 5.3 Guardrail bloquea acceso a archivos
 
-**Sintoma**: tool result contiene `Archivo protegido por guardrail: X (patron: Y)`.
+**Sintoma**: tool result contiene `Archivo sensible bloqueado por guardrail: X (patrón: Y)` o `Archivo protegido por guardrail: X (patrón: Y)`.
 
-**Causa**: el archivo coincide con un patron en `guardrails.protected_files`.
+**Causa**: el archivo coincide con un patron en `guardrails.sensitive_files` (bloquea lectura y escritura) o `guardrails.protected_files` (bloquea solo escritura).
 
 **Solucion**:
 
 ```yaml
 guardrails:
   enabled: true
-  protected_files:
-    - ".env"
+
+  # sensitive_files: bloquea LECTURA y ESCRITURA (v1.1.0)
+  # Usar para archivos con secrets que el LLM no deberia ni leer
+  sensitive_files:
+    - ".env*"
     - "*.pem"
     - "*.key"
     - "secrets.*"
+
+  # protected_files: bloquea solo ESCRITURA
+  # Usar para archivos que el LLM puede leer pero no modificar
+  protected_files:
+    - "Dockerfile"
+    - "docker-compose*.yml"
+    - "deploy/**"
     # Verificar que no hay patrones demasiado amplios
     # Por ejemplo "*.json" bloquearia TODOS los JSON
 ```
 
 ```bash
-# Ver que archivos estan protegidos
-cat debug.jsonl | jq 'select(.event == "guardrail.file_blocked")'
+# Ver que archivos estan bloqueados (sensibles y protegidos)
+cat debug.jsonl | jq 'select(.event == "guardrail.sensitive_file_blocked" or .event == "guardrail.file_blocked")'
 ```
 
 ### 5.4 Code rules bloquean ediciones

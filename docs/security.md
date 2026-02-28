@@ -12,7 +12,7 @@ Architect da control al LLM sobre herramientas reales del sistema: lectura/escri
 
 | Actor | Vector | Mitigación principal |
 |-------|--------|---------------------|
-| LLM adversarial / hallucination | El modelo intenta leer `/etc/passwd`, ejecutar `rm -rf /`, o escapar del workspace | Path traversal prevention + blocklist + workspace sandboxing |
+| LLM adversarial / hallucination | El modelo intenta leer `/etc/passwd`, ejecutar `rm -rf /`, o escapar del workspace | Path traversal prevention + blocklist + workspace sandboxing + sensitive_files (v1.1.0) |
 | Prompt injection (indirecta) | Un archivo del workspace contiene instrucciones que manipulan al LLM | Confinamiento al workspace + confirmación de operaciones sensibles |
 | Servidor MCP malicioso | El servidor MCP retorna datos que contienen prompt injection | Sanitización de args en logs + aislamiento de tool results |
 | Usuario con config insegura | `--mode yolo` + `--allow-commands` sin restricciones | Blocklist hard (no bypassable) + `allowed_only` mode + defaults seguros |
@@ -695,3 +695,4 @@ Ver [`containers.md`](containers.md) para Containerfiles completos.
 | 19 | Dry-run mode | `engine.py` | Verificar sin ejecutar |
 | 20 | Subagent isolation | `dispatch.py` | Sub-agentes con tools limitadas y contexto aislado |
 | 21 | Code rules pre-exec | `loop.py` | Bloqueo de escrituras que violan reglas ANTES de ejecutar |
+| 22 | Sensitive file protection | `guardrails.py` | Bloqueo de lectura+escritura de archivos con secrets (`sensitive_files`) — impide que el LLM lea `.env`, `*.pem`, `*.key` (v1.1.0) |

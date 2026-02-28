@@ -285,7 +285,8 @@ hooks:
 # ==============================================================================
 guardrails:
   enabled: false              # true = activar guardrails
-  protected_files: []         # globs: [".env", "*.pem", "secrets/**"]
+  protected_files: []         # globs — solo escritura: ["*.lock", "Makefile"]
+  sensitive_files: []         # globs — lectura + escritura: [".env", "*.pem", "*.key"]
   blocked_commands: []        # regexes: ["git push --force", "docker rm"]
   max_files_modified: null    # límite de archivos distintos por sesión (null = sin límite)
   max_lines_changed: null     # límite de líneas cambiadas acumuladas
@@ -581,7 +582,8 @@ architect run "refactoriza utils.py" -a build --mode yolo -c config.yaml
 ```yaml
 guardrails:
   enabled: true
-  protected_files: [".env", "*.pem", "deploy/**"]
+  sensitive_files: [".env", "*.pem", "*.key"]
+  protected_files: ["deploy/**"]
   blocked_commands: ["git push", "docker rm"]
   max_files_modified: 10
   max_lines_changed: 500

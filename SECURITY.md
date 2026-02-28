@@ -611,6 +611,59 @@ See [`docs/containers.md`](docs/containers.md) for complete Containerfiles.
 
 ---
 
+## Layer 22 — Sensitive File Protection (v1.1.0)
+
+**File**: `src/architect/core/guardrails.py`
+
+The guardrails system provides two levels of file protection:
+
+| Field | Blocks writes | Blocks reads | Use case |
+|-------|:---:|:---:|----------|
+| `protected_files` | Yes | No | Config files you want readable but not editable |
+| `sensitive_files` | Yes | Yes | Secrets that should never reach the LLM provider |
+
+### Why Read Protection Matters
+
+When the agent reads a file, its contents are sent to the LLM provider as part of the conversation context. For files containing API keys, private keys, or database credentials, this means secrets are transmitted to a third-party service. `sensitive_files` prevents this by blocking `read_file` calls before the file content is ever accessed.
+
+### Configuration
+
+```yaml
+guardrails:
+  # Write-only protection (v1.0.0): agent can read but not modify
+  protected_files:
+    - "config/production.yaml"
+    - "Makefile"
+    - "*.lock"
+
+  # Full protection (v1.1.0): agent cannot read or modify
+  sensitive_files:
+    - ".env"
+    - ".env.*"
+    - "*.pem"
+    - "*.key"
+    - "secrets/**"
+```
+
+### Protection Vectors
+
+`sensitive_files` protects against three access vectors:
+
+| Vector | Detection | Example blocked |
+|--------|-----------|----------------|
+| Direct tool call | `read_file` added to guardrails check in `ExecutionEngine` | `read_file .env` |
+| Shell read command | `_READ_CMD_RE` regex detects `cat`, `head`, `tail`, `less`, `more` | `cat .env`, `head -n 5 server.pem` |
+| Shell redirect (write) | `_REDIRECT_RE` regex detects `>`, `>>`, `\| tee` | `echo "x" > .env` |
+
+### Implementation Details
+
+- `check_file_access()` checks `sensitive_files` first (all actions), then `protected_files` (write actions only)
+- The `action` parameter differentiates between `read_file` and write operations (`write_file`, `edit_file`, `delete_file`, `apply_patch`)
+- Both lists use `fnmatch` glob matching on both the full path and the basename
+- `sensitive_files` auto-enables guardrails when configured (same as `protected_files`)
+
+---
+
 ## Extension Security (v1.0.0)
 
 ### Sub-Agents (Dispatch)
@@ -652,6 +705,7 @@ See [`docs/containers.md`](docs/containers.md) for complete Containerfiles.
 - [ ] Lint/test hooks configured to verify generated code
 - [ ] Review additional `blocked_patterns` for the environment
 - [ ] Verify the workspace doesn't contain files with secrets
+- [ ] Use `sensitive_files` for secrets (`.env`, `*.pem`, `*.key`) to block both read and write access
 - [ ] If telemetry enabled: verify the OTLP endpoint uses TLS
 
 ### Auditing
@@ -665,7 +719,7 @@ See [`docs/containers.md`](docs/containers.md) for complete Containerfiles.
 
 - [ ] Use `token_env` instead of direct `token` for MCP
 - [ ] Use `api_key_env` for LLM (default: `LITELLM_API_KEY`)
-- [ ] Do not store `.env` or credentials inside the agent's workspace
+- [ ] Do not store `.env` or credentials inside the agent's workspace. If unavoidable, add them to `sensitive_files`
 - [ ] In containers: use Kubernetes Secrets or Docker secrets
 
 ---
@@ -695,3 +749,4 @@ See [`docs/containers.md`](docs/containers.md) for complete Containerfiles.
 | 19 | Dry-run mode | `engine.py` | Verify without executing |
 | 20 | Subagent isolation | `dispatch.py` | Sub-agents with limited tools and isolated context |
 | 21 | Code rules pre-exec | `loop.py` | Blocking writes that violate rules BEFORE execution |
+| 22 | Sensitive file protection | `guardrails.py` | Blocking read AND write access to secret files (`.env`, `*.pem`, `*.key`) |

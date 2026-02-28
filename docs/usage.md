@@ -1889,12 +1889,17 @@ A partir de v0.16.0 (Plan base v4 Phase A), architect incluye un motor de **guar
 guardrails:
   enabled: true
 
-  # Archivos protegidos (glob patterns)
-  protected_files:
+  # Archivos sensibles — bloquea lectura Y escritura (v1.1.0)
+  sensitive_files:
     - ".env"
     - "*.pem"
     - "*.key"
     - "secrets/**"
+
+  # Archivos protegidos — solo bloquea escritura (permite lectura)
+  protected_files:
+    - "Dockerfile"
+    - "*.lock"
 
   # Comandos bloqueados (regex patterns)
   blocked_commands:
@@ -1956,7 +1961,8 @@ Los guardrails se evalúan **siempre antes** que los hooks. Si un guardrail bloq
 
 | Guardrail | Protección |
 |-----------|-----------|
-| `protected_files` | Bloquea write/edit/delete en archivos sensibles |
+| `sensitive_files` | Bloquea lectura Y escritura — secrets nunca llegan al LLM (v1.1.0) |
+| `protected_files` | Bloquea solo write/edit/delete (permite lectura) |
 | `blocked_commands` | Bloquea `run_command` con patrones peligrosos |
 | `max_files_modified` | Limita el alcance de cambios por sesión |
 | `max_lines_changed` | Evita refactorizaciones masivas no intencionadas |
@@ -1970,7 +1976,8 @@ Los guardrails se evalúan **siempre antes** que los hooks. Si un guardrail bloq
 ```yaml
 guardrails:
   enabled: true
-  protected_files: [".env", "*.pem", "deploy/**", "Dockerfile"]
+  sensitive_files: [".env", "*.pem", "*.key"]
+  protected_files: ["deploy/**", "Dockerfile"]
   blocked_commands: ["git push", "docker build"]
   max_files_modified: 5
   max_lines_changed: 200

@@ -231,8 +231,8 @@ class ExecutionEngine:
         if not self.guardrails:
             return None
 
-        # Verificar archivos protegidos
-        if tool_name in ("write_file", "edit_file", "delete_file", "apply_patch"):
+        # Verificar archivos protegidos/sensibles
+        if tool_name in ("read_file", "write_file", "edit_file", "delete_file", "apply_patch"):
             file_path = tool_input.get("path", "")
             allowed, reason = self.guardrails.check_file_access(file_path, tool_name)
             if not allowed:

@@ -483,7 +483,16 @@ class GuardrailsConfig(BaseModel):
     )
     protected_files: list[str] = Field(
         default_factory=list,
-        description="Patrones glob de archivos protegidos (ej: ['.env', '*.pem', '*.key'])",
+        description="Patrones glob de archivos protegidos contra escritura (ej: ['.env', '*.pem', '*.key'])",
+    )
+    sensitive_files: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Patrones glob de archivos sensibles — bloquea LECTURA y ESCRITURA "
+            "(ej: ['.env', '*.pem', 'secrets/*']). "
+            "A diferencia de protected_files (solo escritura), sensitive_files "
+            "impide también leer el contenido."
+        ),
     )
     blocked_commands: list[str] = Field(
         default_factory=list,
@@ -521,6 +530,7 @@ class GuardrailsConfig(BaseModel):
         if not self.enabled:
             has_rules = (
                 bool(self.protected_files)
+                or bool(self.sensitive_files)
                 or bool(self.blocked_commands)
                 or self.max_files_modified is not None
                 or self.max_lines_changed is not None

@@ -389,15 +389,18 @@ Los guardrails son reglas **deterministas** de seguridad que se evalúan ANTES q
 
 ### Buenas prácticas con guardrails
 
-**Protege archivos sensibles.** Siempre añade `.env`, certificados y configuraciones de producción a `protected_files`.
+**Protege archivos sensibles.** Usa `sensitive_files` para secrets (bloquea lectura y escritura) y `protected_files` para archivos que se pueden leer pero no modificar.
 
 ```yaml
 guardrails:
   enabled: true
-  protected_files:
+  # Bloquea lectura Y escritura — secrets nunca llegan al LLM
+  sensitive_files:
     - ".env*"
     - "*.pem"
     - "*.key"
+  # Bloquea solo escritura — el agente puede leer pero no modificar
+  protected_files:
     - "deploy/**"
     - "Dockerfile"
 ```

@@ -1149,9 +1149,16 @@ Protege el código base con reglas deterministas que el agente no puede ignorar.
 # config-team.yaml
 guardrails:
   enabled: true
-  protected_files:
+  # sensitive_files: bloquea LECTURA y ESCRITURA (v1.1.0)
+  # El LLM no puede ni leer estos archivos (secrets no se filtran al proveedor LLM)
+  sensitive_files:
     - ".env*"
     - "*.pem"
+    - "*.key"
+    - "secrets/**"
+  # protected_files: bloquea solo ESCRITURA
+  # El LLM puede leerlos para contexto pero no modificarlos
+  protected_files:
     - "deploy/**"
     - "Dockerfile"
     - "docker-compose*.yml"
@@ -1184,8 +1191,9 @@ guardrails:
 # El agente trabaja libremente pero dentro de los guardrails
 architect run "refactoriza el módulo de pagos" \
   --mode yolo -c config-team.yaml
-# → Si intenta editar .env → bloqueado
-# → Si genera eval() → bloqueado
+# → Si intenta leer .env → bloqueado (sensitive_files)
+# → Si intenta editar Dockerfile → bloqueado (protected_files)
+# → Si genera eval() → bloqueado (code_rules)
 # → Al completar → pytest + ruff obligatorios
 ```
 
