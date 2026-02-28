@@ -1067,7 +1067,7 @@ indexer:
 | Skills | `.architect.md` en cada proyecto, skills con globs para contexto específico |
 | Memoria | Activar en proyectos recurrentes, revisar `.architect/memory.md` periódicamente |
 | Sessions | Activar `auto_save: true`, usar `resume` para tareas parciales, `cleanup` periódico |
-| Reports | `--report github` en PRs, `--report json` para CI, `--report-file` siempre en CI |
+| Reports | `--report github` en PRs, `--report json` para CI, `--report-file` siempre en CI (formato inferido de extensión si no se pasa `--report`) |
 | Dry run | `--dry-run` para previsualizar antes de ejecutar en producción |
 | Evaluación | `basic` para CI, `full` solo para tareas críticas |
 | Modo | `confirm-sensitive` en local, `yolo` en CI |

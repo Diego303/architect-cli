@@ -58,7 +58,7 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--json` | Salida JSON a stdout (desactiva streaming) |
 | `--dry-run` | Modo dry-run: simula sin ejecutar tools de escritura |
 | `--report FORMAT` | Formato reporte: `json`, `markdown`, `github` |
-| `--report-file PATH` | Escribir reporte a archivo (si no, stdout) |
+| `--report-file PATH` | Escribir reporte a archivo (formato inferido de extensión si no se pasa `--report`) |
 | `--session ID` | Reanudar sesión existente por ID |
 | `--confirm-mode MODE` | Override confirm mode (yolo/confirm-all/confirm-sensitive) |
 | `--context-git-diff REF` | Inyectar diff `git diff REF` como contexto adicional |

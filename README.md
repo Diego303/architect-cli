@@ -107,7 +107,7 @@ architect run PROMPT [options]
 | `--max-steps N` | Maximum agent steps limit |
 | `--budget N` | Cost limit in USD (stops the agent if exceeded) |
 | `--report FORMAT` | Generate execution report: `json`, `markdown`, `github` |
-| `--report-file PATH` | Save report to file instead of stdout |
+| `--report-file PATH` | Save report to file (format inferred from extension: `.json`, `.md`, `.html`) |
 
 **Session and CI/CD options**:
 
@@ -1293,7 +1293,7 @@ architect run PROMPT
 | v0.19.0 | **v4 Phase D** — Competitive multi-model evaluation (`architect eval`), preset initialization (`architect init` with 5 presets), code health analysis (`--health` with complexity/duplicates delta), delegated sub-agents (`dispatch_subagent` with explore/test/review types), OpenTelemetry traceability (session/llm/tool spans), 7 QA bugfixes (code_rules pre-execution, dispatch wiring, telemetry wiring, health wiring, parallel config propagation) |
 | **v1.0.0** | **Stable release** — First public version. Culmination of Plan V4 (Phases A+B+C+D) on v3 core. 15 CLI commands, 11+ tools, 4 agents, hooks + guardrails + skills + memory, sessions + reports + CI/CD, Ralph Loop + pipelines + parallel + checkpoints + auto-review, sub-agents + health + eval + telemetry + presets. 687 tests, 31 E2E checks. |
 | v1.0.1 | **Bugfixes** — Test fixes and general stability corrections after initial release. |
-| **v1.1.0** | **`sensitive_files` guardrail** — New `sensitive_files` field blocks both read and write access to secret files (`.env`, `*.pem`, `*.key`). Shell read detection (`cat`, `head`, `tail`). `protected_files` remains write-only (backward compatible). 717 tests. |
+| **v1.1.0** | **`sensitive_files` guardrail** — New `sensitive_files` field blocks both read and write access to secret files (`.env`, `*.pem`, `*.key`). Shell read detection (`cat`, `head`, `tail`). `protected_files` remains write-only (backward compatible). **Report format inference** — `--report-file` now works without `--report` by inferring format from file extension (`.json`, `.md`, `.html`). 725 tests. |
 
 ---
 

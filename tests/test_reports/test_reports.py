@@ -254,3 +254,43 @@ class TestReportToGithubComment:
         gen = ReportGenerator(full_report)
         comment = gen.to_github_pr_comment()
         assert "WARN" in comment
+
+
+# ── Tests para _infer_report_format ──────────────────────────────────────
+
+
+class TestInferReportFormat:
+    """Tests para inferencia de formato de reporte por extensión de archivo."""
+
+    def test_json_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("report.json") == "json"
+
+    def test_md_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("output.md") == "markdown"
+
+    def test_markdown_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("output.markdown") == "markdown"
+
+    def test_html_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("pr-comment.html") == "github"
+
+    def test_unknown_extension_defaults_to_markdown(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("report.txt") == "markdown"
+
+    def test_no_extension_defaults_to_markdown(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("report") == "markdown"
+
+    def test_path_with_directories(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("output/reports/result.json") == "json"
+
+    def test_case_insensitive(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("REPORT.JSON") == "json"
+        assert _infer_report_format("report.MD") == "markdown"

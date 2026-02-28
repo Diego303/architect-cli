@@ -21,7 +21,18 @@ Se detectó un gap de seguridad: `protected_files` bloqueaba escritura/edición/
 | `read_file` añadido a guardrails check | `src/architect/execution/engine.py` |
 | 30 tests nuevos (TestSensitiveFiles, TestExtractReadTargets, schema) | `tests/test_guardrails/test_guardrails.py` |
 
-**Tests**: 717 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+### Reports: Inferencia de formato por extensión de archivo
+
+`--report-file report.md` sin `--report` no generaba reporte porque la lógica estaba condicionada a `if report_format:`.
+
+**Solución**: `_infer_report_format()` infiere el formato de la extensión (`.json` → json, `.md` → markdown, `.html` → github, default: markdown). Aplicado en los 3 comandos: `run`, `loop`, `pipeline`.
+
+| Cambio | Archivo |
+|--------|---------|
+| Helper `_infer_report_format()` + inferencia en 3 puntos de generación | `src/architect/cli.py` |
+| 8 tests nuevos (TestInferReportFormat) | `tests/test_reports/test_reports.py` |
+
+**Tests**: 725 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
 
 ---
 
@@ -124,7 +135,7 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | Métrica | Valor |
 |---------|-------|
 | **Versión** | 1.1.0 |
-| **Tests unitarios** | 717 passed, 9 skipped, 0 failures |
+| **Tests unitarios** | 725 passed, 9 skipped, 0 failures |
 | **E2E checks** | 31 |
 | **Comandos CLI** | 15 |
 | **Tools del agente** | 11+ (locales + MCP + dispatch) |

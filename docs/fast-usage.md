@@ -407,7 +407,7 @@ Cache:
 Sessions y reports:
   --session ID              Reanudar sesión existente por ID
   --report FORMAT           json | markdown | github
-  --report-file PATH        Guardar reporte en archivo
+  --report-file PATH        Guardar reporte en archivo (formato inferido de extensión)
   --context-git-diff REF    Inyectar git diff como contexto
   --confirm-mode MODE       Override de confirm mode
   --exit-code-on-partial    Exit code 2 si status=partial

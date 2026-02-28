@@ -71,6 +71,24 @@ EXIT_INTERRUPTED = 130
 _VERSION = "1.1.0"
 
 
+_REPORT_EXT_MAP: dict[str, str] = {
+    ".json": "json",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".html": "github",
+}
+
+
+def _infer_report_format(report_file: str) -> str:
+    """Infiere el formato de reporte a partir de la extensión del archivo.
+
+    Returns:
+        'json', 'markdown' o 'github'. Default: 'markdown'.
+    """
+    ext = Path(report_file).suffix.lower()
+    return _REPORT_EXT_MAP.get(ext, "markdown")
+
+
 def _print_banner(agent_name: str, model: str, quiet: bool) -> None:
     """Imprime el banner de inicio (v3-M5)."""
     if not quiet:
@@ -710,6 +728,8 @@ def run(prompt: str, **kwargs) -> None:  # type: ignore
 
         # v4-B2: Generar reporte si se pidió
         report_format = kwargs.get("report_format")
+        if not report_format and kwargs.get("report_file"):
+            report_format = _infer_report_format(kwargs["report_file"])
         if report_format:
             duration = time.time() - state.start_time
 
@@ -1329,6 +1349,8 @@ def loop_cmd(
             )
 
     # v4-B2: Generar reporte si se pidió
+    if not report_format and report_file:
+        report_format = _infer_report_format(report_file)
     if report_format:
         exec_report = ExecutionReport(
             task=task,
@@ -1640,6 +1662,8 @@ def pipeline_cmd(
     all_ok = all(r.status in ("success", "skipped", "dry_run") for r in results)
 
     # v4-B2: Generar reporte si se pidió
+    if not report_format and report_file:
+        report_format = _infer_report_format(report_file)
     if report_format:
         total_cost = sum(r.cost for r in results)
         total_duration = sum(r.duration for r in results)

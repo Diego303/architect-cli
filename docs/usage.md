@@ -1784,7 +1784,7 @@ Hooks y guardrails (v4)
 Sessions y reports (v4-B)
   --session ID              Reanudar sesión existente por ID
   --report FORMAT           json | markdown | github — formato de reporte
-  --report-file PATH        Escribir reporte a archivo (si no, a stdout)
+  --report-file PATH        Escribir reporte a archivo (formato inferido de extensión si no se pasa --report)
   --context-git-diff REF    Inyectar git diff REF como contexto adicional
   --confirm-mode MODE       Override de confirm mode
   --exit-code-on-partial    Exit code 2 si status=partial

@@ -56,7 +56,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | `tests/test_skills/` | 31 | SkillsLoader, SkillInstaller |
 | `tests/test_memory/` | 32 | ProceduralMemory, correction patterns |
 | `tests/test_sessions/` | 22 | SessionManager, SessionState, generate_session_id |
-| `tests/test_reports/` | 20 | ExecutionReport, ReportGenerator, collect_git_diff |
+| `tests/test_reports/` | 29 | ExecutionReport, ReportGenerator, collect_git_diff, _infer_report_format |
 | `tests/test_dryrun/` | 23 | DryRunTracker, PlannedAction, WRITE_TOOLS/READ_TOOLS |
 | `tests/test_ralph/` | 90 | RalphLoop, RalphConfig, LoopIteration, RalphLoopResult |
 | `tests/test_pipelines/` | 83 | PipelineRunner, PipelineConfig, PipelineStep, variables, conditions |

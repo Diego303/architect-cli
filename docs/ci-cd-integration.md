@@ -86,7 +86,7 @@ architect run "PROMPT" \
   --budget 2.00 \            # Límite de gasto USD
   --show-costs \             # Resumen de costes al final
   --report FORMAT \          # json | markdown | github
-  --report-file PATH \       # Guardar reporte en archivo
+  --report-file PATH \       # Guardar reporte en archivo (formato inferido de extensión si no se pasa --report)
   --context-git-diff REF \   # Inyectar diff como contexto
   --exit-code-on-partial \   # Exit 2 si status=partial
   --allow-commands \         # Permitir ejecución de comandos (pytest, etc.)

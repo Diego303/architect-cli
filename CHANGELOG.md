@@ -19,6 +19,17 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - **Auto-enable** — `sensitive_files` activa automáticamente el sistema de guardrails si tiene patrones configurados, igual que `protected_files` y otros campos. (`src/architect/config/schema.py`)
 - **30 tests nuevos** — `TestSensitiveFiles` (22 tests: lectura bloqueada, escritura bloqueada, protected vs sensitive, shell reads, shell redirects, basename matching), `TestExtractReadTargets` (6 tests), `TestGuardrailsConfigSchema` ampliado (3 tests). (`tests/test_guardrails/test_guardrails.py`)
 
+### Reports: Inferencia de formato por extensión de archivo
+
+#### Añadido
+
+- **`_infer_report_format()`** — Cuando se usa `--report-file` sin `--report`, el formato se infiere automáticamente de la extensión: `.json` → json, `.md`/`.markdown` → markdown, `.html` → github, otro → markdown. (`src/architect/cli.py`)
+- **8 tests nuevos** — `TestInferReportFormat` cubre extensiones conocidas, desconocidas, sin extensión, paths con directorios y case-insensitive. (`tests/test_reports/test_reports.py`)
+
+#### Corregido
+
+- **`--report-file` sin `--report` no generaba reporte** — La lógica de generación estaba condicionada a `if report_format:`, que era `None` cuando no se pasaba `--report`. Ahora se infiere el formato de la extensión del archivo en los 3 puntos de generación: `run`, `loop` y `pipeline`. (`src/architect/cli.py`)
+
 #### Cambiado
 
 - **`check_file_access()` ahora usa el parámetro `action`** — El método ya recibía `action` pero lo ignoraba. Ahora diferencia entre acciones de lectura (solo `sensitive_files`) y escritura (`protected_files` + `sensitive_files`). Backward compatible: todos los callers existentes pasan acciones de escritura. (`src/architect/core/guardrails.py`)
@@ -26,7 +37,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 #### Tests
 
-- **717 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 nuevos)
+- **725 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 guardrails + 8 reports)
 - 31 E2E checks pasando sin cambios
 
 ---
