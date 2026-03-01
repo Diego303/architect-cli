@@ -10,6 +10,7 @@ iteraciones anteriores. Esto evita contaminación de contexto y permite que
 cada iteración aborde el problema con perspectiva fresca.
 """
 
+import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -18,7 +19,10 @@ from typing import Any, Callable
 
 import structlog
 
+from architect.logging.levels import HUMAN
+
 logger = structlog.get_logger()
+_hlog = logging.getLogger("architect.ralph")
 
 __all__ = [
     "LoopIteration",
@@ -151,6 +155,12 @@ class RalphLoop:
                 iteration=i,
                 max=self.config.max_iterations,
             )
+            _hlog.log(HUMAN, {
+                "event": "ralph.iteration_start",
+                "iteration": i,
+                "max_iterations": self.config.max_iterations,
+                "check_cmd": self.config.checks[0] if self.config.checks else "",
+            })
 
             # Verificar límites globales
             if self.config.max_cost and total_cost >= self.config.max_cost:
@@ -181,6 +191,23 @@ class RalphLoop:
 
             # Log resultado
             self._log_iteration_result(iteration)
+            passed_count = sum(1 for c in iteration.check_results if c["passed"])
+            total_count = len(iteration.check_results)
+            _hlog.log(HUMAN, {
+                "event": "ralph.checks_result",
+                "iteration": i,
+                "passed": passed_count,
+                "total": total_count,
+                "all_passed": iteration.all_checks_passed,
+            })
+            iter_status = "passed" if iteration.all_checks_passed else "failed"
+            _hlog.log(HUMAN, {
+                "event": "ralph.iteration_done",
+                "iteration": i,
+                "status": iter_status,
+                "cost": iteration.cost,
+                "duration": iteration.duration,
+            })
 
             # Terminamos si checks pasan Y tag encontrado
             if iteration.all_checks_passed and iteration.completion_tag_found:
@@ -204,6 +231,12 @@ class RalphLoop:
 
         result.total_cost = total_cost
         result.total_duration = time.time() - start_time
+        _hlog.log(HUMAN, {
+            "event": "ralph.complete",
+            "total_iterations": result.total_iterations,
+            "status": "success" if result.success else result.stop_reason,
+            "total_cost": total_cost,
+        })
         return result
 
     def _run_single_iteration(self, iteration: int, prompt: str) -> LoopIteration:

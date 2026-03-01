@@ -56,7 +56,31 @@ Un pipeline YAML con campos incorrectos (ej: `task:` en vez de `prompt:`) se lan
 | CLI captura `PipelineValidationError` → exit code 3 sin traceback | `src/architect/cli.py` |
 | 9 tests nuevos (TestPipelineYamlValidation) | `tests/test_pipelines/test_pipelines.py` |
 
-**Tests**: 739 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+### HUMAN Logging: Trazabilidad visual para features de alto nivel
+
+Las features de ejecución de alto nivel (pipelines, ralph loop, auto-review, parallel, competitive eval) solo emitían logs técnicos de structlog. El usuario no tenía visibilidad clara de qué paso/iteración/worker estaba ejecutándose.
+
+**Solución**: 14 eventos HUMAN-level (nivel 25) emitidos desde cada feature vía stdlib `logging.getLogger()` con dict msgs, formateados por `HumanFormatter` y mostrados en stderr con iconos y barras separadoras.
+
+| Feature | Eventos | Ejemplo visual |
+|---------|---------|---------------|
+| Pipelines | `step_start`, `step_skipped`, `step_done` | `━ Pipeline step 1/3: build (agent: build) ━━━` |
+| Ralph Loop | `iteration_start`, `checks_result`, `iteration_done`, `complete` | `━ Ralph iteration 1/5 (check: pytest) ━━━` / `🧪 Checks: 3/5 passed` |
+| Auto-Reviewer | `start`, `complete` | `━ Auto-Review (142 líneas de diff) ━━━` / `✓ Review completo: aprobado` |
+| Parallel Runs | `worker_done`, `worker_error`, `complete` | `✓ Worker 1 (gpt-4.1) → success ($0.04, 120s)` |
+| Competitive Eval | `model_done`, `ranking` | `🏆 gpt-4.1: #1 (score: 85, 5/5 checks)` / `🏁 Ranking final: A > B > C` |
+
+| Cambio | Archivo |
+|--------|---------|
+| 3 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/pipelines.py` |
+| 4 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/ralph.py` |
+| 2 eventos HUMAN + `_hlog` stdlib logger | `src/architect/agents/reviewer.py` |
+| 3 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/parallel.py` |
+| 2 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/competitive.py` |
+| 14 case handlers en `HumanFormatter` + 11 métodos en `HumanLog` | `src/architect/logging/human.py` |
+| 56 tests nuevos (integration + formatter + HumanLog por feature) | `tests/test_pipelines/`, `test_ralph/`, `test_reviewer/`, `test_parallel/`, `test_competitive/` |
+
+**Tests**: 795 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
 
 ---
 

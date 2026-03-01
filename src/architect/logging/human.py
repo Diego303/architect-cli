@@ -26,6 +26,7 @@ Formato de ejemplo:
 
 import logging
 import sys
+from typing import Any
 
 from .levels import HUMAN
 
@@ -154,6 +155,128 @@ class HumanFormatter:
                 else:
                     reason_str = f" — {stop_reason}" if stop_reason else ""
                     return f"\n⚡ Detenido ({status}{reason_str}, {steps} pasos){cost_line}"
+
+            # ── PIPELINE ─────────────────────────────────────────────────
+            case "pipeline.step_start":
+                step = kw.get("step", "?")
+                agent = kw.get("agent", "build")
+                index = kw.get("index", "?")
+                total = kw.get("total", "?")
+                label = f" Pipeline step {index}/{total}: {step} (agent: {agent}) "
+                bar = f"━{label:━<58}━"
+                return f"\n{bar}"
+
+            case "pipeline.step_skipped":
+                step = kw.get("step", "?")
+                return f"\n   ⏭️  Step '{step}' omitido (condición no cumplida)"
+
+            case "pipeline.step_done":
+                step = kw.get("step", "?")
+                status = kw.get("status", "?")
+                cost = kw.get("cost", 0)
+                duration = kw.get("duration", 0)
+                icon = "✓" if status == "success" else "✗"
+                cost_str = f"${cost:.4f}" if cost else "$0"
+                dur_str = f"{duration:.1f}s" if duration else "0s"
+                return f"\n   {icon} Step '{step}' → {status} ({cost_str}, {dur_str})"
+
+            # ── RALPH LOOP ──────────────────────────────────────────────
+            case "ralph.iteration_start":
+                iteration = kw.get("iteration", "?")
+                max_iterations = kw.get("max_iterations", "?")
+                check_cmd = kw.get("check_cmd", "")
+                label = f" Ralph iteration {iteration}/{max_iterations}"
+                if check_cmd:
+                    label += f" (check: {check_cmd})"
+                label += " "
+                bar = f"━{label:━<58}━"
+                return f"\n{bar}"
+
+            case "ralph.checks_result":
+                iteration = kw.get("iteration", "?")
+                passed = kw.get("passed", 0)
+                total = kw.get("total", 0)
+                all_passed = kw.get("all_passed", False)
+                check_icon = " ✓" if all_passed else ""
+                return f"   🧪 Checks: {passed}/{total} passed{check_icon}"
+
+            case "ralph.iteration_done":
+                iteration = kw.get("iteration", "?")
+                status = kw.get("status", "?")
+                cost = kw.get("cost", 0)
+                duration = kw.get("duration", 0)
+                icon = "✓" if status in ("success", "passed") else "✗"
+                cost_str = f"${cost:.4f}" if cost else "$0"
+                dur_str = f"{duration:.1f}s" if duration else "0s"
+                return f"   {icon} Iteration {iteration} → {status} ({cost_str}, {dur_str})"
+
+            case "ralph.complete":
+                total_iterations = kw.get("total_iterations", "?")
+                status = kw.get("status", "?")
+                total_cost = kw.get("total_cost", 0)
+                cost_str = f"${total_cost:.4f}" if total_cost else "$0"
+                icon = "✅" if status == "success" else "⚠️"
+                return f"\n{icon} Ralph complete — {total_iterations} iterations, {status} ({cost_str})"
+
+            # ── AUTO-REVIEWER ───────────────────────────────────────────
+            case "reviewer.start":
+                diff_lines = kw.get("diff_lines", "?")
+                label = f" Auto-Review ({diff_lines} líneas de diff) "
+                bar = f"━{label:━<58}━"
+                return f"\n{bar}"
+
+            case "reviewer.complete":
+                approved = kw.get("approved", False)
+                issues = kw.get("issues", 0)
+                score = kw.get("score", "?")
+                icon = "✓" if approved else "✗"
+                status = "aprobado" if approved else "no aprobado"
+                return f"   {icon} Review completo: {status}, {issues} issues, score {score}"
+
+            # ── PARALLEL RUNS ───────────────────────────────────────────
+            case "parallel.worker_done":
+                worker = kw.get("worker", "?")
+                model = kw.get("model", "?")
+                status = kw.get("status", "?")
+                cost = kw.get("cost", 0)
+                duration = kw.get("duration", 0)
+                icon = "✓" if status == "success" else "✗"
+                cost_str = f"${cost:.4f}" if cost else "$0"
+                dur_str = f"{duration:.1f}s" if duration else "0s"
+                return f"   {icon} Worker {worker} ({model}) → {status} ({cost_str}, {dur_str})"
+
+            case "parallel.worker_error":
+                worker = kw.get("worker", "?")
+                error = kw.get("error", "?")
+                return f"   ✗ Worker {worker} → error: {error}"
+
+            case "parallel.complete":
+                total_workers = kw.get("total_workers", "?")
+                succeeded = kw.get("succeeded", 0)
+                failed = kw.get("failed", 0)
+                total_cost = kw.get("total_cost", 0)
+                cost_str = f"${total_cost:.4f}" if total_cost else "$0"
+                return f"\n⚡ Parallel complete — {total_workers} workers: {succeeded} success, {failed} failed ({cost_str})"
+
+            # ── COMPETITIVE EVAL ────────────────────────────────────────
+            case "competitive.model_done":
+                model = kw.get("model", "?")
+                rank = kw.get("rank", "?")
+                score = kw.get("score", 0)
+                cost = kw.get("cost", 0)
+                checks_passed = kw.get("checks_passed", 0)
+                checks_total = kw.get("checks_total", 0)
+                medals = {1: "🏆", 2: "🥈", 3: "🥉"}
+                medal = medals.get(rank, f"#{rank}")
+                cost_str = f"${cost:.4f}" if cost else "$0"
+                return f"   {medal} {model}: #{rank} (score: {score}, {checks_passed}/{checks_total} checks, {cost_str})"
+
+            case "competitive.ranking":
+                ranking = kw.get("ranking", [])
+                if not ranking:
+                    return "\n🏁 Ranking final: (sin resultados)"
+                names = [r.get("model", "?") for r in ranking]
+                return f"\n🏁 Ranking final: {' > '.join(names)}"
 
             # ── CONTEXT ──────────────────────────────────────────────────
             case "context.compressing":
@@ -297,6 +420,89 @@ class HumanLog:
             total_steps=total_steps,
             total_tool_calls=total_tool_calls,
         )
+
+    def pipeline_step_start(self, step: str, agent: str, index: int, total: int) -> None:
+        self._log.log(
+            HUMAN, "pipeline.step_start",
+            step=step, agent=agent, index=index, total=total,
+        )
+
+    def pipeline_step_skipped(self, step: str) -> None:
+        self._log.log(HUMAN, "pipeline.step_skipped", step=step)
+
+    def pipeline_step_done(self, step: str, status: str, cost: float, duration: float) -> None:
+        self._log.log(
+            HUMAN, "pipeline.step_done",
+            step=step, status=status, cost=cost, duration=duration,
+        )
+
+    # ── Ralph Loop ──────────────────────────────────────────────
+
+    def ralph_iteration_start(self, iteration: int, max_iterations: int, check_cmd: str = "") -> None:
+        self._log.log(
+            HUMAN, "ralph.iteration_start",
+            iteration=iteration, max_iterations=max_iterations, check_cmd=check_cmd,
+        )
+
+    def ralph_checks_result(self, iteration: int, passed: int, total: int, all_passed: bool) -> None:
+        self._log.log(
+            HUMAN, "ralph.checks_result",
+            iteration=iteration, passed=passed, total=total, all_passed=all_passed,
+        )
+
+    def ralph_iteration_done(self, iteration: int, status: str, cost: float, duration: float) -> None:
+        self._log.log(
+            HUMAN, "ralph.iteration_done",
+            iteration=iteration, status=status, cost=cost, duration=duration,
+        )
+
+    def ralph_complete(self, total_iterations: int, status: str, total_cost: float) -> None:
+        self._log.log(
+            HUMAN, "ralph.complete",
+            total_iterations=total_iterations, status=status, total_cost=total_cost,
+        )
+
+    # ── Auto-Reviewer ───────────────────────────────────────────
+
+    def reviewer_start(self, diff_lines: int) -> None:
+        self._log.log(HUMAN, "reviewer.start", diff_lines=diff_lines)
+
+    def reviewer_complete(self, approved: bool, issues: int, score: str = "N/A") -> None:
+        self._log.log(
+            HUMAN, "reviewer.complete",
+            approved=approved, issues=issues, score=score,
+        )
+
+    # ── Parallel Runs ───────────────────────────────────────────
+
+    def parallel_worker_done(self, worker: int, model: str, status: str, cost: float, duration: float) -> None:
+        self._log.log(
+            HUMAN, "parallel.worker_done",
+            worker=worker, model=model, status=status, cost=cost, duration=duration,
+        )
+
+    def parallel_worker_error(self, worker: int, error: str) -> None:
+        self._log.log(HUMAN, "parallel.worker_error", worker=worker, error=error)
+
+    def parallel_complete(self, total_workers: int, succeeded: int, failed: int, total_cost: float) -> None:
+        self._log.log(
+            HUMAN, "parallel.complete",
+            total_workers=total_workers, succeeded=succeeded, failed=failed, total_cost=total_cost,
+        )
+
+    # ── Competitive Eval ────────────────────────────────────────
+
+    def competitive_model_done(
+        self, model: str, rank: int, score: float, cost: float, checks_passed: int, checks_total: int,
+    ) -> None:
+        self._log.log(
+            HUMAN, "competitive.model_done",
+            model=model, rank=rank, score=score, cost=cost,
+            checks_passed=checks_passed, checks_total=checks_total,
+        )
+
+    def competitive_ranking(self, ranking: list[dict[str, Any]]) -> None:
+        self._log.log(HUMAN, "competitive.ranking", ranking=ranking)
 
 
 def _summarize_args(tool_name: str, args: dict) -> str:

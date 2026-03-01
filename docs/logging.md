@@ -125,6 +125,45 @@ Cada tipo de evento tiene su formato con iconos:
 | `agent.loop.complete` (success) | `(N pasos, M tool calls)` + coste | — |
 | `agent.loop.complete` (partial) | `⚡ Detenido (status — razón, N pasos)` | ⚡ |
 
+### Pipeline (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `pipeline.step_start` | `━ Pipeline step 1/3: analyze (agent: plan) ━━━━━` | ━ |
+| `pipeline.step_skipped` | `⏭️  Step 'deploy' omitido (condición no cumplida)` | ⏭️ |
+| `pipeline.step_done` | `✓ Step 'analyze' → success ($0.0234, 12.5s)` | ✓/✗ |
+
+### Ralph Loop (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `ralph.iteration_start` | `━ Ralph iteration 1/5 (check: pytest tests/) ━━━` | ━ |
+| `ralph.checks_result` | `🧪 Checks: 3/5 passed` (o `5/5 passed ✓`) | 🧪 |
+| `ralph.iteration_done` | `✓ Iteration 1 → success ($0.0234, 45.2s)` | ✓/✗ |
+| `ralph.complete` | `✅ Ralph complete — 2 iterations, success ($0.0423)` | ✅/⚠️ |
+
+### Auto-Reviewer (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `reviewer.start` | `━ Auto-Review (142 líneas de diff) ━━━━━━━━━━━━━` | ━ |
+| `reviewer.complete` | `✓ Review completo: aprobado, 2 issues, score 8/10` | ✓/✗ |
+
+### Parallel Runs (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `parallel.worker_done` | `✓ Worker 1 (gpt-4.1) → success ($0.0456, 120.3s)` | ✓/✗ |
+| `parallel.worker_error` | `✗ Worker 3 → error: timeout` | ✗ |
+| `parallel.complete` | `⚡ Parallel complete — 3 workers: 2 success, 1 failed ($0.0857)` | ⚡ |
+
+### Competitive Eval (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `competitive.model_done` | `🏆 gpt-4.1: #1 (score: 85, 5/5 checks, $0.0456)` | 🏆/🥈/🥉 |
+| `competitive.ranking` | `🏁 Ranking final: gpt-4.1 > claude-sonnet > gpt-4.1-mini` | 🏁 |
+
 ### Contexto
 
 | Evento | Formato | Icono |
@@ -174,6 +213,33 @@ hlog.closing("max_steps", steps=50)                # 🔄 Cerrando (max_steps, 5
 hlog.llm_error("timeout")                          # ❌ Error del LLM: timeout
 hlog.step_timeout(seconds=60)                      # ⚠️ Step timeout (60s)
 hlog.loop_complete("success", None, 3, 5)          # (3 pasos, 5 tool calls)
+
+# Pipeline (v1.1.0)
+hlog.pipeline_step_start("analyze", "plan", 1, 3)  # ━ Pipeline step 1/3: analyze ━━━
+hlog.pipeline_step_skipped("deploy")                # ⏭️ Step 'deploy' omitido
+hlog.pipeline_step_done("analyze", "success", 0.02, 12.5)  # ✓ Step 'analyze' → success
+
+# Ralph Loop (v1.1.0)
+hlog.ralph_iteration_start(1, 5, "pytest tests/")   # ━ Ralph iteration 1/5 ━━━
+hlog.ralph_checks_result(1, 3, 5, False)             # 🧪 Checks: 3/5 passed
+hlog.ralph_iteration_done(1, "partial", 0.02, 45.2)  # ✗ Iteration 1 → partial
+hlog.ralph_complete(2, "success", 0.04)              # ✅ Ralph complete — 2 iterations
+
+# Auto-Reviewer (v1.1.0)
+hlog.reviewer_start(142)                             # ━ Auto-Review (142 líneas) ━━━
+hlog.reviewer_complete(True, 2, "8/10")              # ✓ Review completo: aprobado
+
+# Parallel Runs (v1.1.0)
+hlog.parallel_worker_done(1, "gpt-4.1", "success", 0.04, 120.3)
+                                                      # ✓ Worker 1 (gpt-4.1) → success
+hlog.parallel_worker_error(3, "timeout")              # ✗ Worker 3 → error: timeout
+hlog.parallel_complete(3, 2, 1, 0.08)                 # ⚡ Parallel complete — 3 workers
+
+# Competitive Eval (v1.1.0)
+hlog.competitive_model_done("gpt-4.1", 1, 85, 0.04, 5, 5)
+                                                      # 🏆 gpt-4.1: #1 (score: 85)
+hlog.competitive_ranking([{"model": "gpt-4.1"}, {"model": "claude-sonnet"}])
+                                                      # 🏁 Ranking final: gpt-4.1 > claude-sonnet
 ```
 
 ---

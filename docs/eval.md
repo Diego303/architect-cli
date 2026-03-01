@@ -171,6 +171,31 @@ El reporte incluye:
 
 ---
 
+## Salida visual (HUMAN logging)
+
+A partir de v1.1.0, la evaluación competitiva emite eventos de nivel HUMAN que producen una salida visual clara en stderr. El usuario puede ver el ranking en tiempo real sin necesidad de flags `-v`.
+
+```
+   🏆 gpt-4.1: #1 (score: 85, 5/5 checks, $0.0456)
+   🥈 claude-sonnet: #2 (score: 72, 4/5 checks, $0.0312)
+   🥉 gpt-4.1-mini: #3 (score: 41, 2/5 checks, $0.0089)
+
+🏁 Ranking final: gpt-4.1 > claude-sonnet > gpt-4.1-mini
+```
+
+Los modelos en posiciones 1, 2 y 3 muestran medallas (🏆, 🥈, 🥉). A partir de la 4ª posición se muestra `#N`.
+
+### Eventos emitidos
+
+| Evento | Cuándo | Datos |
+|--------|--------|-------|
+| `competitive.model_done` | Al completar cada modelo | model, rank, score, cost, checks_passed, checks_total |
+| `competitive.ranking` | Al finalizar la evaluación | ranking (lista de {model, score, rank}) |
+
+Se desactiva con `--quiet` o `--json`. Ver [`logging.md`](logging.md) para detalles del sistema HUMAN.
+
+---
+
 ## Relación con Parallel
 
 `CompetitiveEval` reutiliza la infraestructura de `ParallelRunner` (git worktrees + ProcessPoolExecutor). La diferencia es que:

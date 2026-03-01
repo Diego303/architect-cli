@@ -6,6 +6,7 @@ Cada paso ejecuta un agente con su propio prompt, modelo, y configuración.
 Los pasos pueden pasar datos entre sí mediante variables {{nombre}}.
 """
 
+import logging
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -15,7 +16,10 @@ from typing import Any, Callable
 import structlog
 import yaml
 
+from architect.logging.levels import HUMAN
+
 logger = structlog.get_logger()
+_hlog = logging.getLogger("architect.pipeline")
 
 __all__ = [
     "PipelineConfig",
@@ -143,6 +147,13 @@ class PipelineRunner:
                 index=i + 1,
                 total=len(steps),
             )
+            _hlog.log(HUMAN, {
+                "event": "pipeline.step_start",
+                "step": step.name,
+                "agent": step.agent,
+                "index": i + 1,
+                "total": len(steps),
+            })
 
             # Evaluar condición
             if step.condition and not self._eval_condition(step.condition):
@@ -151,6 +162,10 @@ class PipelineRunner:
                     step=step.name,
                     reason="condition_not_met",
                 )
+                _hlog.log(HUMAN, {
+                    "event": "pipeline.step_skipped",
+                    "step": step.name,
+                })
                 self.results.append(PipelineStepResult(
                     step_name=step.name,
                     status="skipped",
@@ -195,6 +210,13 @@ class PipelineRunner:
                 status=step_result.status,
                 cost=step_result.cost,
             )
+            _hlog.log(HUMAN, {
+                "event": "pipeline.step_done",
+                "step": step.name,
+                "status": step_result.status,
+                "cost": step_result.cost,
+                "duration": step_result.duration,
+            })
 
             # Checkpoint si se pidió
             if step.checkpoint:

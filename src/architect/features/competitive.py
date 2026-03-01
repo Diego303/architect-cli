@@ -8,6 +8,7 @@ tests pasados, errores lint, pasos, coste, tiempo.
 Requiere: ParallelRunner (v4-C2).
 """
 
+import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -15,9 +16,12 @@ from pathlib import Path
 
 import structlog
 
+from architect.logging.levels import HUMAN
+
 from .parallel import ParallelConfig, ParallelRunner, WorkerResult
 
 logger = structlog.get_logger()
+_hlog = logging.getLogger("architect.competitive")
 
 __all__ = [
     "CompetitiveConfig",
@@ -154,6 +158,26 @@ class CompetitiveEval:
                 for r in results
             ],
         )
+
+        # Emit HUMAN events with ranking info
+        ranked = self._rank_results(results)
+        for rank_pos, (r, score) in enumerate(ranked, 1):
+            _hlog.log(HUMAN, {
+                "event": "competitive.model_done",
+                "model": r.model,
+                "rank": rank_pos,
+                "score": score,
+                "cost": r.cost,
+                "checks_passed": r.checks_passed,
+                "checks_total": r.checks_total,
+            })
+        _hlog.log(HUMAN, {
+            "event": "competitive.ranking",
+            "ranking": [
+                {"model": r.model, "score": score, "rank": i}
+                for i, (r, score) in enumerate(ranked, 1)
+            ],
+        })
 
         return sorted(results, key=lambda r: r.model)
 

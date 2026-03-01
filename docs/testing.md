@@ -58,18 +58,18 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | `tests/test_sessions/` | 22 | SessionManager, SessionState, generate_session_id |
 | `tests/test_reports/` | 34 | ExecutionReport, ReportGenerator, collect_git_diff, _infer_report_format, _write_report_file |
 | `tests/test_dryrun/` | 23 | DryRunTracker, PlannedAction, WRITE_TOOLS/READ_TOOLS |
-| `tests/test_ralph/` | 90 | RalphLoop, RalphConfig, LoopIteration, RalphLoopResult |
+| `tests/test_ralph/` | 105 | RalphLoop, RalphConfig, LoopIteration, RalphLoopResult, HUMAN logging |
 | `tests/test_pipelines/` | 92 | PipelineRunner, PipelineConfig, PipelineStep, variables, conditions, YAML validation |
 | `tests/test_checkpoints/` | 48 | CheckpointManager, Checkpoint, create/list/rollback |
-| `tests/test_reviewer/` | 47 | AutoReviewer, ReviewResult, build_fix_prompt, get_recent_diff |
-| `tests/test_parallel/` | 43 | ParallelRunner, ParallelConfig, WorkerResult, worktrees |
+| `tests/test_reviewer/` | 56 | AutoReviewer, ReviewResult, build_fix_prompt, get_recent_diff, HUMAN logging |
+| `tests/test_parallel/` | 53 | ParallelRunner, ParallelConfig, WorkerResult, worktrees, HUMAN logging |
 | `tests/test_dispatch/` | 36 | DispatchSubagentTool, DispatchSubagentArgs, tipos, tools |
 | `tests/test_health/` | 28 | CodeHealthAnalyzer, HealthSnapshot, HealthDelta, FunctionMetric |
-| `tests/test_competitive/` | 19 | CompetitiveEval, CompetitiveConfig, CompetitiveResult, ranking |
+| `tests/test_competitive/` | 28 | CompetitiveEval, CompetitiveConfig, CompetitiveResult, ranking, HUMAN logging |
 | `tests/test_telemetry/` | 20 (9 skip) | ArchitectTracer, NoopTracer, NoopSpan, create_tracer, SERVICE_VERSION |
 | `tests/test_presets/` | 37 | PresetManager, AVAILABLE_PRESETS, apply, list_presets |
 | `tests/test_bugfixes/` | 41 | Validación BUG-3 a BUG-7 (code_rules, dispatch, telemetry, health, parallel) |
-| **TOTAL pytest** | **739** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
+| **TOTAL pytest** | **795** | **Phases A + B + C + D + Bugfixes + v1.1.0** |
 
 > Los 7 tests que fallan en `test_integration.py` son llamadas reales a la API de OpenAI (secciones 1 y 2). Fallan con `AuthenticationError` porque no hay `OPENAI_API_KEY` configurada. Es el comportamiento esperado en CI sin credenciales.
 
@@ -156,7 +156,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 | Archivo fuente | Test file(s) | Qué se prueba |
 |---|---|---|
 | `levels.py` | `test_v3_m5` | HUMAN level (25, entre INFO y WARNING) |
-| `human.py` | `test_v3_m5` | HumanFormatter.format_event, HumanLog métodos, HumanLogHandler filtrado |
+| `human.py` | `test_v3_m5`, `test_ralph/`, `test_reviewer/`, `test_parallel/`, `test_competitive/` | HumanFormatter.format_event (25 event types), HumanLog (20 helpers), HumanLogHandler filtrado |
 | `setup.py` | `test_v3_m5`, `test_phase5` | configure_logging, dual pipeline (JSON file + stderr humano), quiet mode, verbose levels |
 
 ### `src/architect/cli.py` — CLI (Click)
@@ -189,11 +189,11 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 
 | Archivo fuente | Test file(s) | Qué se prueba |
 |---|---|---|
-| `features/ralph.py` | `tests/test_ralph/` (90 tests) | RalphLoop — iteración completa, contexto limpio por iteración, safety nets (max_iterations, max_cost, max_time), _run_checks (subprocess, exit codes), _build_iteration_prompt (con checks fallidos y outputs), RalphConfig dataclass, LoopIteration, RalphLoopResult, stop_reason (5 valores), worktree isolation, agent_factory pattern |
+| `features/ralph.py` | `tests/test_ralph/` (105 tests) | RalphLoop — iteración completa, contexto limpio por iteración, safety nets (max_iterations, max_cost, max_time), _run_checks (subprocess, exit codes), _build_iteration_prompt (con checks fallidos y outputs), RalphConfig dataclass, LoopIteration, RalphLoopResult, stop_reason (5 valores), worktree isolation, agent_factory pattern, HUMAN logging (4 eventos: iteration_start, checks_result, iteration_done, complete) |
 | `features/pipelines.py` | `tests/test_pipelines/` (92 tests) | PipelineRunner — ejecución secuencial, _substitute_variables ({{name}}), _check_condition (shell exit code), _run_checks, _create_checkpoint, from_step resume, dry_run mode, PipelineConfig/PipelineStep dataclasses, PipelineStepResult, PipelineValidationError, _validate_steps (prompt requerido, campos desconocidos, hint task→prompt, non-dict steps), output_var captura, pasos condicionados, YAML parsing |
-| `features/parallel.py` | `tests/test_parallel/` (43 tests) | ParallelRunner — _create_worktrees, _run_worker (subprocess), cleanup_worktrees, round-robin de tareas y modelos, WorkerResult dataclass, ParallelConfig, WORKTREE_PREFIX, ProcessPoolExecutor, error handling por worker |
+| `features/parallel.py` | `tests/test_parallel/` (53 tests) | ParallelRunner — _create_worktrees, _run_worker (subprocess), cleanup_worktrees, round-robin de tareas y modelos, WorkerResult dataclass, ParallelConfig, WORKTREE_PREFIX, ProcessPoolExecutor, error handling por worker, HUMAN logging (3 eventos: worker_done, worker_error, complete) |
 | `features/checkpoints.py` | `tests/test_checkpoints/` (48 tests) | CheckpointManager — create (git add + commit), list_checkpoints (git log --grep, format %H\|%s\|%at), rollback (git reset --hard), get_latest, has_changes_since, Checkpoint dataclass (frozen), short_hash, CHECKPOINT_PREFIX, no-changes → None |
-| `agents/reviewer.py` | `tests/test_reviewer/` (47 tests) | AutoReviewer — review_changes (contexto limpio, agent_factory), build_fix_prompt, get_recent_diff (subprocess git diff), ReviewResult dataclass, REVIEW_SYSTEM_PROMPT, detección "sin issues" (case-insensitive), error handling (LLM failure → ReviewResult con error), AutoReviewConfig |
+| `agents/reviewer.py` | `tests/test_reviewer/` (56 tests) | AutoReviewer — review_changes (contexto limpio, agent_factory), build_fix_prompt, get_recent_diff (subprocess git diff), ReviewResult dataclass, REVIEW_SYSTEM_PROMPT, detección "sin issues" (case-insensitive), error handling (LLM failure → ReviewResult con error), AutoReviewConfig, HUMAN logging (2 eventos: start, complete) |
 | `cli.py` (C commands) | `test_phase_c_e2e.py` (31 tests) | CLI: `architect loop`, `architect pipeline`, `architect parallel`, `architect parallel-cleanup`; integración ralph+checks, pipeline+variables+conditions, parallel+worktrees, checkpoints+list+rollback, auto-review flow |
 
 ### Plan base v4 Phase D — Dispatch, Health, Eval, Telemetry, Presets
@@ -202,7 +202,7 @@ Documento actualizado el 2026-02-28. Refleja el estado actual de todos los tests
 |---|---|---|
 | `tools/dispatch.py` | `tests/test_dispatch/` (36 tests) | DispatchSubagentTool — DispatchSubagentArgs validación, VALID_SUBAGENT_TYPES (explore/test/review), SUBAGENT_ALLOWED_TOOLS per tipo, SUBAGENT_MAX_STEPS=15, SUBAGENT_SUMMARY_MAX_CHARS=1000, execute con agent_factory mock, error handling |
 | `core/health.py` | `tests/test_health/` (28 tests) | CodeHealthAnalyzer — take_before/after_snapshot, compute_delta, FunctionMetric (frozen dataclass), HealthSnapshot campos, HealthDelta.to_report() markdown, LONG_FUNCTION_THRESHOLD (50), DUPLICATE_BLOCK_SIZE (6), análisis AST sin radon |
-| `features/competitive.py` | `tests/test_competitive/` (19 tests) | CompetitiveEval — CompetitiveConfig, CompetitiveResult, run() con ParallelRunner mock, _run_checks_in_worktree, _rank_results (score compuesto), generate_report markdown |
+| `features/competitive.py` | `tests/test_competitive/` (28 tests) | CompetitiveEval — CompetitiveConfig, CompetitiveResult, run() con ParallelRunner mock, _run_checks_in_worktree, _rank_results (score compuesto), generate_report markdown, HUMAN logging (2 eventos: model_done, ranking) |
 | `telemetry/otel.py` | `tests/test_telemetry/` (20 tests, 9 skip) | ArchitectTracer — start_session context manager, trace_llm_call, trace_tool, NoopTracer/NoopSpan, create_tracer factory (enabled/disabled), SERVICE_NAME/SERVICE_VERSION constants. 9 tests skip si OpenTelemetry no está instalado |
 | `config/presets.py` | `tests/test_presets/` (37 tests) | PresetManager — AVAILABLE_PRESETS (5), apply() genera .architect.md + config.yaml, list_presets(), overwrite behavior, preset content validation |
 | (bugfixes) | `tests/test_bugfixes/` (41 tests) | BUG-3: code_rules pre-execution (11), BUG-4: dispatch wiring (5), BUG-5: telemetry wiring (8), BUG-6: health wiring (6), BUG-7: parallel config propagation (11) |
@@ -300,6 +300,19 @@ Tras la implementación de Phase D:
    - **BUG-7 (MEDIUM)**: Workers paralelos no propagaban `--config` ni `--api-base`
 3. Se crearon 41 tests específicos de validación de bugs en `tests/test_bugfixes/test_bugfixes.py`
 4. Resultado final: **687 pytest passed**, 9 skipped, 0 failures + **31 E2E** + **~848 scripts**
+
+## QA — v1.1.0 (HUMAN Logging + Mejoras)
+
+Tras la implementación de v1.1.0:
+
+1. Se añadieron 56 tests de HUMAN logging repartidos en 4 módulos:
+   - `tests/test_ralph/` (+15): 4 integration + 7 formatter + 4 HumanLog helpers
+   - `tests/test_reviewer/` (+9): 4 integration + 3 formatter + 2 HumanLog helpers
+   - `tests/test_parallel/` (+10): 3 integration + 4 formatter + 3 HumanLog helpers
+   - `tests/test_competitive/` (+9): 2 integration + 5 formatter + 2 HumanLog helpers
+   - `tests/test_pipelines/` (+13): 3 integration + 6 formatter + 4 HumanLog helpers
+2. Se añadieron tests para sensitive_files, report inference, report write robustness, pipeline YAML validation
+3. Resultado final: **795 pytest passed**, 9 skipped, 0 failures
 
 ---
 

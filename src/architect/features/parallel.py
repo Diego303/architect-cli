@@ -7,6 +7,7 @@ como subprocess en su propio worktree.
 """
 
 import json
+import logging
 import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,7 +16,10 @@ from pathlib import Path
 
 import structlog
 
+from architect.logging.levels import HUMAN
+
 logger = structlog.get_logger()
+_hlog = logging.getLogger("architect.parallel")
 
 __all__ = [
     "ParallelConfig",
@@ -130,12 +134,25 @@ class ParallelRunner:
                             cost=result.cost,
                             steps=result.steps,
                         )
+                        _hlog.log(HUMAN, {
+                            "event": "parallel.worker_done",
+                            "worker": worker_id,
+                            "model": result.model,
+                            "status": result.status,
+                            "cost": result.cost,
+                            "duration": result.duration,
+                        })
                     except Exception as e:
                         self.log.error(
                             "parallel.worker_error",
                             worker=worker_id,
                             error=str(e),
                         )
+                        _hlog.log(HUMAN, {
+                            "event": "parallel.worker_error",
+                            "worker": worker_id,
+                            "error": str(e),
+                        })
                         results.append(WorkerResult(
                             worker_id=worker_id,
                             branch=f"architect/parallel-{worker_id}",
@@ -150,6 +167,17 @@ class ParallelRunner:
 
         except Exception as e:
             self.log.error("parallel.run_error", error=str(e))
+
+        succeeded = sum(1 for r in results if r.status == "success")
+        failed_count = sum(1 for r in results if r.status in ("failed", "timeout"))
+        total_cost = sum(r.cost for r in results)
+        _hlog.log(HUMAN, {
+            "event": "parallel.complete",
+            "total_workers": len(results),
+            "succeeded": succeeded,
+            "failed": failed_count,
+            "total_cost": total_cost,
+        })
 
         return sorted(results, key=lambda r: r.worker_id)
 

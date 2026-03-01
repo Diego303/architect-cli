@@ -294,6 +294,32 @@ except PipelineValidationError as e:
 
 ---
 
+## Salida visual (HUMAN logging)
+
+A partir de v1.1.0, el Pipeline Mode emite eventos de nivel HUMAN que producen una salida visual clara en stderr. El usuario puede ver en tiempo real el progreso de cada step sin necesidad de flags `-v`.
+
+```
+━ Pipeline step 1/3: analyze (agent: plan) ━━━━━━━━━━━━━━━━━━
+   ✓ Step 'analyze' → success ($0.0234, 12.5s)
+
+━ Pipeline step 2/3: implement (agent: build) ━━━━━━━━━━━━━━━
+   ✓ Step 'implement' → success ($0.0456, 89.3s)
+
+   ⏭️  Step 'deploy' omitido (condición no cumplida)
+```
+
+### Eventos emitidos
+
+| Evento | Cuándo | Datos |
+|--------|--------|-------|
+| `pipeline.step_start` | Al inicio de cada step | step, agent, index, total |
+| `pipeline.step_skipped` | Cuando la condición no se cumple | step |
+| `pipeline.step_done` | Al completar cada step | step, status, cost, duration |
+
+Se desactiva con `--quiet` o `--json`. Ver [`logging.md`](logging.md) para detalles del sistema HUMAN.
+
+---
+
 ## Flujo interno
 
 ```

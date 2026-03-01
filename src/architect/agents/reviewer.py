@@ -7,12 +7,16 @@ Solo tiene acceso a tools de lectura. Si encuentra problemas, el builder
 realiza un fix-pass.
 """
 
+import logging
 import subprocess
 from typing import Any, Callable
 
 import structlog
 
+from architect.logging.levels import HUMAN
+
 logger = structlog.get_logger()
+_hlog = logging.getLogger("architect.reviewer")
 
 __all__ = [
     "REVIEW_SYSTEM_PROMPT",
@@ -117,6 +121,10 @@ class AutoReviewer:
             task_preview=task[:60],
             diff_chars=len(git_diff),
         )
+        _hlog.log(HUMAN, {
+            "event": "reviewer.start",
+            "diff_lines": git_diff.count("\n"),
+        })
 
         try:
             agent = self.agent_factory(
@@ -137,6 +145,14 @@ class AutoReviewer:
                 has_issues=has_issues,
                 cost=cost,
             )
+            # Count issues by counting lines starting with "- **"
+            issue_count = response.count("- **") if has_issues else 0
+            _hlog.log(HUMAN, {
+                "event": "reviewer.complete",
+                "approved": not has_issues,
+                "issues": issue_count,
+                "score": "N/A",
+            })
 
             return ReviewResult(
                 has_issues=has_issues,

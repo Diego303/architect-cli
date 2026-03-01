@@ -1328,3 +1328,227 @@ class TestPipelineRunnerInit:
         config = PipelineConfig(name="t", steps=[])
         runner = PipelineRunner(config, _make_factory(), str(workspace))
         assert runner.results == []
+
+
+# ── Tests: Pipeline HUMAN logging ────────────────────────────────────────
+
+
+class TestPipelineHumanLogging:
+    """Tests para logs HUMAN en la ejecución del pipeline."""
+
+    @pytest.fixture
+    def workspace(self, tmp_path: Path) -> Path:
+        return tmp_path
+
+    @staticmethod
+    def _extract_human_calls(mock_hlog: MagicMock, event_name: str) -> list[dict]:
+        """Extrae calls HUMAN con un event específico del mock."""
+        from architect.logging.levels import HUMAN as LVL
+        results = []
+        for c in mock_hlog.log.call_args_list:
+            args = c[0]
+            if len(args) >= 2 and args[0] == LVL and isinstance(args[1], dict):
+                if args[1].get("event") == event_name:
+                    results.append(args[1])
+        return results
+
+    def test_step_start_emits_human_log(self, workspace: Path) -> None:
+        """run() emite evento HUMAN pipeline.step_start para cada step."""
+        config = PipelineConfig(
+            name="t",
+            steps=[
+                PipelineStep(name="build", prompt="do it"),
+                PipelineStep(name="test", agent="review", prompt="check it"),
+            ],
+        )
+        runner = PipelineRunner(config, _make_factory(), str(workspace))
+
+        with patch("architect.features.pipelines._hlog") as mock_hlog:
+            runner.run()
+
+        starts = self._extract_human_calls(mock_hlog, "pipeline.step_start")
+        assert len(starts) == 2
+        assert starts[0]["step"] == "build"
+        assert starts[0]["agent"] == "build"
+        assert starts[0]["index"] == 1
+        assert starts[0]["total"] == 2
+        assert starts[1]["step"] == "test"
+        assert starts[1]["agent"] == "review"
+        assert starts[1]["index"] == 2
+
+    def test_step_done_emits_human_log(self, workspace: Path) -> None:
+        """run() emite evento HUMAN pipeline.step_done después de cada step."""
+        config = PipelineConfig(
+            name="t",
+            steps=[PipelineStep(name="s1", prompt="do it")],
+        )
+        runner = PipelineRunner(config, _make_factory(), str(workspace))
+
+        with patch("architect.features.pipelines._hlog") as mock_hlog:
+            runner.run()
+
+        dones = self._extract_human_calls(mock_hlog, "pipeline.step_done")
+        assert len(dones) == 1
+        assert dones[0]["step"] == "s1"
+        assert dones[0]["status"] == "success"
+
+    def test_step_skipped_emits_human_log(self, workspace: Path) -> None:
+        """run() emite evento HUMAN pipeline.step_skipped para condiciones falsas."""
+        config = PipelineConfig(
+            name="t",
+            steps=[PipelineStep(name="skip-me", prompt="x", condition="false")],
+        )
+        runner = PipelineRunner(config, _make_factory(), str(workspace))
+
+        with patch("architect.features.pipelines._hlog") as mock_hlog:
+            runner.run()
+
+        skips = self._extract_human_calls(mock_hlog, "pipeline.step_skipped")
+        assert len(skips) == 1
+        assert skips[0]["step"] == "skip-me"
+
+    def test_no_human_log_in_dry_run(self, workspace: Path) -> None:
+        """run(dry_run=True) emite step_start pero no step_done."""
+        config = PipelineConfig(
+            name="t",
+            steps=[PipelineStep(name="s1", prompt="do it")],
+        )
+        runner = PipelineRunner(config, _make_factory(), str(workspace))
+
+        with patch("architect.features.pipelines._hlog") as mock_hlog:
+            runner.run(dry_run=True)
+
+        dones = self._extract_human_calls(mock_hlog, "pipeline.step_done")
+        assert len(dones) == 0
+
+
+class TestHumanFormatterPipeline:
+    """Tests para HumanFormatter con eventos pipeline.*."""
+
+    def test_step_start_banner(self) -> None:
+        """pipeline.step_start produce banner con nombre, agente, índice/total."""
+        from architect.logging.human import HumanFormatter
+
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "pipeline.step_start",
+            step="write",
+            agent="build",
+            index=1,
+            total=3,
+        )
+        assert result is not None
+        assert "1/3" in result
+        assert "write" in result
+        assert "build" in result
+        assert "━" in result
+
+    def test_step_skipped_message(self) -> None:
+        """pipeline.step_skipped produce mensaje de omisión."""
+        from architect.logging.human import HumanFormatter
+
+        fmt = HumanFormatter()
+        result = fmt.format_event("pipeline.step_skipped", step="deploy")
+        assert result is not None
+        assert "deploy" in result
+        assert "omitido" in result
+
+    def test_step_done_success(self) -> None:
+        """pipeline.step_done con éxito muestra check mark y métricas."""
+        from architect.logging.human import HumanFormatter
+
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "pipeline.step_done",
+            step="build",
+            status="success",
+            cost=1.2345,
+            duration=42.5,
+        )
+        assert result is not None
+        assert "✓" in result
+        assert "build" in result
+        assert "success" in result
+        assert "$1.2345" in result
+        assert "42.5s" in result
+
+    def test_step_done_failed(self) -> None:
+        """pipeline.step_done con fallo muestra ✗."""
+        from architect.logging.human import HumanFormatter
+
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "pipeline.step_done",
+            step="test",
+            status="failed",
+            cost=0.5,
+            duration=10.0,
+        )
+        assert result is not None
+        assert "✗" in result
+        assert "failed" in result
+
+    def test_step_done_zero_cost(self) -> None:
+        """pipeline.step_done con coste 0 muestra $0."""
+        from architect.logging.human import HumanFormatter
+
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "pipeline.step_done",
+            step="s1",
+            status="success",
+            cost=0,
+            duration=0,
+        )
+        assert result is not None
+        assert "$0" in result
+
+    def test_unknown_event_returns_none(self) -> None:
+        """Eventos pipeline no registrados retornan None."""
+        from architect.logging.human import HumanFormatter
+
+        fmt = HumanFormatter()
+        result = fmt.format_event("pipeline.unknown_event")
+        assert result is None
+
+
+class TestHumanLogPipeline:
+    """Tests para métodos pipeline de HumanLog."""
+
+    def test_pipeline_step_start(self) -> None:
+        """pipeline_step_start() emite evento correcto."""
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.pipeline_step_start("build", "build", 1, 3)
+        mock_logger.log.assert_called_once_with(
+            LVL, "pipeline.step_start",
+            step="build", agent="build", index=1, total=3,
+        )
+
+    def test_pipeline_step_skipped(self) -> None:
+        """pipeline_step_skipped() emite evento correcto."""
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.pipeline_step_skipped("deploy")
+        mock_logger.log.assert_called_once_with(
+            LVL, "pipeline.step_skipped", step="deploy",
+        )
+
+    def test_pipeline_step_done(self) -> None:
+        """pipeline_step_done() emite evento correcto."""
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.pipeline_step_done("test", "success", 0.5, 12.3)
+        mock_logger.log.assert_called_once_with(
+            LVL, "pipeline.step_done",
+            step="test", status="success", cost=0.5, duration=12.3,
+        )

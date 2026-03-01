@@ -41,6 +41,19 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - **CLI captura `PipelineValidationError`** — Muestra error limpio sin traceback y sale con `EXIT_CONFIG_ERROR` (3). (`src/architect/cli.py`)
 - **9 tests nuevos** — `TestPipelineYamlValidation`: `task` rechazado con hint, prompt vacío, prompt missing, no steps, campos desconocidos, errores coleccionados, YAML válido pasa, whitespace-only rechazado, `steps` key missing. (`tests/test_pipelines/test_pipelines.py`)
 
+### HUMAN Logging para features de alto nivel
+
+#### Añadido
+
+- **Trazabilidad visual para Pipelines** — 3 eventos HUMAN (`pipeline.step_start`, `pipeline.step_skipped`, `pipeline.step_done`) emitidos desde `pipelines.py`. El usuario ve banners con separadores `━` entre steps, indicando agente, índice, estado, coste y duración. (`src/architect/features/pipelines.py`)
+- **Trazabilidad visual para Ralph Loop** — 4 eventos HUMAN (`ralph.iteration_start`, `ralph.checks_result`, `ralph.iteration_done`, `ralph.complete`) emitidos desde `ralph.py`. El usuario ve cada iteración con su banner, resultado de checks (passed/total), estado por iteración, y resumen final con coste total. (`src/architect/features/ralph.py`)
+- **Trazabilidad visual para Auto-Reviewer** — 2 eventos HUMAN (`reviewer.start`, `reviewer.complete`) emitidos desde `reviewer.py`. El usuario ve banner con líneas de diff y resultado (aprobado/no aprobado, issues, score). (`src/architect/agents/reviewer.py`)
+- **Trazabilidad visual para Parallel Runs** — 3 eventos HUMAN (`parallel.worker_done`, `parallel.worker_error`, `parallel.complete`) emitidos desde `parallel.py`. El usuario ve estado de cada worker con modelo, coste y duración, más resumen final con workers exitosos/fallidos. (`src/architect/features/parallel.py`)
+- **Trazabilidad visual para Competitive Eval** — 2 eventos HUMAN (`competitive.model_done`, `competitive.ranking`) emitidos desde `competitive.py`. El usuario ve ranking con medallas (🏆🥈🥉), scores, checks y coste por modelo, más ranking final ordenado. (`src/architect/features/competitive.py`)
+- **14 nuevos case handlers en HumanFormatter** — Cada evento tiene su formato visual optimizado con iconos, barras separadoras y métricas. (`src/architect/logging/human.py`)
+- **11 nuevos métodos en HumanLog** — Helpers tipados para emitir cada evento desde código que usa structlog. (`src/architect/logging/human.py`)
+- **56 tests nuevos** — `TestPipelineHumanLogging` (4) + `TestHumanFormatterPipeline` (6) + `TestHumanLogPipeline` (3) en `tests/test_pipelines/`, `TestRalphHumanLogging` (4) + `TestHumanFormatterRalph` (7) + `TestHumanLogRalph` (4) en `tests/test_ralph/`, `TestReviewerHumanLogging` (4) + `TestHumanFormatterReviewer` (3) + `TestHumanLogReviewer` (2) en `tests/test_reviewer/`, `TestParallelHumanLogging` (3) + `TestHumanFormatterParallel` (4) + `TestHumanLogParallel` (3) en `tests/test_parallel/`, `TestCompetitiveHumanLogging` (2) + `TestHumanFormatterCompetitive` (5) + `TestHumanLogCompetitive` (2) en `tests/test_competitive/`.
+
 #### Cambiado
 
 - **`check_file_access()` ahora usa el parámetro `action`** — El método ya recibía `action` pero lo ignoraba. Ahora diferencia entre acciones de lectura (solo `sensitive_files`) y escritura (`protected_files` + `sensitive_files`). Backward compatible: todos los callers existentes pasan acciones de escritura. (`src/architect/core/guardrails.py`)
@@ -48,7 +61,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 #### Tests
 
-- **739 passed**, 9 skipped, 0 failures (687 pre-existentes + 30 guardrails + 13 reports + 9 pipeline validation)
+- **795 passed**, 9 skipped, 0 failures
 - 31 E2E checks pasando sin cambios
 
 ---
