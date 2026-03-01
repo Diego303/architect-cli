@@ -1,11 +1,11 @@
 """
-Cache en disco del índice del repositorio.
+On-disk cache for the repository index.
 
-Guarda el índice en disco para evitar reconstruirlo en cada llamada
-cuando el workspace no ha cambiado. El cache se invalida automáticamente
-transcurridos TTL_SECONDS segundos desde la construcción.
+Saves the index to disk to avoid rebuilding it on each call
+when the workspace has not changed. The cache is automatically
+invalidated after TTL_SECONDS seconds since construction.
 
-Uso típico:
+Typical usage:
     cache = IndexCache()
     index = cache.get(workspace_root)
     if index is None:
@@ -21,45 +21,45 @@ from pathlib import Path
 from .tree import FileInfo, RepoIndex
 
 
-# Tiempo de vida del cache: 5 minutos
-# Corto por defecto para detectar cambios en repos activos
+# Cache time to live: 5 minutes
+# Short by default to detect changes in active repos
 TTL_SECONDS = 300
 
-# Directorio por defecto del cache
+# Default cache directory
 DEFAULT_CACHE_DIR = Path.home() / ".architect" / "index_cache"
 
 
 class IndexCache:
-    """Cache en disco del índice del repositorio.
+    """On-disk cache for the repository index.
 
-    Persiste el índice en un archivo JSON en el directorio de cache.
-    Cada workspace tiene su propio archivo identificado por un hash de su path.
+    Persists the index in a JSON file in the cache directory.
+    Each workspace has its own file identified by a hash of its path.
     """
 
     def __init__(self, cache_dir: Path | None = None, ttl_seconds: int = TTL_SECONDS) -> None:
-        """Inicializa el cache.
+        """Initialize the cache.
 
         Args:
-            cache_dir: Directorio donde guardar el cache. Por defecto ~/.architect/index_cache
-            ttl_seconds: Segundos de validez del cache. Por defecto 300 (5 min).
+            cache_dir: Directory to store the cache. Defaults to ~/.architect/index_cache
+            ttl_seconds: Cache validity in seconds. Defaults to 300 (5 min).
         """
         self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
         self.ttl_seconds = ttl_seconds
 
-        # Crear directorio si no existe (fallo silencioso si no hay permisos)
+        # Create directory if it doesn't exist (silent failure if no permissions)
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
 
     def get(self, workspace_root: Path) -> RepoIndex | None:
-        """Obtiene el índice del cache si existe y está vigente.
+        """Get the index from cache if it exists and is still valid.
 
         Args:
-            workspace_root: Directorio raíz del workspace
+            workspace_root: Root directory of the workspace
 
         Returns:
-            RepoIndex si el cache es válido, None si no existe o expiró
+            RepoIndex if the cache is valid, None if it doesn't exist or expired
         """
         cache_file = self._cache_path(workspace_root)
         if not cache_file.exists():
@@ -68,7 +68,7 @@ class IndexCache:
         try:
             data = json.loads(cache_file.read_text(encoding="utf-8"))
 
-            # Verificar que el cache no haya expirado
+            # Check that the cache has not expired
             cached_at = data.get("cached_at", 0)
             if time.time() - cached_at > self.ttl_seconds:
                 return None
@@ -76,18 +76,18 @@ class IndexCache:
             return self._deserialize(data["index"])
 
         except (json.JSONDecodeError, KeyError, TypeError, OSError):
-            # Cache corrupto o formato incorrecto → ignorar
+            # Corrupt cache or incorrect format -> ignore
             return None
 
     def set(self, workspace_root: Path, index: RepoIndex) -> None:
-        """Guarda el índice en el cache.
+        """Save the index to cache.
 
-        Fallo silencioso: si no se puede escribir el cache, el sistema
-        sigue funcionando (el cache no es crítico).
+        Silent failure: if the cache cannot be written, the system
+        continues working (cache is not critical).
 
         Args:
-            workspace_root: Directorio raíz del workspace
-            index: Índice a guardar
+            workspace_root: Root directory of the workspace
+            index: Index to save
         """
         cache_file = self._cache_path(workspace_root)
         try:
@@ -98,17 +98,17 @@ class IndexCache:
             }
             cache_file.write_text(json.dumps(payload), encoding="utf-8")
         except OSError:
-            pass  # Cache no crítico
+            pass  # Cache is not critical
 
     def clear(self, workspace_root: Path | None = None) -> int:
-        """Limpia el cache.
+        """Clear the cache.
 
         Args:
-            workspace_root: Si se especifica, limpia solo ese workspace.
-                            Si es None, limpia todos los caches.
+            workspace_root: If specified, clears only that workspace.
+                            If None, clears all caches.
 
         Returns:
-            Número de archivos de cache eliminados.
+            Number of cache files deleted.
         """
         deleted = 0
         if workspace_root is not None:
@@ -129,14 +129,14 @@ class IndexCache:
         return deleted
 
     def _cache_path(self, workspace_root: Path) -> Path:
-        """Calcula el path del archivo de cache para un workspace."""
+        """Calculate the cache file path for a workspace."""
         key = hashlib.sha256(
             str(workspace_root.resolve()).encode()
         ).hexdigest()[:16]
         return self.cache_dir / f"index_{key}.json"
 
     def _serialize(self, index: RepoIndex) -> dict:
-        """Serializa un RepoIndex a dict JSON-serializable."""
+        """Serialize a RepoIndex to a JSON-serializable dict."""
         return {
             "files": {
                 path: {
@@ -156,7 +156,7 @@ class IndexCache:
         }
 
     def _deserialize(self, data: dict) -> RepoIndex:
-        """Deserializa un dict a RepoIndex."""
+        """Deserialize a dict to RepoIndex."""
         files = {
             path: FileInfo(**info_data)
             for path, info_data in data["files"].items()

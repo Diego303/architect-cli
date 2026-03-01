@@ -53,6 +53,7 @@ Architect **no** requiere:
 | `ARCHITECT_API_BASE` | Override de la URL base de la API | `http://litellm-proxy:8000` |
 | `ARCHITECT_LOG_LEVEL` | Override del nivel de logging | `debug`, `info`, `human`, `warn` |
 | `ARCHITECT_WORKSPACE` | Override del workspace root | `/workspace` |
+| `ARCHITECT_LANGUAGE` | Idioma de mensajes del sistema (v1.1.0) | `en` (default), `es` |
 | `HOME` | Directorio home del usuario (afecta a `~/.architect/`) | `/tmp`, `/home/architect` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint OTLP para trazas OpenTelemetry | `http://jaeger:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Headers adicionales para OTLP | `Authorization=Bearer token` |

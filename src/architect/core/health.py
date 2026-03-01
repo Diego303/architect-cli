@@ -1,17 +1,17 @@
 """
-Code Health Delta — Mide métricas de salud del código antes y después de la sesión.
+Code Health Delta — Measures code health metrics before and after the session.
 
-v4-D2: Ejecuta análisis de métricas al inicio (snapshot before) y al final
-(snapshot after) de la sesión, generando un delta report que muestra qué
-mejoró y qué empeoró.
+v4-D2: Runs metric analysis at the start (snapshot before) and end
+(snapshot after) of the session, generating a delta report showing what
+improved and what degraded.
 
-Métricas:
-- Complejidad ciclomática (via radon, si está disponible)
-- Líneas por función (análisis AST nativo)
-- Detección básica de duplicación (hashing de bloques)
+Metrics:
+- Cyclomatic complexity (via radon, if available)
+- Lines per function (native AST analysis)
+- Basic duplication detection (block hashing)
 
-Dependencia opcional: radon (para complejidad ciclomática).
-Sin radon, solo se calculan métricas basadas en AST.
+Optional dependency: radon (for cyclomatic complexity).
+Without radon, only AST-based metrics are computed.
 """
 
 import ast
@@ -30,7 +30,7 @@ __all__ = [
     "FunctionMetric",
 ]
 
-# Intentar importar radon (dependencia opcional)
+# Try to import radon (optional dependency)
 try:
     from radon.complexity import cc_visit  # type: ignore[import-untyped]
 
@@ -41,30 +41,30 @@ except ImportError:
 
 @dataclass(frozen=True)
 class FunctionMetric:
-    """Métricas de una función individual."""
+    """Metrics for an individual function."""
 
     file: str
     name: str
     lines: int
-    complexity: int  # 0 si radon no está disponible
+    complexity: int  # 0 if radon is not available
 
 
 @dataclass
 class HealthSnapshot:
-    """Snapshot de métricas de salud del código en un momento dado.
+    """Snapshot of code health metrics at a given point in time.
 
     Attributes:
-        files_analyzed: Número de archivos Python analizados.
-        total_functions: Número total de funciones encontradas.
-        avg_complexity: Complejidad ciclomática promedio.
-        max_complexity: Complejidad ciclomática máxima.
-        avg_function_lines: Promedio de líneas por función.
-        max_function_lines: Máximo de líneas por función.
-        long_functions: Funciones con más de 50 líneas.
-        complex_functions: Funciones con complejidad > 10.
-        duplicate_blocks: Número de bloques duplicados detectados.
-        functions: Lista de métricas por función.
-        radon_available: Si radon estaba disponible para el análisis.
+        files_analyzed: Number of Python files analyzed.
+        total_functions: Total number of functions found.
+        avg_complexity: Average cyclomatic complexity.
+        max_complexity: Maximum cyclomatic complexity.
+        avg_function_lines: Average lines per function.
+        max_function_lines: Maximum lines per function.
+        long_functions: Functions with more than 50 lines.
+        complex_functions: Functions with complexity > 10.
+        duplicate_blocks: Number of duplicate blocks detected.
+        functions: List of per-function metrics.
+        radon_available: Whether radon was available for the analysis.
     """
 
     files_analyzed: int = 0
@@ -82,22 +82,22 @@ class HealthSnapshot:
 
 @dataclass
 class HealthDelta:
-    """Delta entre dos snapshots de salud.
+    """Delta between two health snapshots.
 
-    Valores negativos = mejora (menos complejidad, menos duplicación).
-    Valores positivos = degradación.
+    Negative values = improvement (less complexity, less duplication).
+    Positive values = degradation.
 
     Attributes:
-        before: Snapshot antes de la sesión.
-        after: Snapshot después de la sesión.
-        complexity_delta: Cambio en complejidad promedio.
-        max_complexity_delta: Cambio en complejidad máxima.
-        avg_lines_delta: Cambio en promedio de líneas por función.
-        long_functions_delta: Cambio en funciones largas.
-        complex_functions_delta: Cambio en funciones complejas.
-        duplicate_blocks_delta: Cambio en bloques duplicados.
-        new_functions: Funciones nuevas añadidas.
-        removed_functions: Funciones eliminadas.
+        before: Snapshot before the session.
+        after: Snapshot after the session.
+        complexity_delta: Change in average complexity.
+        max_complexity_delta: Change in maximum complexity.
+        avg_lines_delta: Change in average lines per function.
+        long_functions_delta: Change in long functions.
+        complex_functions_delta: Change in complex functions.
+        duplicate_blocks_delta: Change in duplicate blocks.
+        new_functions: New functions added.
+        removed_functions: Functions removed.
     """
 
     before: HealthSnapshot
@@ -112,82 +112,105 @@ class HealthDelta:
     removed_functions: int = 0
 
     def to_report(self) -> str:
-        """Genera un reporte legible del delta de salud.
+        """Generate a human-readable health delta report.
 
         Returns:
-            String con el reporte en formato markdown.
+            String with the report in markdown format.
         """
-        lines = ["## Code Health Delta\n"]
+        from ..i18n import t
+
+        lines = [t("health.title")]
 
         if not self.before.radon_available:
-            lines.append(
-                "> *radon no disponible — complejidad ciclomática no medida. "
-                "Instala con `pip install radon`.*\n"
-            )
+            lines.append(t("health.radon_notice"))
 
-        lines.append("| Métrica | Antes | Después | Delta |")
+        col_m = t("health.col_metric")
+        col_b = t("health.col_before")
+        col_a = t("health.col_after")
+        col_d = t("health.col_delta")
+        lines.append(f"| {col_m} | {col_b} | {col_a} | {col_d} |")
         lines.append("|---------|-------|---------|-------|")
 
-        # Complejidad promedio
+        def _row(label: str, before: str, after: str, delta_str: str) -> str:
+            return f"| {label} | {before} | {after} | {delta_str} |"
+
+        # Avg complexity
         delta_str = self._format_delta(self.complexity_delta, invert=True)
-        lines.append(
-            f"| Complejidad promedio | {self.before.avg_complexity:.1f} "
-            f"| {self.after.avg_complexity:.1f} | {delta_str} |"
-        )
+        lines.append(_row(
+            t("health.avg_complexity"),
+            f"{self.before.avg_complexity:.1f}",
+            f"{self.after.avg_complexity:.1f}",
+            delta_str,
+        ))
 
-        # Complejidad máxima
+        # Max complexity
         delta_str = self._format_delta(self.max_complexity_delta, invert=True)
-        lines.append(
-            f"| Complejidad máxima | {self.before.max_complexity} "
-            f"| {self.after.max_complexity} | {delta_str} |"
-        )
+        lines.append(_row(
+            t("health.max_complexity"),
+            str(self.before.max_complexity),
+            str(self.after.max_complexity),
+            delta_str,
+        ))
 
-        # Líneas por función
+        # Lines per function
         delta_str = self._format_delta(self.avg_lines_delta, invert=True)
-        lines.append(
-            f"| Líneas/función (promedio) | {self.before.avg_function_lines:.1f} "
-            f"| {self.after.avg_function_lines:.1f} | {delta_str} |"
-        )
+        lines.append(_row(
+            t("health.avg_lines"),
+            f"{self.before.avg_function_lines:.1f}",
+            f"{self.after.avg_function_lines:.1f}",
+            delta_str,
+        ))
 
-        # Funciones largas
+        # Long functions
         delta_str = self._format_delta(self.long_functions_delta, invert=True)
-        lines.append(
-            f"| Funciones largas (>50 líneas) | {self.before.long_functions} "
-            f"| {self.after.long_functions} | {delta_str} |"
-        )
+        lines.append(_row(
+            t("health.long_functions"),
+            str(self.before.long_functions),
+            str(self.after.long_functions),
+            delta_str,
+        ))
 
-        # Funciones complejas
+        # Complex functions
         delta_str = self._format_delta(self.complex_functions_delta, invert=True)
-        lines.append(
-            f"| Funciones complejas (>10) | {self.before.complex_functions} "
-            f"| {self.after.complex_functions} | {delta_str} |"
-        )
+        lines.append(_row(
+            t("health.complex_functions"),
+            str(self.before.complex_functions),
+            str(self.after.complex_functions),
+            delta_str,
+        ))
 
-        # Duplicación
+        # Duplicate blocks
         delta_str = self._format_delta(self.duplicate_blocks_delta, invert=True)
-        lines.append(
-            f"| Bloques duplicados | {self.before.duplicate_blocks} "
-            f"| {self.after.duplicate_blocks} | {delta_str} |"
-        )
+        lines.append(_row(
+            t("health.duplicate_blocks"),
+            str(self.before.duplicate_blocks),
+            str(self.after.duplicate_blocks),
+            delta_str,
+        ))
 
         lines.append("")
 
-        # Totales
+        # Summary
         lines.append(
-            f"**Archivos analizados**: {self.after.files_analyzed} | "
-            f"**Funciones**: {self.after.total_functions} "
-            f"(+{self.new_functions} nuevas, -{self.removed_functions} eliminadas)"
+            t("health.files_analyzed", count=self.after.files_analyzed)
+            + " | "
+            + t(
+                "health.functions_summary",
+                total=self.after.total_functions,
+                new=self.new_functions,
+                removed=self.removed_functions,
+            )
         )
 
         return "\n".join(lines)
 
     @staticmethod
     def _format_delta(value: float | int, invert: bool = False) -> str:
-        """Formatea un valor delta con indicador de mejora/degradación.
+        """Format a delta value with improvement/degradation indicator.
 
         Args:
-            value: Valor del delta.
-            invert: Si True, valores negativos son mejora.
+            value: Delta value.
+            invert: If True, negative values indicate improvement.
         """
         if isinstance(value, float):
             formatted = f"{value:+.1f}"
@@ -201,22 +224,22 @@ class HealthDelta:
         return formatted
 
 
-# Umbral de líneas para considerar una función "larga"
+# Line threshold to consider a function "long"
 LONG_FUNCTION_THRESHOLD = 50
 
-# Umbral de complejidad para considerar una función "compleja"
+# Complexity threshold to consider a function "complex"
 COMPLEX_FUNCTION_THRESHOLD = 10
 
-# Tamaño mínimo de bloque para detección de duplicados (líneas)
+# Minimum block size for duplicate detection (lines)
 DUPLICATE_BLOCK_SIZE = 6
 
 
 class CodeHealthAnalyzer:
-    """Analiza métricas de salud del código Python en un workspace.
+    """Analyzes Python code health metrics in a workspace.
 
-    Ejecuta análisis estático para generar snapshots de salud antes/después
-    de la sesión del agente. El delta resultante indica si los cambios
-    mejoraron o degradaron la calidad del código.
+    Runs static analysis to generate health snapshots before/after
+    the agent's session. The resulting delta indicates whether the changes
+    improved or degraded code quality.
     """
 
     def __init__(
@@ -225,12 +248,12 @@ class CodeHealthAnalyzer:
         include_patterns: list[str] | None = None,
         exclude_dirs: list[str] | None = None,
     ) -> None:
-        """Inicializa el analizador.
+        """Initialize the analyzer.
 
         Args:
-            workspace_root: Directorio raíz del workspace.
-            include_patterns: Patrones glob para incluir (default: ['**/*.py']).
-            exclude_dirs: Directorios a excluir del análisis.
+            workspace_root: Workspace root directory.
+            include_patterns: Glob patterns to include (default: ['**/*.py']).
+            exclude_dirs: Directories to exclude from analysis.
         """
         self.root = Path(workspace_root)
         self.include_patterns = include_patterns or ["**/*.py"]
@@ -244,10 +267,10 @@ class CodeHealthAnalyzer:
         self.log = logger.bind(component="code_health")
 
     def snapshot(self) -> HealthSnapshot:
-        """Toma un snapshot de las métricas de salud del código.
+        """Take a snapshot of code health metrics.
 
         Returns:
-            HealthSnapshot con todas las métricas calculadas.
+            HealthSnapshot with all computed metrics.
         """
         files = self._discover_files()
         all_functions: list[FunctionMetric] = []
@@ -259,23 +282,23 @@ class CodeHealthAnalyzer:
             except (OSError, UnicodeDecodeError):
                 continue
 
-            # Métricas AST (funciones y líneas)
+            # AST metrics (functions and lines)
             functions = self._analyze_functions_ast(str(file_path), content)
             all_functions.extend(functions)
 
-            # Complejidad ciclomática (radon)
+            # Cyclomatic complexity (radon)
             if RADON_AVAILABLE:
                 complexities = self._analyze_complexity_radon(content)
-                # Enriquecer funciones con complejidad
+                # Enrich functions with complexity
                 all_functions = self._merge_complexity(
                     all_functions, complexities, str(file_path)
                 )
 
-            # Detección de duplicados
+            # Duplicate detection
             block_hashes = self._compute_block_hashes(content)
             all_block_hashes.extend(block_hashes)
 
-        # Calcular estadísticas
+        # Compute statistics
         snapshot = self._compute_stats(all_functions, all_block_hashes, len(files))
 
         self.log.info(
@@ -289,28 +312,28 @@ class CodeHealthAnalyzer:
         return snapshot
 
     def take_before_snapshot(self) -> HealthSnapshot:
-        """Toma el snapshot 'antes' de la sesión.
+        """Take the 'before' snapshot of the session.
 
         Returns:
-            HealthSnapshot del estado actual.
+            HealthSnapshot of the current state.
         """
         self._before = self.snapshot()
         return self._before
 
     def take_after_snapshot(self) -> HealthSnapshot:
-        """Toma el snapshot 'después' de la sesión.
+        """Take the 'after' snapshot of the session.
 
         Returns:
-            HealthSnapshot del estado actual.
+            HealthSnapshot of the current state.
         """
         self._after = self.snapshot()
         return self._after
 
     def compute_delta(self) -> HealthDelta | None:
-        """Calcula el delta entre before y after snapshots.
+        """Compute the delta between before and after snapshots.
 
         Returns:
-            HealthDelta con las diferencias, o None si falta algún snapshot.
+            HealthDelta with the differences, or None if a snapshot is missing.
         """
         if self._before is None or self._after is None:
             self.log.warning("health.delta_missing_snapshot")
@@ -349,13 +372,13 @@ class CodeHealthAnalyzer:
     # ── Internal methods ────────────────────────────────────────────────
 
     def _discover_files(self) -> list[Path]:
-        """Descubre archivos Python en el workspace."""
+        """Discover Python files in the workspace."""
         files: list[Path] = []
         for pattern in self.include_patterns:
             for path in self.root.glob(pattern):
                 if not path.is_file():
                     continue
-                # Excluir directorios prohibidos
+                # Exclude forbidden directories
                 parts = set(path.relative_to(self.root).parts)
                 if parts & self.exclude_dirs:
                     continue
@@ -365,14 +388,14 @@ class CodeHealthAnalyzer:
     def _analyze_functions_ast(
         self, file_path: str, content: str
     ) -> list[FunctionMetric]:
-        """Analiza funciones usando AST nativo de Python.
+        """Analyze functions using Python's native AST.
 
         Args:
-            file_path: Path del archivo.
-            content: Contenido del archivo.
+            file_path: File path.
+            content: File content.
 
         Returns:
-            Lista de FunctionMetric para cada función/método encontrado.
+            List of FunctionMetric for each function/method found.
         """
         try:
             tree = ast.parse(content)
@@ -388,19 +411,19 @@ class CodeHealthAnalyzer:
                     file=file_path,
                     name=node.name,
                     lines=lines,
-                    complexity=0,  # Se enriquece después con radon
+                    complexity=0,  # Enriched later with radon
                 ))
 
         return functions
 
     def _analyze_complexity_radon(self, content: str) -> list[tuple[str, int]]:
-        """Analiza complejidad ciclomática con radon.
+        """Analyze cyclomatic complexity with radon.
 
         Args:
-            content: Contenido del archivo Python.
+            content: Python file content.
 
         Returns:
-            Lista de (nombre_función, complejidad).
+            List of (function_name, complexity).
         """
         if not RADON_AVAILABLE:
             return []
@@ -416,15 +439,15 @@ class CodeHealthAnalyzer:
         complexities: list[tuple[str, int]],
         file_path: str,
     ) -> list[FunctionMetric]:
-        """Enriquece funciones con datos de complejidad de radon.
+        """Enrich functions with complexity data from radon.
 
         Args:
-            functions: Lista actual de FunctionMetric.
-            complexities: Lista de (nombre, complejidad) de radon.
-            file_path: Path del archivo analizado.
+            functions: Current list of FunctionMetric.
+            complexities: List of (name, complexity) from radon.
+            file_path: Path of the analyzed file.
 
         Returns:
-            Lista actualizada de FunctionMetric.
+            Updated list of FunctionMetric.
         """
         complexity_map = dict(complexities)
         result: list[FunctionMetric] = []
@@ -443,15 +466,15 @@ class CodeHealthAnalyzer:
         return result
 
     def _compute_block_hashes(self, content: str) -> list[str]:
-        """Calcula hashes de bloques de código para detectar duplicación.
+        """Compute code block hashes to detect duplication.
 
-        Usa una ventana deslizante de DUPLICATE_BLOCK_SIZE líneas.
+        Uses a sliding window of DUPLICATE_BLOCK_SIZE lines.
 
         Args:
-            content: Contenido del archivo.
+            content: File content.
 
         Returns:
-            Lista de hashes MD5 de cada bloque.
+            List of MD5 hashes for each block.
         """
         lines = [line.strip() for line in content.splitlines() if line.strip()]
         if len(lines) < DUPLICATE_BLOCK_SIZE:
@@ -471,15 +494,15 @@ class CodeHealthAnalyzer:
         block_hashes: list[str],
         files_count: int,
     ) -> HealthSnapshot:
-        """Calcula estadísticas agregadas a partir de métricas individuales.
+        """Compute aggregate statistics from individual metrics.
 
         Args:
-            functions: Lista de métricas por función.
-            block_hashes: Lista de hashes de bloques.
-            files_count: Número de archivos analizados.
+            functions: List of per-function metrics.
+            block_hashes: List of block hashes.
+            files_count: Number of analyzed files.
 
         Returns:
-            HealthSnapshot con todas las estadísticas.
+            HealthSnapshot with all statistics.
         """
         if not functions:
             return HealthSnapshot(
@@ -499,7 +522,7 @@ class CodeHealthAnalyzer:
             1 for c in complexities if c > COMPLEX_FUNCTION_THRESHOLD
         )
 
-        # Duplicados: contar hashes que aparecen más de una vez
+        # Duplicates: count hashes that appear more than once
         seen: set[str] = set()
         duplicates: set[str] = set()
         for h in block_hashes:

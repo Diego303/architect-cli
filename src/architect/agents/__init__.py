@@ -1,7 +1,7 @@
 """
-Módulo de agentes - Configuraciones y prompts de agentes especializados.
+Agents module — Default agent configurations, prompts, and resolution.
 
-Exporta agentes por defecto, prompts y funciones de resolución.
+Exports default agents, prompts, and resolution functions.
 """
 
 from .prompts import (

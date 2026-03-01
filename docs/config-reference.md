@@ -29,6 +29,7 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `ARCHITECT_API_BASE` | `llm.api_base` | `http://localhost:8000` |
 | `ARCHITECT_LOG_LEVEL` | `logging.level` | `debug` |
 | `ARCHITECT_WORKSPACE` | `workspace.root` | `/home/user/project` |
+| `ARCHITECT_LANGUAGE` | `language` | `es` |
 
 `LITELLM_API_KEY` es la API key por defecto. Si necesitas una variable diferente, configura `llm.api_key_env` en el YAML.
 
@@ -81,6 +82,15 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 ## Schema YAML completo
 
 ```yaml
+# ==============================================================================
+# Language — idioma de mensajes del sistema (v1.1.0)
+# ==============================================================================
+language: en               # "en" (default) | "es"
+                           # Afecta: logs humanos, prompts de agentes, reportes,
+                           # guardrails, evaluaciones. NO afecta CLI help ni user prompts.
+                           # Override: ARCHITECT_LANGUAGE env var
+                           # Ver docs/i18n.md para detalles completos.
+
 # ==============================================================================
 # LLM
 # ==============================================================================

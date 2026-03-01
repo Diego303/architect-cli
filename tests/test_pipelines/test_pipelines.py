@@ -1141,7 +1141,7 @@ steps:
             encoding="utf-8",
         )
         factory = _make_factory()
-        with pytest.raises(PipelineValidationError, match="debe ser un objeto YAML"):
+        with pytest.raises(PipelineValidationError, match="must be a YAML object"):
             PipelineRunner.from_yaml(str(yaml_file), {}, factory, str(workspace))
 
 
@@ -1168,7 +1168,7 @@ steps:
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="quisiste decir 'prompt'"):
+        with pytest.raises(PipelineValidationError, match="did you mean 'prompt'"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
     def test_rejects_empty_prompt(self, workspace: Path) -> None:
@@ -1184,7 +1184,7 @@ steps:
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="falta 'prompt' o está vacío"):
+        with pytest.raises(PipelineValidationError, match="missing 'prompt'"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
     def test_rejects_missing_prompt(self, workspace: Path) -> None:
@@ -1199,7 +1199,7 @@ steps:
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="falta 'prompt' o está vacío"):
+        with pytest.raises(PipelineValidationError, match="missing 'prompt'"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
     def test_rejects_no_steps(self, workspace: Path) -> None:
@@ -1212,7 +1212,7 @@ steps: []
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="no tiene steps definidos"):
+        with pytest.raises(PipelineValidationError, match="has no steps defined"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
     def test_rejects_unknown_fields(self, workspace: Path) -> None:
@@ -1229,7 +1229,7 @@ steps:
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="campo desconocido 'baz'"):
+        with pytest.raises(PipelineValidationError, match="unknown field 'baz'"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
     def test_collects_all_errors(self, workspace: Path) -> None:
@@ -1288,7 +1288,7 @@ steps:
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="falta 'prompt' o está vacío"):
+        with pytest.raises(PipelineValidationError, match="missing 'prompt'"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
     def test_missing_steps_key(self, workspace: Path) -> None:
@@ -1300,7 +1300,7 @@ name: test
 """,
             encoding="utf-8",
         )
-        with pytest.raises(PipelineValidationError, match="no tiene steps definidos"):
+        with pytest.raises(PipelineValidationError, match="has no steps defined"):
             PipelineRunner.from_yaml(str(yaml_file), {}, _make_factory(), str(workspace))
 
 
@@ -1451,7 +1451,7 @@ class TestHumanFormatterPipeline:
         result = fmt.format_event("pipeline.step_skipped", step="deploy")
         assert result is not None
         assert "deploy" in result
-        assert "omitido" in result
+        assert "skipped" in result
 
     def test_step_done_success(self) -> None:
         """pipeline.step_done con éxito muestra check mark y métricas."""

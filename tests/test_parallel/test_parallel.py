@@ -383,7 +383,7 @@ class TestCreateWorktrees:
 
         mock_run.side_effect = side_effect
 
-        with pytest.raises(RuntimeError, match="Error creando worktree"):
+        with pytest.raises(RuntimeError, match="Error creating worktree"):
             runner._create_worktrees()
 
 

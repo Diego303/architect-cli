@@ -1,8 +1,8 @@
 """
-Registro centralizado de tools disponibles.
+Centralized registry of available tools.
 
-El ToolRegistry mantiene todas las tools (locales y remotas MCP)
-y proporciona métodos para descubrimiento, filtrado y acceso.
+The ToolRegistry maintains all tools (local and remote MCP)
+and provides methods for discovery, filtering, and access.
 """
 
 from typing import Any
@@ -11,88 +11,88 @@ from .base import BaseTool
 
 
 class ToolNotFoundError(Exception):
-    """Error lanzado cuando una tool solicitada no existe en el registry."""
+    """Error raised when a requested tool does not exist in the registry."""
 
     pass
 
 
 class DuplicateToolError(Exception):
-    """Error lanzado cuando se intenta registrar una tool con nombre duplicado."""
+    """Error raised when attempting to register a tool with a duplicate name."""
 
     pass
 
 
 class ToolRegistry:
-    """Registro centralizado de tools.
+    """Centralized tool registry.
 
-    Mantiene un diccionario de tools disponibles y proporciona
-    métodos para registrar, buscar y filtrar tools.
+    Maintains a dictionary of available tools and provides
+    methods for registering, searching, and filtering tools.
 
-    Las tools pueden ser locales (filesystem, etc.) o remotas (MCP).
-    Para el sistema, todas son tratadas de forma idéntica.
+    Tools can be local (filesystem, etc.) or remote (MCP).
+    For the system, all are treated identically.
     """
 
     def __init__(self) -> None:
-        """Inicializa un registry vacío."""
+        """Initialize an empty registry."""
         self._tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool, allow_override: bool = False) -> None:
-        """Registra una nueva tool.
+        """Register a new tool.
 
         Args:
-            tool: Instancia de BaseTool a registrar
-            allow_override: Si True, permite sobrescribir tools existentes
+            tool: BaseTool instance to register
+            allow_override: If True, allows overwriting existing tools
 
         Raises:
-            DuplicateToolError: Si la tool ya existe y allow_override=False
+            DuplicateToolError: If the tool already exists and allow_override=False
         """
         if tool.name in self._tools and not allow_override:
             raise DuplicateToolError(
-                f"Tool '{tool.name}' ya está registrada. "
-                f"Usa allow_override=True para sobrescribir."
+                f"Tool '{tool.name}' is already registered. "
+                f"Use allow_override=True to overwrite."
             )
 
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> BaseTool:
-        """Obtiene una tool por nombre.
+        """Get a tool by name.
 
         Args:
-            name: Nombre de la tool
+            name: Name of the tool
 
         Returns:
-            Instancia de BaseTool
+            BaseTool instance
 
         Raises:
-            ToolNotFoundError: Si la tool no existe
+            ToolNotFoundError: If the tool does not exist
         """
         if name not in self._tools:
-            available = ", ".join(self._tools.keys()) if self._tools else "(ninguna)"
+            available = ", ".join(self._tools.keys()) if self._tools else "(none)"
             raise ToolNotFoundError(
-                f"Tool '{name}' no encontrada. " f"Tools disponibles: {available}"
+                f"Tool '{name}' not found. " f"Available tools: {available}"
             )
 
         return self._tools[name]
 
     def list_all(self) -> list[BaseTool]:
-        """Lista todas las tools registradas.
+        """List all registered tools.
 
         Returns:
-            Lista de todas las tools, ordenadas por nombre
+            List of all tools, sorted by name
         """
         return sorted(self._tools.values(), key=lambda t: t.name)
 
     def get_schemas(self, allowed: list[str] | None = None) -> list[dict[str, Any]]:
-        """Obtiene los JSON schemas de tools para el LLM.
+        """Get JSON schemas of tools for the LLM.
 
         Silently skips tool names that are not registered (e.g., run_command
         when --no-commands is used, or MCP tools whose server is down).
 
         Args:
-            allowed: Lista de nombres de tools permitidas, o None para todas
+            allowed: List of allowed tool names, or None for all
 
         Returns:
-            Lista de schemas en formato OpenAI function calling
+            List of schemas in OpenAI function calling format
 
         Example:
             >>> registry.get_schemas(["read_file", "write_file"])
@@ -115,49 +115,49 @@ class ToolRegistry:
         return [tool.get_schema() for tool in tools]
 
     def filter_by_names(self, names: list[str]) -> list[BaseTool]:
-        """Filtra tools por lista de nombres.
+        """Filter tools by list of names.
 
         Args:
-            names: Lista de nombres de tools a incluir
+            names: List of tool names to include
 
         Returns:
-            Lista de tools que coinciden con los nombres
+            List of tools matching the names
 
         Raises:
-            ToolNotFoundError: Si algún nombre no existe en el registry
+            ToolNotFoundError: If any name does not exist in the registry
 
         Note:
-            Si names es vacío, retorna lista vacía (no todas las tools)
+            If names is empty, returns an empty list (not all tools)
         """
         if not names:
             return []
 
         tools = []
         for name in names:
-            # get() lanzará ToolNotFoundError si no existe
+            # get() will raise ToolNotFoundError if it doesn't exist
             tools.append(self.get(name))
 
         return tools
 
     def has_tool(self, name: str) -> bool:
-        """Verifica si una tool está registrada.
+        """Check if a tool is registered.
 
         Args:
-            name: Nombre de la tool
+            name: Name of the tool
 
         Returns:
-            True si la tool existe, False en caso contrario
+            True if the tool exists, False otherwise
         """
         return name in self._tools
 
     def count(self) -> int:
-        """Retorna el número de tools registradas."""
+        """Return the number of registered tools."""
         return len(self._tools)
 
     def clear(self) -> None:
-        """Elimina todas las tools del registry.
+        """Remove all tools from the registry.
 
-        Útil principalmente para testing.
+        Primarily useful for testing.
         """
         self._tools.clear()
 

@@ -460,6 +460,8 @@ cp config.example.yaml config.yaml
 Minimal structure:
 
 ```yaml
+language: en                   # "en" (default) | "es" — agent prompts, logs, reports
+
 llm:
   model: gpt-4o-mini          # or claude-sonnet-4-6, ollama/llama3, etc.
   api_key_env: LITELLM_API_KEY
@@ -485,6 +487,7 @@ logging:
 | `ARCHITECT_API_BASE` | `llm.api_base` | API base URL |
 | `ARCHITECT_LOG_LEVEL` | `logging.level` | Logging level |
 | `ARCHITECT_WORKSPACE` | `workspace.root` | Working directory |
+| `ARCHITECT_LANGUAGE` | `language` | UI language (`en`, `es`) |
 
 ---
 
@@ -749,6 +752,34 @@ The `.architect/memory.md` file is manually editable and follows the format:
 - [2026-02-22] correction: Don't use print(), use logging
 - [2026-02-22] pattern: Always run tests after editing
 ```
+
+---
+
+## Internationalization (i18n)
+
+architect supports English and Spanish for all agent-facing output: human logs, agent prompts, reports, guardrail messages, and evaluation feedback.
+
+```yaml
+# config.yaml
+language: es   # "en" (default) | "es"
+```
+
+```bash
+# Or via environment variable
+ARCHITECT_LANGUAGE=es architect run "analyze the project"
+```
+
+**What changes with language**:
+- Agent system prompts (built-in agents only — custom prompts are unchanged)
+- Human-readable log output (step indicators, tool results, status messages)
+- Report headers and labels (health delta, competitive eval, ralph progress)
+- Guardrail blocking messages
+- Self-evaluator prompts and feedback
+- Context manager markers
+
+**What stays in English regardless**: CLI `--help` text, error messages, command names, JSON output keys.
+
+The default language is **English**. All 160 translation keys have full parity between EN and ES.
 
 ---
 

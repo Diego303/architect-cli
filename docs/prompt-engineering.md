@@ -96,6 +96,14 @@ significa que:
    ~2,000 tokens multiplicados por cada step. En una sesion de 10 steps: 20,000 tokens solo
    en instrucciones de proyecto.
 
+### Idioma de los prompts (v1.1.0)
+
+Los system prompts de los agentes (`build`, `plan`, `resume`, `review`) se adaptan al idioma
+configurado (`language: en` o `language: es`). Si usas español, el agente recibe instrucciones
+en español y tiende a responder en español. Si usas inglés (default), las respuestas del agente
+serán en inglés. Esto es independiente del idioma de TU prompt — puedes escribir en español
+aunque `language: en`, y el agente entenderá igualmente.
+
 ### Los cuatro agentes y sus prompts
 
 Architect tiene cuatro agentes con prompts diferentes. Saber cual se usa afecta como escribir

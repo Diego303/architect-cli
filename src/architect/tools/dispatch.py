@@ -1,14 +1,14 @@
 """
-Tool dispatch_subagent — Despacha sub-agentes con contexto independiente.
+Tool dispatch_subagent — Dispatches sub-agents with independent context.
 
-v4-D1: Permite al agente principal delegar sub-tareas a un agente especializado
-con su propio contexto aislado. El sub-agente ejecuta con un límite bajo de pasos
-y retorna un resumen truncado al agente padre.
+v4-D1: Allows the main agent to delegate sub-tasks to a specialized agent
+with its own isolated context. The sub-agent executes with a low step limit
+and returns a truncated summary to the parent agent.
 
-Tipos de sub-agente:
-- explore: Solo herramientas de lectura/búsqueda (read_file, search_code, grep, etc.)
-- test: Lectura + ejecución de tests (run_command limitado a tests)
-- review: Lectura + análisis (sin escritura ni ejecución)
+Sub-agent types:
+- explore: Read/search tools only (read_file, search_code, grep, etc.)
+- test: Read + test execution (run_command limited to tests)
+- review: Read + analysis (no writing or execution)
 """
 
 from typing import Any, Callable
@@ -26,7 +26,7 @@ __all__ = [
     "SubagentType",
 ]
 
-# Herramientas permitidas por tipo de sub-agente
+# Allowed tools per sub-agent type
 SUBAGENT_ALLOWED_TOOLS: dict[str, list[str]] = {
     "explore": [
         "read_file", "list_files", "search_code", "grep", "find_files",
@@ -42,36 +42,36 @@ SUBAGENT_ALLOWED_TOOLS: dict[str, list[str]] = {
 
 VALID_SUBAGENT_TYPES = frozenset(SUBAGENT_ALLOWED_TOOLS.keys())
 
-# Máximo de pasos para sub-agentes (límite bajo para no consumir demasiado contexto/coste)
+# Maximum steps for sub-agents (low limit to avoid consuming too much context/cost)
 SUBAGENT_MAX_STEPS = 15
 
-# Máximo de caracteres en el resumen retornado al agente padre
+# Maximum characters in the summary returned to the parent agent
 SUBAGENT_SUMMARY_MAX_CHARS = 1000
 
 
 class DispatchSubagentArgs(BaseModel):
-    """Argumentos para dispatch_subagent tool."""
+    """Arguments for dispatch_subagent tool."""
 
     task: str = Field(
         description=(
-            "Descripción de la sub-tarea a ejecutar. Sé específico sobre qué "
-            "quieres que el sub-agente investigue, pruebe o revise."
+            "Description of the sub-task to execute. Be specific about what "
+            "you want the sub-agent to investigate, test, or review."
         ),
     )
     agent_type: str = Field(
         default="explore",
         description=(
-            "Tipo de sub-agente: "
-            "'explore' (solo lectura/búsqueda, para investigar), "
-            "'test' (lectura + ejecución de tests), "
-            "'review' (lectura + análisis de código)"
+            "Sub-agent type: "
+            "'explore' (read-only/search, for investigation), "
+            "'test' (read + test execution), "
+            "'review' (read + code analysis)"
         ),
     )
     relevant_files: list[str] = Field(
         default_factory=list,
         description=(
-            "Archivos que el sub-agente debería leer para contexto. "
-            "Ejemplo: ['src/main.py', 'tests/test_main.py']"
+            "Files the sub-agent should read for context. "
+            "Example: ['src/main.py', 'tests/test_main.py']"
         ),
     )
 
@@ -79,42 +79,42 @@ class DispatchSubagentArgs(BaseModel):
 
 
 class DispatchSubagentTool(BaseTool):
-    """Despacha una sub-tarea a un agente especializado con contexto independiente.
+    """Dispatches a sub-task to a specialized agent with independent context.
 
-    El sub-agente tiene su propio contexto limpio y un límite bajo de pasos.
-    Retorna un resumen truncado de su trabajo al agente padre, evitando
-    contaminar el contexto principal con detalles de la investigación.
+    The sub-agent has its own clean context and a low step limit.
+    Returns a truncated summary of its work to the parent agent, avoiding
+    polluting the main context with investigation details.
 
     Attributes:
-        name: Nombre de la tool ("dispatch_subagent").
-        description: Descripción visible por el LLM.
-        sensitive: False — el sub-agente tiene restricciones propias.
+        name: Tool name ("dispatch_subagent").
+        description: Description visible to the LLM.
+        sensitive: False — the sub-agent has its own restrictions.
         args_model: DispatchSubagentArgs.
     """
 
     name = "dispatch_subagent"
     description = (
-        "Delega una sub-tarea a un agente especializado con su propio contexto "
-        "independiente. Útil para investigar, explorar código o ejecutar tests "
-        "sin contaminar tu contexto principal. El sub-agente retornará un "
-        "resumen de su trabajo.\n\n"
-        "Tipos disponibles:\n"
-        "- explore: Solo lectura/búsqueda (leer archivos, buscar código)\n"
-        "- test: Lectura + ejecución de tests (pytest, etc.)\n"
-        "- review: Lectura + análisis de código\n\n"
-        "El sub-agente tiene un máximo de 15 pasos y retorna un resumen "
-        "de máximo 1000 caracteres."
+        "Delegates a sub-task to a specialized agent with its own independent "
+        "context. Useful for investigating, exploring code or running tests "
+        "without polluting your main context. The sub-agent will return a "
+        "summary of its work.\n\n"
+        "Available types:\n"
+        "- explore: Read-only/search (read files, search code)\n"
+        "- test: Read + test execution (pytest, etc.)\n"
+        "- review: Read + code analysis\n\n"
+        "The sub-agent has a maximum of 15 steps and returns a summary "
+        "of up to 1000 characters."
     )
     sensitive = False
     args_model = DispatchSubagentArgs
 
     def __init__(self, agent_factory: Callable[..., Any], workspace_root: str) -> None:
-        """Inicializa el tool de dispatch.
+        """Initialize the dispatch tool.
 
         Args:
-            agent_factory: Callable que crea un AgentLoop configurado.
-                Debe aceptar keyword args: agent, max_steps, allowed_tools.
-            workspace_root: Directorio raíz del workspace.
+            agent_factory: Callable that creates a configured AgentLoop.
+                Must accept keyword args: agent, max_steps, allowed_tools.
+            workspace_root: Root directory of the workspace.
         """
         self.agent_factory = agent_factory
         self.workspace_root = workspace_root
@@ -126,34 +126,34 @@ class DispatchSubagentTool(BaseTool):
         agent_type: str = "explore",
         relevant_files: list[str] | None = None,
     ) -> ToolResult:
-        """Ejecuta un sub-agente con contexto aislado.
+        """Execute a sub-agent with isolated context.
 
         Args:
-            task: Descripción de la sub-tarea.
-            agent_type: Tipo de sub-agente (explore, test, review).
-            relevant_files: Archivos relevantes para dar contexto.
+            task: Description of the sub-task.
+            agent_type: Type of sub-agent (explore, test, review).
+            relevant_files: Relevant files for context.
 
         Returns:
-            ToolResult con el resumen del sub-agente.
+            ToolResult with the sub-agent's summary.
         """
         if relevant_files is None:
             relevant_files = []
 
         try:
-            # Validar tipo de sub-agente
+            # Validate sub-agent type
             if agent_type not in VALID_SUBAGENT_TYPES:
                 return ToolResult(
                     success=False,
                     output="",
                     error=(
-                        f"Tipo de sub-agente inválido: '{agent_type}'. "
-                        f"Tipos válidos: {', '.join(sorted(VALID_SUBAGENT_TYPES))}"
+                        f"Invalid sub-agent type: '{agent_type}'. "
+                        f"Valid types: {', '.join(sorted(VALID_SUBAGENT_TYPES))}"
                     ),
                 )
 
             allowed_tools = SUBAGENT_ALLOWED_TOOLS[agent_type]
 
-            # Construir prompt enriquecido con archivos relevantes
+            # Build enriched prompt with relevant files
             prompt = self._build_subagent_prompt(task, agent_type, relevant_files)
 
             self.log.info(
@@ -163,7 +163,7 @@ class DispatchSubagentTool(BaseTool):
                 relevant_files=relevant_files[:5],
             )
 
-            # Crear y ejecutar sub-agente con contexto limpio
+            # Create and execute sub-agent with clean context
             subagent = self.agent_factory(
                 agent=agent_type,
                 max_steps=SUBAGENT_MAX_STEPS,
@@ -171,12 +171,12 @@ class DispatchSubagentTool(BaseTool):
             )
             result = subagent.run(prompt)
 
-            # Extraer respuesta final
-            summary = getattr(result, "final_response", None) or "Sin resultado del sub-agente."
+            # Extract final response
+            summary = getattr(result, "final_response", None) or "No result from sub-agent."
 
-            # Truncar para no llenar el contexto del padre
+            # Truncate to avoid filling the parent's context
             if len(summary) > SUBAGENT_SUMMARY_MAX_CHARS:
-                summary = summary[:SUBAGENT_SUMMARY_MAX_CHARS] + "\n... (resumen truncado)"
+                summary = summary[:SUBAGENT_SUMMARY_MAX_CHARS] + "\n... (summary truncated)"
 
             cost = getattr(result, "total_cost", 0)
             steps = getattr(result, "steps_completed", 0)
@@ -204,54 +204,54 @@ class DispatchSubagentTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error ejecutando sub-agente: {e}",
+                error=f"Error executing sub-agent: {e}",
             )
 
     def _build_subagent_prompt(
         self, task: str, agent_type: str, relevant_files: list[str]
     ) -> str:
-        """Construye el prompt para el sub-agente.
+        """Build the prompt for the sub-agent.
 
         Args:
-            task: Tarea original.
-            agent_type: Tipo de sub-agente.
-            relevant_files: Archivos relevantes.
+            task: Original task.
+            agent_type: Type of sub-agent.
+            relevant_files: Relevant files.
 
         Returns:
-            Prompt enriquecido con instrucciones y contexto.
+            Enriched prompt with instructions and context.
         """
-        parts = [f"## Sub-tarea ({agent_type})\n\n{task}"]
+        parts = [f"## Sub-task ({agent_type})\n\n{task}"]
 
         if relevant_files:
             file_list = "\n".join(f"- `{f}`" for f in relevant_files[:10])
             parts.append(
-                f"\n## Archivos Relevantes\n\n"
-                f"Lee estos archivos para contexto:\n{file_list}"
+                f"\n## Relevant Files\n\n"
+                f"Read these files for context:\n{file_list}"
             )
 
-        # Instrucciones según tipo
+        # Instructions by type
         match agent_type:
             case "explore":
                 parts.append(
-                    "\n## Instrucciones\n\n"
-                    "Investiga y responde la pregunta usando las herramientas de "
-                    "lectura y búsqueda disponibles. NO modifiques ningún archivo. "
-                    "Responde con un resumen conciso y útil."
+                    "\n## Instructions\n\n"
+                    "Investigate and answer the question using the available "
+                    "read and search tools. Do NOT modify any files. "
+                    "Respond with a concise and useful summary."
                 )
             case "test":
                 parts.append(
-                    "\n## Instrucciones\n\n"
-                    "Ejecuta los tests relevantes y reporta los resultados. "
-                    "NO modifiques código. Solo lee archivos y ejecuta tests. "
-                    "Responde con un resumen de qué tests pasaron/fallaron."
+                    "\n## Instructions\n\n"
+                    "Run the relevant tests and report results. "
+                    "Do NOT modify code. Only read files and run tests. "
+                    "Respond with a summary of which tests passed/failed."
                 )
             case "review":
                 parts.append(
-                    "\n## Instrucciones\n\n"
-                    "Revisa el código de los archivos relevantes. Busca bugs, "
-                    "problemas de diseño y oportunidades de mejora. "
-                    "NO modifiques ningún archivo. Responde con un resumen "
-                    "de tus hallazgos."
+                    "\n## Instructions\n\n"
+                    "Review the code in the relevant files. Look for bugs, "
+                    "design problems and improvement opportunities. "
+                    "Do NOT modify any files. Respond with a summary "
+                    "of your findings."
                 )
 
         return "\n".join(parts)

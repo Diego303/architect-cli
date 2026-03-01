@@ -1,7 +1,7 @@
 """
-Módulo MCP - Cliente y adapter para Model Context Protocol.
+MCP module - Client and adapter for Model Context Protocol.
 
-Exporta cliente, adapter y discovery para tools MCP remotas.
+Exports client, adapter, and discovery for remote MCP tools.
 """
 
 from .adapter import MCPToolAdapter

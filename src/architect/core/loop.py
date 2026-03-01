@@ -1,16 +1,16 @@
 """
-Agent Loop - Ciclo principal de ejecución del agente.
+Agent Loop - Main agent execution loop.
 
-v3: Rediseñado con while True — el LLM decide cuándo parar.
-Los safety nets (max_steps, budget, timeout, context) son watchdogs
-que, al dispararse, piden un cierre limpio al LLM en lugar de cortar.
+v3: Redesigned with while True — the LLM decides when to stop.
+Safety nets (max_steps, budget, timeout, context) are watchdogs
+that, when triggered, request a graceful close from the LLM instead of cutting.
 
-v4-A1: Integración con el sistema de hooks completo.
+v4-A1: Integration with the complete hook system.
 
-Invariantes:
-- El LLM termina cuando no solicita más tool calls (StopReason.LLM_DONE)
-- Los watchdogs inyectan instrucción de cierre → última llamada al LLM
-- USER_INTERRUPT es el único caso que NO llama al LLM (corte inmediato)
+Invariants:
+- The LLM finishes when it no longer requests tool calls (StopReason.LLM_DONE)
+- Watchdogs inject close instructions -> final LLM call
+- USER_INTERRUPT is the only case that does NOT call the LLM (immediate cut)
 """
 
 import time
@@ -41,44 +41,31 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# Instrucciones de cierre para cada watchdog
-_CLOSE_INSTRUCTIONS: dict[StopReason, str] = {
-    StopReason.MAX_STEPS: (
-        "Has alcanzado el límite máximo de pasos permitidos. "
-        "Responde con un resumen de lo que completaste, qué queda pendiente "
-        "y sugerencias para continuar en otra sesión."
-    ),
-    StopReason.BUDGET_EXCEEDED: (
-        "Se ha alcanzado el presupuesto máximo de coste. "
-        "Resume brevemente lo que completaste y qué falta por hacer."
-    ),
-    StopReason.CONTEXT_FULL: (
-        "El contexto de conversación está lleno. "
-        "Resume brevemente lo que completaste y qué falta por hacer."
-    ),
-    StopReason.TIMEOUT: (
-        "Se agotó el tiempo asignado para esta ejecución. "
-        "Resume brevemente lo que completaste y qué falta por hacer."
-    ),
+# Map StopReason -> i18n key for close instructions (resolved lazily via t())
+_CLOSE_KEYS: dict[StopReason, str] = {
+    StopReason.MAX_STEPS: "close.max_steps",
+    StopReason.BUDGET_EXCEEDED: "close.budget_exceeded",
+    StopReason.CONTEXT_FULL: "close.context_full",
+    StopReason.TIMEOUT: "close.timeout",
 }
 
 
 class AgentLoop:
-    """Loop principal del agente (v3: while True).
+    """Main agent loop (v3: while True).
 
-    El LLM trabaja hasta que decide que terminó (no pide más tools).
-    Los safety nets son watchdogs que comprueban condiciones antes de
-    cada llamada al LLM. Si se disparan, piden un cierre limpio.
+    The LLM works until it decides it is done (no more tool requests).
+    Safety nets are watchdogs that check conditions before each LLM call.
+    If triggered, they request a graceful close.
 
-    Flujo por iteración:
-    1. Comprobar safety nets → si saltan, _graceful_close() y terminar
-    2. Gestionar contexto (comprimir si es necesario)
+    Per-iteration flow:
+    1. Check safety nets -> if triggered, _graceful_close() and finish
+    2. Manage context (compress if needed)
     3. Pre-LLM hooks (v4-A1)
-    4. Llamar al LLM
+    4. Call the LLM
     5. Post-LLM hooks (v4-A1)
-    6. Si no hay tool_calls → agent_complete hooks → quality gates → salir
-    7. Pre/post-tool hooks dentro de execute_tool_call
-    8. Añadir resultados al contexto y repetir
+    6. If no tool_calls -> agent_complete hooks -> quality gates -> exit
+    7. Pre/post-tool hooks inside execute_tool_call
+    8. Append results to context and repeat
     """
 
     def __init__(
@@ -100,25 +87,25 @@ class AgentLoop:
         session_id: str | None = None,
         dry_run_tracker: "DryRunTracker | None" = None,
     ):
-        """Inicializa el agent loop.
+        """Initialize the agent loop.
 
         Args:
-            llm: LLMAdapter configurado
-            engine: ExecutionEngine configurado
-            agent_config: Configuración del agente
-            context_builder: ContextBuilder para mensajes
-            shutdown: GracefulShutdown para detectar interrupciones
-            step_timeout: Segundos máximos por step individual (SIGALRM). 0 = sin límite.
-            context_manager: ContextManager para pruning del contexto
-            cost_tracker: CostTracker para registrar costes
-            timeout: Segundos máximos totales de ejecución. None = sin límite.
-            hook_executor: HookExecutor para hooks del lifecycle (v4-A1)
-            guardrails: GuardrailsEngine para seguridad determinista (v4-A2)
-            skills_loader: SkillsLoader para contexto de proyecto y skills (v4-A3)
-            memory: ProceduralMemory para persistir correcciones (v4-A4)
-            session_manager: SessionManager para persistir sesiones (v4-B1)
-            session_id: ID de sesión para resume. None genera uno nuevo.
-            dry_run_tracker: DryRunTracker para registrar acciones en modo dry-run (v4-B4)
+            llm: Configured LLMAdapter
+            engine: Configured ExecutionEngine
+            agent_config: Agent configuration
+            context_builder: ContextBuilder for messages
+            shutdown: GracefulShutdown to detect interruptions
+            step_timeout: Maximum seconds per individual step (SIGALRM). 0 = no limit.
+            context_manager: ContextManager for context pruning
+            cost_tracker: CostTracker to record costs
+            timeout: Maximum total execution seconds. None = no limit.
+            hook_executor: HookExecutor for lifecycle hooks (v4-A1)
+            guardrails: GuardrailsEngine for deterministic security (v4-A2)
+            skills_loader: SkillsLoader for project context and skills (v4-A3)
+            memory: ProceduralMemory to persist corrections (v4-A4)
+            session_manager: SessionManager to persist sessions (v4-B1)
+            session_id: Session ID for resume. None generates a new one.
+            dry_run_tracker: DryRunTracker to record actions in dry-run mode (v4-B4)
         """
         self.llm = llm
         self.engine = engine
@@ -148,42 +135,42 @@ class AgentLoop:
         stream: bool = False,
         on_stream_chunk: Callable[[str], None] | None = None,
     ) -> AgentState:
-        """Ejecuta el agent loop completo.
+        """Execute the complete agent loop.
 
         Args:
-            prompt: Prompt inicial del usuario
-            stream: Si True, usa streaming del LLM
-            on_stream_chunk: Callback opcional para chunks de streaming
+            prompt: Initial user prompt
+            stream: If True, use LLM streaming
+            on_stream_chunk: Optional callback for streaming chunks
 
         Returns:
-            AgentState final con el resultado de la ejecución
+            Final AgentState with the execution result
         """
         self._start_time = time.time()
 
-        # v4-B1: Generar session_id si no se proporcionó
+        # v4-B1: Generate session_id if not provided
         if not self.session_id and self.session_manager:
             from ..features.sessions import generate_session_id
             self.session_id = generate_session_id()
 
-        # Inicializar estado
+        # Initialize state
         state = AgentState()
         state.messages = self.ctx.build_initial(self.agent_config, prompt)
         state.model = self.llm.config.model
         state.cost_tracker = self.cost_tracker
 
-        # v4-A3: Inyectar contexto de skills en el system prompt
+        # v4-A3: Inject skills context into the system prompt
         if self.skills_loader:
             skills_context = self.skills_loader.build_system_context()
             if skills_context and state.messages and state.messages[0]["role"] == "system":
                 state.messages[0]["content"] += "\n\n" + skills_context
 
-        # v4-A4: Inyectar memoria procedural en el system prompt
+        # v4-A4: Inject procedural memory into the system prompt
         if self.memory:
             memory_context = self.memory.get_context()
             if memory_context and state.messages and state.messages[0]["role"] == "system":
                 state.messages[0]["content"] += "\n\n" + memory_context
 
-        # Obtener schemas de tools permitidas
+        # Get schemas of allowed tools
         tools_schema = self.engine.registry.get_schemas(
             self.agent_config.allowed_tools or None
         )
@@ -205,11 +192,11 @@ class AgentLoop:
 
         step = 0
 
-        # ── Loop principal: el LLM decide cuándo terminar ────────────────
+        # ── Main loop: the LLM decides when to finish ────────────────
         try:
             while True:
 
-                # ── SAFETY NETS (antes de cada llamada al LLM) ────────────────
+                # ── SAFETY NETS (before each LLM call) ────────────────
                 stop_reason = self._check_safety_nets(state, step)
                 if stop_reason is not None:
                     return self._graceful_close(state, stop_reason, tools_schema)
@@ -225,16 +212,16 @@ class AgentLoop:
                     "step": str(step),
                 })
 
-                # Inyectar contexto pendiente de hooks (si hay)
+                # Inject pending hook context (if any)
                 if self._pending_context:
                     for ctx_text in self._pending_context:
                         state.messages.append({
                             "role": "user",
-                            "content": f"[Contexto de hook]: {ctx_text}",
+                            "content": f"[Hook context]: {ctx_text}",
                         })
                     self._pending_context.clear()
 
-                # ── LLAMADA AL LLM ────────────────────────────────────────────
+                # ── LLM CALL ────────────────────────────────────────────
                 self.log.info("agent.step.start", step=step)
                 self.hlog.llm_call(step, messages_count=len(state.messages))
 
@@ -253,7 +240,7 @@ class AgentLoop:
                                     response = chunk_or_response
 
                             if response is None:
-                                raise RuntimeError("Streaming completó sin retornar respuesta final")
+                                raise RuntimeError("Streaming completed without returning final response")
                         else:
                             response = self.llm.completion(
                                 messages=state.messages,
@@ -263,7 +250,7 @@ class AgentLoop:
                 except StepTimeoutError:
                     self.log.error("agent.step_timeout", step=step, seconds=self.step_timeout)
                     self.hlog.step_timeout(self.step_timeout)
-                    # Tratar timeout de step como timeout total
+                    # Treat step timeout as total timeout
                     return self._graceful_close(state, StopReason.TIMEOUT, tools_schema)
 
                 except Exception as e:
@@ -271,10 +258,10 @@ class AgentLoop:
                     self.hlog.llm_error(str(e))
                     state.status = "failed"
                     state.stop_reason = StopReason.LLM_ERROR
-                    state.final_output = f"Error irrecuperable del LLM: {e}"
+                    state.final_output = f"Unrecoverable LLM error: {e}"
                     return state
 
-                # ── REGISTRAR COSTE ───────────────────────────────────────────
+                # ── RECORD COST ───────────────────────────────────────────
                 if self.cost_tracker and response.usage:
                     try:
                         self.cost_tracker.record(
@@ -285,7 +272,7 @@ class AgentLoop:
                         )
                     except BudgetExceededError as e:
                         self.log.error("agent.budget_exceeded", step=step, error=str(e))
-                        # El presupuesto se superó en este step — cierre limpio
+                        # Budget exceeded on this step — graceful close
                         return self._graceful_close(state, StopReason.BUDGET_EXCEEDED, tools_schema)
 
                 # ── POST-LLM HOOKS (v4-A1) ─────────────────────────────────
@@ -296,7 +283,7 @@ class AgentLoop:
 
                 step += 1
 
-                # ── EL LLM DECIDIÓ TERMINAR (no pidió tools) ──────────────────
+                # ── THE LLM DECIDED TO FINISH (no tools requested) ──────────────────
                 if not response.tool_calls:
                     self.hlog.llm_response(tool_calls=0)
                     self.log.info(
@@ -317,16 +304,16 @@ class AgentLoop:
                             g for g in gate_results if not g["passed"] and g["required"]
                         ]
                         if failed_required:
-                            feedback = "Quality gates obligatorios no superados:\n"
+                            feedback = "Required quality gates not passed:\n"
                             for g in failed_required:
                                 feedback += f"  - {g['name']}: {g['output'][:200]}\n"
-                            feedback += "\nCorrige estos problemas antes de poder completar la tarea."
+                            feedback += "\nFix these issues before the task can be completed."
                             state.messages.append({"role": "user", "content": feedback})
                             self.log.info(
                                 "guardrail.quality_gates_failed",
                                 failed=[g["name"] for g in failed_required],
                             )
-                            continue  # Vuelve al while True
+                            continue  # Back to while True
 
                     # ── AGENT COMPLETE HOOKS (v4-A1) ─────────────────────────
                     self._run_hooks_safe("agent_complete", {
@@ -343,11 +330,11 @@ class AgentLoop:
                     state.status = "success"
                     state.stop_reason = StopReason.LLM_DONE
 
-                    # v4-B1: Guardar sesión final
+                    # v4-B1: Save final session
                     self._save_session(state, prompt, step)
                     break
 
-                # ── EL LLM PIDIÓ TOOLS → EJECUTAR ────────────────────────────
+                # ── THE LLM REQUESTED TOOLS -> EXECUTE ────────────────────────────
                 self.hlog.llm_response(tool_calls=len(response.tool_calls))
                 self.log.info(
                     "agent.tool_calls_received",
@@ -356,40 +343,40 @@ class AgentLoop:
                     tools=[tc.name for tc in response.tool_calls],
                 )
 
-                # Ejecutar tool calls (paralelo o secuencial)
+                # Execute tool calls (parallel or sequential)
                 tool_results = self._execute_tool_calls_batch(response.tool_calls, step)
 
-                # Actualizar mensajes con tool results
+                # Update messages with tool results
                 state.messages = self.ctx.append_tool_results(
                     state.messages, response.tool_calls, tool_results
                 )
 
-                # Registrar step
+                # Record step
                 state.steps.append(StepResult(
                     step_number=step,
                     llm_response=response,
                     tool_calls_made=tool_results,
                 ))
 
-                # v4-B1: Registrar archivos tocados para la sesión
+                # v4-B1: Track touched files for the session
                 for tc in tool_results:
                     if tc.tool_name in ("write_file", "edit_file", "apply_patch", "delete_file"):
                         path = tc.args.get("path", "")
                         if path:
                             self._files_touched.add(path)
 
-                # v4-B1: Guardar sesión después de cada step
+                # v4-B1: Save session after each step
                 self._save_session(state, prompt, step)
 
         finally:
-            # ── SESSION END HOOK (v4-A1) — siempre se ejecuta ─────────────
+            # ── SESSION END HOOK (v4-A1) — always runs ─────────────
             self._run_hooks_safe("session_end", {
                 "steps": str(step),
                 "status": state.status,
                 "cost": str(self.cost_tracker.total_cost_usd if self.cost_tracker else 0),
             })
 
-        # ── Log final ─────────────────────────────────────────────────────
+        # ── Final log ─────────────────────────────────────────────────────
         self.log.info(
             "agent.loop.complete",
             status=state.status,
@@ -409,11 +396,11 @@ class AgentLoop:
     # ── HOOKS HELPERS (v4-A1) ─────────────────────────────────────────────
 
     def _run_hooks_safe(self, event_name: str, context: dict[str, Any]) -> None:
-        """Ejecuta hooks para un evento de forma segura (sin romper el loop).
+        """Execute hooks for an event safely (without breaking the loop).
 
         Args:
-            event_name: Nombre del evento (debe coincidir con HookEvent value).
-            context: Diccionario de contexto para el hook.
+            event_name: Event name (must match a HookEvent value).
+            context: Context dictionary for the hook.
         """
         if not self.hook_executor:
             return
@@ -427,7 +414,7 @@ class AgentLoop:
 
         try:
             results = self.hook_executor.run_event(event, context)
-            # Recoger contexto adicional para inyectar en el siguiente mensaje
+            # Collect additional context to inject into the next message
             for result in results:
                 if result.additional_context:
                     self._pending_context.append(result.additional_context)
@@ -437,12 +424,12 @@ class AgentLoop:
     # ── SESSION PERSISTENCE (v4-B1) ──────────────────────────────────────
 
     def _save_session(self, state: AgentState, task: str, step: int) -> None:
-        """Guarda el estado de la sesión actual a disco (si está configurado).
+        """Save the current session state to disk (if configured).
 
         Args:
-            state: Estado actual del agente.
-            task: Prompt/tarea original.
-            step: Número de step actual.
+            state: Current agent state.
+            task: Original prompt/task.
+            step: Current step number.
         """
         if not self.session_manager or not self.session_id:
             return
@@ -457,7 +444,7 @@ class AgentLoop:
                 model=self.llm.config.model,
                 status=state.status,
                 steps_completed=step,
-                messages=state.messages[-30:],  # Últimos 30 para no explotar
+                messages=state.messages[-30:],  # Last 30 to avoid explosion
                 files_modified=sorted(self._files_touched),
                 total_cost=(
                     self.cost_tracker.total_cost_usd if self.cost_tracker else 0.0
@@ -475,18 +462,18 @@ class AgentLoop:
     def _check_safety_nets(
         self, state: AgentState, step: int
     ) -> StopReason | None:
-        """Comprueba todas las condiciones de seguridad antes de cada step.
+        """Check all safety conditions before each step.
 
-        Retorna None si todo está bien, o el StopReason si hay que parar.
-        El orden importa: USER_INTERRUPT primero (más urgente).
+        Returns None if everything is fine, or the StopReason if we must stop.
+        Order matters: USER_INTERRUPT first (most urgent).
         """
-        # 1. User interrupt (Ctrl+C / SIGTERM) — corte inmediato
+        # 1. User interrupt (Ctrl+C / SIGTERM) — immediate cut
         if self.shutdown and self.shutdown.should_stop:
             self.log.warning("safety.user_interrupt", step=step)
             self.hlog.safety_net("user_interrupt", step=step)
             return StopReason.USER_INTERRUPT
 
-        # 2. Max steps — watchdog de pasos
+        # 2. Max steps — step count watchdog
         if step >= self.agent_config.max_steps:
             self.log.warning(
                 "safety.max_steps",
@@ -496,7 +483,7 @@ class AgentLoop:
             self.hlog.safety_net("max_steps", step=step, max_steps=self.agent_config.max_steps)
             return StopReason.MAX_STEPS
 
-        # 3. Budget — watchdog de coste (pre-LLM check)
+        # 3. Budget — cost watchdog (pre-LLM check)
         if self.cost_tracker and self.cost_tracker.is_budget_exceeded():
             self.log.warning(
                 "safety.budget_exceeded",
@@ -506,13 +493,13 @@ class AgentLoop:
             self.hlog.safety_net("budget_exceeded", step=step)
             return StopReason.BUDGET_EXCEEDED
 
-        # 4. Timeout total — watchdog de tiempo
+        # 4. Total timeout — time watchdog
         if self.timeout and (time.time() - self._start_time) > self.timeout:
             self.log.warning("safety.timeout", elapsed=time.time() - self._start_time)
             self.hlog.safety_net("timeout")
             return StopReason.TIMEOUT
 
-        # 4. Context window críticamente lleno (incluso después de comprimir)
+        # 4. Context window critically full (even after compression)
         if self.context_manager and self.context_manager.is_critically_full(state.messages):
             self.log.warning("safety.context_full", step=step)
             self.hlog.safety_net("context_full", step=step)
@@ -520,7 +507,7 @@ class AgentLoop:
 
         return None
 
-    # ── CIERRE LIMPIO ────────────────────────────────────────────────────
+    # ── GRACEFUL CLOSE ────────────────────────────────────────────────────
 
     def _graceful_close(
         self,
@@ -528,35 +515,35 @@ class AgentLoop:
         reason: StopReason,
         tools_schema: list | None,
     ) -> AgentState:
-        """Cierre limpio cuando salta un watchdog.
+        """Graceful close when a watchdog triggers.
 
-        En lugar de cortar abruptamente, le da al LLM una última oportunidad
-        de resumir qué hizo y qué queda pendiente.
-        USER_INTERRUPT es la excepción: no se llama al LLM.
+        Instead of cutting abruptly, gives the LLM one last chance
+        to summarize what was done and what remains pending.
+        USER_INTERRUPT is the exception: the LLM is not called.
         """
         self.log.info("agent.closing", reason=reason.value, steps=len(state.steps))
         self.hlog.closing(reason.value, len(state.steps))
 
         state.stop_reason = reason
 
-        # USER_INTERRUPT: corte inmediato, sin llamar al LLM
+        # USER_INTERRUPT: immediate cut, no LLM call
         if reason == StopReason.USER_INTERRUPT:
             state.status = "partial"
             state.final_output = (
-                f"Interrumpido por el usuario. "
-                f"Pasos completados: {state.current_step}."
+                f"Interrupted by user. "
+                f"Steps completed: {state.current_step}."
             )
             return state
 
-        # BUDGET_EXCEEDED: corte inmediato, NO gastar más dinero en resumen
+        # BUDGET_EXCEEDED: immediate cut, do NOT spend more money on summary
         if reason == StopReason.BUDGET_EXCEEDED:
             cost_info = ""
             if self.cost_tracker:
-                cost_info = f" Coste total: ${self.cost_tracker.total_cost_usd:.4f}."
+                cost_info = f" Total cost: ${self.cost_tracker.total_cost_usd:.4f}."
             state.status = "partial"
             state.final_output = (
-                f"Presupuesto excedido.{cost_info} "
-                f"Pasos completados: {state.current_step}."
+                f"Budget exceeded.{cost_info} "
+                f"Steps completed: {state.current_step}."
             )
             # Skip LLM summary call — no point spending more money
             state.status = "partial"
@@ -576,16 +563,18 @@ class AgentLoop:
             )
             return state
 
-        # Para todos los demás watchdogs: pedir resumen al LLM
-        instruction = _CLOSE_INSTRUCTIONS.get(reason)
-        if instruction:
+        # For all other watchdogs: ask LLM for a summary
+        from ..i18n import t
+        close_key = _CLOSE_KEYS.get(reason)
+        if close_key:
+            instruction = t(close_key)
             state.messages.append({
                 "role": "user",
-                "content": f"[SISTEMA] {instruction}",
+                "content": f"[SYSTEM] {instruction}",
             })
 
             try:
-                # Última llamada SIN tools — solo texto de cierre
+                # Last call WITHOUT tools — close summary only
                 close_response = self.llm.completion(
                     messages=state.messages,
                     tools=None,
@@ -593,14 +582,15 @@ class AgentLoop:
                 state.final_output = close_response.content
             except Exception as e:
                 self.log.warning("agent.close_response_failed", error=str(e))
-                state.final_output = (
-                    f"El agente se detuvo ({reason.value}). "
-                    f"Pasos completados: {state.current_step}."
+                state.final_output = t(
+                    "close.agent_stopped",
+                    reason=reason.value,
+                    steps=state.current_step,
                 )
 
         state.status = "partial"
 
-        # v4-B1: Guardar sesión con estado parcial
+        # v4-B1: Save session with partial state
         self._save_session(state, state.messages[1]["content"] if len(state.messages) > 1 else "", state.current_step)
 
         self.log.info(
@@ -618,20 +608,20 @@ class AgentLoop:
         )
         return state
 
-    # ── EJECUCIÓN DE TOOL CALLS ──────────────────────────────────────────
+    # ── TOOL CALL EXECUTION ──────────────────────────────────────────
 
     def _execute_tool_calls_batch(
         self,
         tool_calls: list,
         step: int,
     ) -> list[ToolCallResult]:
-        """Ejecuta un lote de tool calls, paralelizando si es seguro.
+        """Execute a batch of tool calls, parallelizing when safe.
 
-        La paralelización solo se activa cuando:
-        - Hay más de una tool call
-        - parallel_tools=True en la configuración
-        - El modo de confirmación es yolo
-        - O confirm-sensitive y ninguna tool es sensible
+        Parallelization is only enabled when:
+        - There is more than one tool call
+        - parallel_tools=True in configuration
+        - The confirmation mode is yolo
+        - Or confirm-sensitive and no tool is sensitive
         """
         if not tool_calls:
             return []
@@ -642,7 +632,7 @@ class AgentLoop:
         if not self._should_parallelize(tool_calls):
             return [self._execute_single_tool(tc, step) for tc in tool_calls]
 
-        # Ejecución paralela preservando orden original
+        # Parallel execution preserving original order
         self.log.info(
             "agent.tool_calls.parallel",
             step=step,
@@ -663,11 +653,11 @@ class AgentLoop:
         return results  # type: ignore[return-value]
 
     def _execute_single_tool(self, tc: object, step: int) -> ToolCallResult:
-        """Ejecuta una sola tool call y retorna el resultado.
+        """Execute a single tool call and return the result.
 
-        v4-A1: Ejecuta pre-hooks antes del tool y post-hooks después.
-        Los pre-hooks pueden bloquear o modificar el input.
-        Los post-hooks pueden añadir contexto adicional al resultado.
+        v4-A1: Runs pre-hooks before the tool and post-hooks after.
+        Pre-hooks can block or modify the input.
+        Post-hooks can add additional context to the result.
         """
         tool_name: str = tc.name  # type: ignore[attr-defined]
         tool_args: dict[str, Any] = tc.arguments  # type: ignore[attr-defined]
@@ -678,7 +668,7 @@ class AgentLoop:
             tool=tool_name,
             args=self._sanitize_args_for_log(tool_args),
         )
-        # Detectar si es MCP tool para logging diferenciado
+        # Detect if it's an MCP tool for differentiated logging
         is_mcp = tool_name.startswith("mcp_")
         mcp_server = tool_name.split("_")[1] if is_mcp and "_" in tool_name[4:] else ""
         self.hlog.tool_call(
@@ -702,7 +692,7 @@ class AgentLoop:
         # ── PRE-EXECUTION CODE RULES (v4-A2) — block BEFORE write ────
         code_rule_messages = self.engine.check_code_rules(tool_name, tool_args)
         if code_rule_messages:
-            block_msgs = [m for m in code_rule_messages if m.startswith("BLOQUEADO")]
+            block_msgs = [m for m in code_rule_messages if m.startswith("BLOCKED") or m.startswith("BLOQUEADO")]
             if block_msgs:
                 from ..tools.base import ToolResult as TR
                 blocked_result = TR(
@@ -727,7 +717,7 @@ class AgentLoop:
         pre_result = self.engine.run_pre_tool_hooks(tool_name, tool_args)
         from ..tools.base import ToolResult
         if isinstance(pre_result, ToolResult):
-            # Hook bloqueó la acción
+            # Hook blocked the action
             self.log.info("agent.tool_call.blocked_by_hook", tool=tool_name)
             self.hlog.tool_result(tool_name, False, pre_result.error)
             return ToolCallResult(
@@ -738,10 +728,10 @@ class AgentLoop:
                 was_dry_run=self.engine.dry_run,
             )
         elif isinstance(pre_result, dict):
-            # Hook modificó el input
+            # Hook modified the input
             tool_args = pre_result
 
-        # ── EJECUTAR TOOL ────────────────────────────────────────────────
+        # ── EXECUTE TOOL ────────────────────────────────────────────────
         result = self.engine.execute_tool_call(tool_name, tool_args)
 
         # ── DRY-RUN TRACKER (v4-B4) ─────────────────────────────────────
@@ -753,7 +743,7 @@ class AgentLoop:
             tool_name, tool_args, result.output or "", result.success
         )
 
-        # Si hay output de hooks, añadirlo al resultado del tool
+        # If there's hook output, append it to the tool result
         if hook_output and result.success:
             from ..tools.base import ToolResult as TR
             combined_output = (result.output or "") + "\n\n" + hook_output
@@ -783,8 +773,8 @@ class AgentLoop:
         )
 
     def _should_parallelize(self, tool_calls: list) -> bool:
-        """Determina si las tool calls se pueden ejecutar en paralelo."""
-        # Respetar configuración explícita
+        """Determine whether tool calls can be executed in parallel."""
+        # Respect explicit configuration
         if self.context_manager and not self.context_manager.config.parallel_tools:
             return False
 
@@ -803,7 +793,7 @@ class AgentLoop:
         return True
 
     def _sanitize_args_for_log(self, args: dict) -> dict:
-        """Sanitiza argumentos para logging (truncar valores largos)."""
+        """Sanitize arguments for logging (truncate long values)."""
         sanitized = {}
         for key, value in args.items():
             if isinstance(value, str) and len(value) > 100:

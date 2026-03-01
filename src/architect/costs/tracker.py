@@ -1,8 +1,8 @@
 """
-Tracker de costes de llamadas al LLM (F14).
+LLM call cost tracker (F14).
 
-Registra el coste de cada step del agente, agrupa por fuente
-(agent/eval/summary) y enforza límites de presupuesto.
+Records the cost of each agent step, groups by source
+(agent/eval/summary) and enforces budget limits.
 """
 
 from dataclasses import dataclass, field
@@ -16,33 +16,33 @@ logger = structlog.get_logger()
 
 
 class BudgetExceededError(Exception):
-    """Error lanzado cuando el coste total supera el presupuesto configurado."""
+    """Error raised when the total cost exceeds the configured budget."""
     pass
 
 
 @dataclass
 class StepCost:
-    """Coste de una llamada individual al LLM."""
+    """Cost of an individual LLM call."""
 
     step: int
     model: str
     input_tokens: int
     output_tokens: int
-    cached_tokens: int   # tokens leídos de caché del proveedor (Anthropic/OpenAI)
+    cached_tokens: int   # tokens read from provider cache (Anthropic/OpenAI)
     cost_usd: float
     source: str          # "agent" | "eval" | "summary"
 
 
 class CostTracker:
-    """Registra y agrega el coste de las llamadas al LLM.
+    """Records and aggregates LLM call costs.
 
-    Características:
-    - Registra coste por step con desglose por fuente (agent/eval/summary)
-    - Soporte para tokens de prompt caching (coste reducido para cached_tokens)
-    - Budget enforcement: lanza BudgetExceededError si se supera el límite
-    - Warn threshold: log de aviso cuando se alcanza un umbral configurable
+    Features:
+    - Records cost per step with breakdown by source (agent/eval/summary)
+    - Support for prompt caching tokens (reduced cost for cached_tokens)
+    - Budget enforcement: raises BudgetExceededError if limit is exceeded
+    - Warn threshold: warning log when a configurable threshold is reached
 
-    Invariante: record() nunca lanza excepciones salvo BudgetExceededError.
+    Invariant: record() never raises exceptions except BudgetExceededError.
     """
 
     def __init__(
@@ -51,12 +51,12 @@ class CostTracker:
         budget_usd: float | None = None,
         warn_at_usd: float | None = None,
     ) -> None:
-        """Inicializa el tracker.
+        """Initialize the tracker.
 
         Args:
-            price_loader: PriceLoader para resolver precios por modelo
-            budget_usd: Límite de gasto en USD. Si se supera, lanza BudgetExceededError.
-            warn_at_usd: Umbral de aviso en USD. Log warning al alcanzarlo.
+            price_loader: PriceLoader to resolve prices by model
+            budget_usd: Spending limit in USD. If exceeded, raises BudgetExceededError.
+            warn_at_usd: Warning threshold in USD. Logs a warning when reached.
         """
         self._price_loader = price_loader
         self._budget_usd = budget_usd
@@ -66,7 +66,7 @@ class CostTracker:
         self._log = logger.bind(component="cost_tracker")
 
     # ------------------------------------------------------------------
-    # Registro
+    # Recording
     # ------------------------------------------------------------------
 
     def record(
@@ -76,20 +76,20 @@ class CostTracker:
         usage: dict[str, Any],
         source: str = "agent",
     ) -> None:
-        """Registra el coste de una llamada al LLM.
+        """Record the cost of an LLM call.
 
         Args:
-            step: Número de step del agente
-            model: Nombre del modelo usado (e.g., "gpt-4o")
-            usage: Dict con usage info del LLM (prompt_tokens, completion_tokens, etc.)
-            source: Fuente de la llamada: "agent" | "eval" | "summary"
+            step: Agent step number
+            model: Name of the model used (e.g., "gpt-4o")
+            usage: Dict with LLM usage info (prompt_tokens, completion_tokens, etc.)
+            source: Call source: "agent" | "eval" | "summary"
 
         Raises:
-            BudgetExceededError: Si el coste total supera budget_usd
+            BudgetExceededError: If total cost exceeds budget_usd
         """
         input_tokens = int(usage.get("prompt_tokens", 0) or 0)
         output_tokens = int(usage.get("completion_tokens", 0) or 0)
-        # cache_read_input_tokens: tokens que el proveedor sirvió desde caché
+        # cache_read_input_tokens: tokens the provider served from cache
         cached_tokens = int(usage.get("cache_read_input_tokens", 0) or 0)
 
         cost = self._calculate_cost(model, input_tokens, output_tokens, cached_tokens)
@@ -117,7 +117,7 @@ class CostTracker:
             total_cost_usd=round(self.total_cost_usd, 6),
         )
 
-        # Warn threshold (solo una vez por sesión)
+        # Warn threshold (only once per session)
         if (
             not self._budget_warned
             and self._warn_at_usd is not None
@@ -133,11 +133,11 @@ class CostTracker:
         # Budget enforcement
         if self._budget_usd is not None and self.total_cost_usd > self._budget_usd:
             raise BudgetExceededError(
-                f"Presupuesto excedido: ${self.total_cost_usd:.4f} > ${self._budget_usd:.4f} USD"
+                f"Budget exceeded: ${self.total_cost_usd:.4f} > ${self._budget_usd:.4f} USD"
             )
 
     # ------------------------------------------------------------------
-    # Propiedades de agregación
+    # Aggregation properties
     # ------------------------------------------------------------------
 
     @property
@@ -161,28 +161,28 @@ class CostTracker:
         return len(self._steps)
 
     def has_data(self) -> bool:
-        """Retorna True si hay al menos un step registrado."""
+        """Return True if at least one step has been recorded."""
         return len(self._steps) > 0
 
     def is_budget_exceeded(self) -> bool:
-        """Retorna True si el coste total ya supera el budget configurado.
+        """Return True if the total cost already exceeds the configured budget.
 
-        Útil para pre-LLM checks: evita hacer llamadas LLM adicionales
-        si el presupuesto ya fue superado.
+        Useful for pre-LLM checks: avoids making additional LLM calls
+        if the budget has already been exceeded.
         """
         if self._budget_usd is None:
             return False
         return self.total_cost_usd > self._budget_usd
 
     # ------------------------------------------------------------------
-    # Resumen
+    # Summary
     # ------------------------------------------------------------------
 
     def summary(self) -> dict[str, Any]:
-        """Retorna un dict con el resumen de costes para output JSON/terminal.
+        """Return a dict with cost summary for JSON/terminal output.
 
         Returns:
-            Dict con totales, desglose por fuente, y metadatos
+            Dict with totals, breakdown by source, and metadata
         """
         by_source: dict[str, float] = {}
         for step in self._steps:
@@ -200,10 +200,10 @@ class CostTracker:
         }
 
     def format_summary_line(self) -> str:
-        """Formatea una línea de resumen compacta para mostrar en terminal.
+        """Format a compact summary line for terminal display.
 
         Returns:
-            Cadena como: "$0.0042 (12,450 in / 3,200 out / 500 cached)"
+            String like: "$0.0042 (12,450 in / 3,200 out / 500 cached)"
         """
         total = self.total_cost_usd
         parts = [
@@ -217,7 +217,7 @@ class CostTracker:
         return " ".join(parts)
 
     # ------------------------------------------------------------------
-    # Helpers privados
+    # Private helpers
     # ------------------------------------------------------------------
 
     def _calculate_cost(
@@ -227,38 +227,38 @@ class CostTracker:
         output_tokens: int,
         cached_tokens: int,
     ) -> float:
-        """Calcula el coste de una llamada con soporte para cached tokens.
+        """Calculate the cost of a call with support for cached tokens.
 
-        Los cached_tokens se cobran al precio reducido (cached_input_per_million).
-        Los tokens no cacheados se cobran al precio normal (input_per_million).
+        Cached tokens are charged at the reduced price (cached_input_per_million).
+        Non-cached tokens are charged at the normal price (input_per_million).
 
         Args:
-            model: Nombre del modelo
-            input_tokens: Total de tokens de input (incluye cached)
-            output_tokens: Tokens de output
-            cached_tokens: Tokens servidos desde caché del proveedor
+            model: Model name
+            input_tokens: Total input tokens (includes cached)
+            output_tokens: Output tokens
+            cached_tokens: Tokens served from provider cache
 
         Returns:
-            Coste en USD
+            Cost in USD
         """
         pricing = self._price_loader.get_prices(model)
 
-        # Tokens no cacheados = input normal - cached
+        # Non-cached tokens = normal input - cached
         non_cached = max(0, input_tokens - cached_tokens)
 
-        # Coste de tokens no cacheados
+        # Cost of non-cached tokens
         input_cost = (non_cached / 1_000_000) * pricing.input_per_million
 
-        # Coste de tokens cacheados (precio reducido si está definido)
+        # Cost of cached tokens (reduced price if defined)
         if cached_tokens > 0 and pricing.cached_input_per_million is not None:
             cached_cost = (cached_tokens / 1_000_000) * pricing.cached_input_per_million
         elif cached_tokens > 0:
-            # Sin precio de cache definido → usar precio normal
+            # No cache price defined -> use normal price
             cached_cost = (cached_tokens / 1_000_000) * pricing.input_per_million
         else:
             cached_cost = 0.0
 
-        # Coste de output
+        # Output cost
         output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
 
         return input_cost + cached_cost + output_cost

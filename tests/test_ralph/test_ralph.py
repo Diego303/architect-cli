@@ -620,7 +620,7 @@ class TestBuildIterationPrompt:
     def test_first_iteration_includes_iteration_number(self, ralph_loop: RalphLoop) -> None:
         """El prompt incluye el numero de iteracion."""
         prompt = ralph_loop._build_iteration_prompt(1, "abc123")
-        assert "iteraci" in prompt.lower()
+        assert "iteration" in prompt.lower()
         assert "1/" in prompt
 
     @patch("architect.features.ralph.subprocess.run")
@@ -636,7 +636,7 @@ class TestBuildIterationPrompt:
 
         prompt = ralph_loop._build_iteration_prompt(2, "abc123")
         assert "diff --git" in prompt
-        assert "Cambios de Iteraciones Anteriores" in prompt
+        assert "Changes from Previous Iterations" in prompt
 
     @patch("architect.features.ralph.subprocess.run")
     def test_subsequent_iteration_no_diff_if_empty(
@@ -646,7 +646,7 @@ class TestBuildIterationPrompt:
         mock_subprocess.return_value = MagicMock(stdout="", returncode=0)
 
         prompt = ralph_loop._build_iteration_prompt(2, "abc123")
-        assert "Cambios de Iteraciones Anteriores" not in prompt
+        assert "Changes from Previous Iterations" not in prompt
 
     def test_subsequent_iteration_includes_errors(
         self, ralph_loop: RalphLoop
@@ -672,7 +672,7 @@ class TestBuildIterationPrompt:
             mock_sp.return_value = MagicMock(stdout="", returncode=0)
             prompt = ralph_loop._build_iteration_prompt(2, "abc123")
 
-        assert "Errores de la Iteraci" in prompt
+        assert "Errors from Previous Iteration" in prompt
         assert "FAILED test_login" in prompt
 
     def test_subsequent_iteration_includes_execution_error(
@@ -696,7 +696,7 @@ class TestBuildIterationPrompt:
             mock_sp.return_value = MagicMock(stdout="", returncode=0)
             prompt = ralph_loop._build_iteration_prompt(2, "abc123")
 
-        assert "Error de Ejecuci" in prompt
+        assert "Execution Error" in prompt
         assert "Agent timeout" in prompt
 
     def test_spec_file_used_when_exists(self, workspace: Path) -> None:
@@ -744,7 +744,7 @@ class TestBuildIterationPrompt:
         mock_subprocess.return_value = MagicMock(stdout=long_diff, returncode=0)
 
         prompt = ralph_loop._build_iteration_prompt(2, "abc123")
-        assert "diff truncado" in prompt
+        assert "diff truncated" in prompt
 
     def test_progress_file_included_when_exists(
         self, ralph_loop: RalphLoop, workspace: Path
@@ -759,7 +759,7 @@ class TestBuildIterationPrompt:
         )
 
         prompt = ralph_loop._build_iteration_prompt(1, "abc123")
-        assert "Progreso Acumulado" in prompt
+        assert "Accumulated Progress" in prompt
         assert "Iteration 1" in prompt
 
 
@@ -904,7 +904,7 @@ class TestUpdateProgress:
         assert ralph_loop.progress_file.exists()
         content = ralph_loop.progress_file.read_text(encoding="utf-8")
         assert "Ralph Loop" in content
-        assert "Iteraci" in content
+        assert "Iteration" in content
 
     def test_appends_to_existing(self, ralph_loop: RalphLoop) -> None:
         """_update_progress acumula iteraciones en el archivo."""
@@ -921,9 +921,9 @@ class TestUpdateProgress:
             ralph_loop._update_progress(iteration)
 
         content = ralph_loop.progress_file.read_text(encoding="utf-8")
-        assert "Iteraci\u00f3n 1" in content
-        assert "Iteraci\u00f3n 2" in content
-        assert "Iteraci\u00f3n 3" in content
+        assert "Iteration 1" in content
+        assert "Iteration 2" in content
+        assert "Iteration 3" in content
 
     def test_includes_check_status(self, ralph_loop: RalphLoop) -> None:
         """Progress incluye estado de cada check."""

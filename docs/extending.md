@@ -301,7 +301,21 @@ DEFAULT_AGENTS["security-audit"] = AgentConfig(
 )
 ```
 
-### 2.3. Escribir System Prompts Efectivos
+### 2.3. Nota sobre i18n (v1.1.0)
+
+Los system prompts de los agentes default (`build`, `plan`, `resume`, `review`) ahora se resuelven via el sistema i18n. Esto significa que cambian de idioma según la configuración `language`. Los agentes custom definidos via YAML mantienen sus prompts tal cual los escribes — no se traducen.
+
+Si quieres que un agente custom soporte múltiples idiomas, puedes usar la API de i18n directamente en código:
+
+```python
+from architect.i18n import t
+
+CUSTOM_PROMPT = t("mi_agente.system_prompt")
+```
+
+Ver [`i18n.md`](i18n.md) para detalles sobre el sistema de internacionalización.
+
+### 2.4. Escribir System Prompts Efectivos
 
 Un buen system prompt para architect sigue esta estructura:
 
@@ -320,7 +334,7 @@ Consejos:
 - **Limitar el scope**: un agente con un rol claro rinde mejor que uno generico.
 - **Usar tablas**: el LLM las parsea mejor que listas largas de prosa.
 
-### 2.4. Precedencia de Configuracion
+### 2.5. Precedencia de Configuracion
 
 Los agentes siguen este orden de merge (de menor a mayor prioridad):
 

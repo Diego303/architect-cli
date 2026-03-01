@@ -1,7 +1,7 @@
 """
-Módulo de ejecución - Engine y políticas para ejecución controlada de tools.
+Execution module - Engine and policies for controlled tool execution.
 
-Exporta el ExecutionEngine, políticas de confirmación y validadores.
+Exports the ExecutionEngine, confirmation policies, and validators.
 """
 
 from .engine import ExecutionEngine

@@ -1,7 +1,7 @@
 """
-Setup helpers para inicializar tools.
+Setup helpers for initializing tools.
 
-Funciones de conveniencia para registrar las tools estándar del sistema.
+Convenience functions for registering the standard system tools.
 """
 
 from pathlib import Path
@@ -20,19 +20,19 @@ def register_filesystem_tools(
     registry: ToolRegistry,
     workspace_config: WorkspaceConfig,
 ) -> None:
-    """Registra todas las tools del filesystem en el registry.
+    """Register all filesystem tools in the registry.
 
-    Registra:
+    Registers:
     - read_file
     - write_file
     - edit_file
     - apply_patch
     - list_files
-    - delete_file (siempre registrada; la tool misma comprueba allow_delete)
+    - delete_file (always registered; the tool itself checks allow_delete)
 
     Args:
-        registry: ToolRegistry donde registrar las tools
-        workspace_config: Configuración del workspace
+        registry: ToolRegistry where to register the tools
+        workspace_config: Workspace configuration
     """
     workspace_root = Path(workspace_config.root).resolve()
 
@@ -42,8 +42,8 @@ def register_filesystem_tools(
     registry.register(ApplyPatchTool(workspace_root))
     registry.register(ListFilesTool(workspace_root))
 
-    # delete_file siempre registrada para que aparezca en el schema del LLM;
-    # la tool rechaza con mensaje claro si allow_delete=False.
+    # delete_file always registered so it appears in the LLM schema;
+    # the tool rejects with a clear message if allow_delete=False.
     registry.register(
         DeleteFileTool(
             workspace_root,
@@ -56,16 +56,16 @@ def register_search_tools(
     registry: ToolRegistry,
     workspace_config: WorkspaceConfig,
 ) -> None:
-    """Registra las tools de búsqueda de código (F10).
+    """Register code search tools (F10).
 
-    Registra:
-    - search_code: búsqueda regex con contexto
-    - grep: búsqueda de texto literal (usa rg/grep del sistema si está disponible)
-    - find_files: búsqueda de archivos por patrón glob
+    Registers:
+    - search_code: regex search with context
+    - grep: literal text search (uses system rg/grep if available)
+    - find_files: file search by glob pattern
 
     Args:
-        registry: ToolRegistry donde registrar las tools
-        workspace_config: Configuración del workspace
+        registry: ToolRegistry where to register the tools
+        workspace_config: Workspace configuration
     """
     workspace_root = Path(workspace_config.root).resolve()
 
@@ -79,16 +79,16 @@ def register_command_tools(
     workspace_config: WorkspaceConfig,
     commands_config: CommandsConfig,
 ) -> None:
-    """Registra la tool run_command si está habilitada (F13).
+    """Register the run_command tool if enabled (F13).
 
-    La tool solo se registra si ``commands_config.enabled`` es True.
-    Si no está habilitada, el agente recibirá un error claro cuando
-    intente llamarla ("tool no encontrada").
+    The tool is only registered if ``commands_config.enabled`` is True.
+    If not enabled, the agent will receive a clear error when
+    it tries to call it ("tool not found").
 
     Args:
-        registry: ToolRegistry donde registrar las tools
-        workspace_config: Configuración del workspace
-        commands_config: Configuración de la tool run_command
+        registry: ToolRegistry where to register the tools
+        workspace_config: Workspace configuration
+        commands_config: Configuration for the run_command tool
     """
     if not commands_config.enabled:
         return
@@ -102,15 +102,15 @@ def register_all_tools(
     workspace_config: WorkspaceConfig,
     commands_config: CommandsConfig | None = None,
 ) -> None:
-    """Registra todas las tools disponibles (filesystem + búsqueda + comandos).
+    """Register all available tools (filesystem + search + commands).
 
-    Función de conveniencia que combina register_filesystem_tools,
-    register_search_tools y register_command_tools.
+    Convenience function that combines register_filesystem_tools,
+    register_search_tools and register_command_tools.
 
     Args:
-        registry: ToolRegistry donde registrar las tools
-        workspace_config: Configuración del workspace
-        commands_config: Configuración de run_command (F13). Si es None, usa defaults.
+        registry: ToolRegistry where to register the tools
+        workspace_config: Workspace configuration
+        commands_config: Configuration for run_command (F13). If None, uses defaults.
     """
     register_filesystem_tools(registry, workspace_config)
     register_search_tools(registry, workspace_config)
@@ -124,15 +124,15 @@ def register_dispatch_tool(
     workspace_config: WorkspaceConfig,
     agent_factory: Callable[..., Any],
 ) -> None:
-    """Registra la tool dispatch_subagent (D1).
+    """Register the dispatch_subagent tool (D1).
 
-    Se registra por separado porque requiere un agent_factory que solo
-    está disponible después de configurar el AgentLoop.
+    Registered separately because it requires an agent_factory that is only
+    available after configuring the AgentLoop.
 
     Args:
-        registry: ToolRegistry donde registrar la tool.
-        workspace_config: Configuración del workspace.
-        agent_factory: Callable que crea un AgentLoop configurado.
+        registry: ToolRegistry where to register the tool.
+        workspace_config: Workspace configuration.
+        agent_factory: Callable that creates a configured AgentLoop.
     """
     workspace_root = str(Path(workspace_config.root).resolve())
     registry.register(DispatchSubagentTool(agent_factory, workspace_root))

@@ -1,7 +1,7 @@
 """
-Módulo de configuración de architect.
+Configuration module for architect.
 
-Exporta los componentes principales para facilitar imports.
+Exports the main components for convenient imports.
 """
 
 from .loader import load_config

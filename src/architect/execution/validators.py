@@ -1,129 +1,129 @@
 """
-Validadores para argumentos de tools.
+Validators for tool arguments.
 
-Incluye validación crítica de paths para prevenir path traversal
-y otras vulnerabilidades de seguridad.
+Includes critical path validation to prevent path traversal
+and other security vulnerabilities.
 """
 
 from pathlib import Path
 
 
 class PathTraversalError(Exception):
-    """Error lanzado cuando un path intenta escapar del workspace."""
+    """Error raised when a path attempts to escape the workspace."""
 
     pass
 
 
 class ValidationError(Exception):
-    """Error genérico de validación."""
+    """Generic validation error."""
 
     pass
 
 
 def validate_path(path: str, workspace_root: Path) -> Path:
-    """Valida y resuelve un path, asegurando que esté dentro del workspace.
+    """Validate and resolve a path, ensuring it is within the workspace.
 
-    Esta función es CRÍTICA para la seguridad. Previene path traversal
-    attacks (../../etc/passwd) y asegura que todas las operaciones de
-    archivos estén confinadas al workspace.
+    This function is CRITICAL for security. It prevents path traversal
+    attacks (../../etc/passwd) and ensures that all file operations
+    are confined to the workspace.
 
     Args:
-        path: Path relativo proporcionado por el usuario/LLM
-        workspace_root: Directorio raíz del workspace
+        path: Relative path provided by the user/LLM
+        workspace_root: Root directory of the workspace
 
     Returns:
-        Path absoluto y resuelto, garantizado dentro del workspace
+        Absolute and resolved path, guaranteed to be within the workspace
 
     Raises:
-        PathTraversalError: Si el path resuelto escapa del workspace
+        PathTraversalError: If the resolved path escapes the workspace
 
     Example:
         >>> validate_path("src/main.py", Path("/workspace"))
         Path("/workspace/src/main.py")
 
         >>> validate_path("../../etc/passwd", Path("/workspace"))
-        PathTraversalError: Path ../../etc/passwd escapa del workspace
+        PathTraversalError: Path ../../etc/passwd escapes the workspace
 
     Security Notes:
-        - Usa Path.resolve() para resolver symlinks y '..' components
-        - Verifica que el path resuelto comience con workspace_root resuelto
-        - Previene tanto paths absolutos como relativos que escapen
+        - Uses Path.resolve() to resolve symlinks and '..' components
+        - Verifies that the resolved path starts with the resolved workspace_root
+        - Prevents both absolute and relative paths from escaping
     """
-    # Resolver workspace root a path absoluto
+    # Resolve workspace root to absolute path
     workspace_resolved = workspace_root.resolve()
 
-    # Combinar workspace con el path del usuario y resolver
-    # resolve() resuelve symlinks y elimina '..' y '.'
+    # Combine workspace with the user path and resolve
+    # resolve() resolves symlinks and eliminates '..' and '.'
     try:
         full_path = (workspace_root / path).resolve()
     except (ValueError, OSError) as e:
-        raise ValidationError(f"Path inválido '{path}': {e}")
+        raise ValidationError(f"Invalid path '{path}': {e}")
 
-    # Verificar que el path resuelto esté dentro del workspace
-    # Usamos is_relative_to() si está disponible (Python 3.9+)
-    # o fallback a comparación de strings
+    # Verify the resolved path is within the workspace
+    # Use is_relative_to() if available (Python 3.9+)
+    # or fallback to string comparison
     try:
         # Python 3.9+
         if not full_path.is_relative_to(workspace_resolved):
             raise PathTraversalError(
-                f"Path '{path}' escapa del workspace. "
-                f"Resuelto: {full_path}, Workspace: {workspace_resolved}"
+                f"Path '{path}' escapes the workspace. "
+                f"Resolved: {full_path}, Workspace: {workspace_resolved}"
             )
     except AttributeError:
-        # Fallback para Python < 3.9
+        # Fallback for Python < 3.9
         if not str(full_path).startswith(str(workspace_resolved)):
             raise PathTraversalError(
-                f"Path '{path}' escapa del workspace. "
-                f"Resuelto: {full_path}, Workspace: {workspace_resolved}"
+                f"Path '{path}' escapes the workspace. "
+                f"Resolved: {full_path}, Workspace: {workspace_resolved}"
             )
 
     return full_path
 
 
 def validate_file_exists(path: Path) -> None:
-    """Valida que un archivo exista.
+    """Validate that a file exists.
 
     Args:
-        path: Path absoluto del archivo
+        path: Absolute path of the file
 
     Raises:
-        ValidationError: Si el archivo no existe o no es un archivo regular
+        ValidationError: If the file does not exist or is not a regular file
     """
     if not path.exists():
-        raise ValidationError(f"El archivo no existe: {path}")
+        raise ValidationError(f"File does not exist: {path}")
 
     if not path.is_file():
-        raise ValidationError(f"El path no es un archivo regular: {path}")
+        raise ValidationError(f"Path is not a regular file: {path}")
 
 
 def validate_directory_exists(path: Path) -> None:
-    """Valida que un directorio exista.
+    """Validate that a directory exists.
 
     Args:
-        path: Path absoluto del directorio
+        path: Absolute path of the directory
 
     Raises:
-        ValidationError: Si el directorio no existe o no es un directorio
+        ValidationError: If the directory does not exist or is not a directory
     """
     if not path.exists():
-        raise ValidationError(f"El directorio no existe: {path}")
+        raise ValidationError(f"Directory does not exist: {path}")
 
     if not path.is_dir():
-        raise ValidationError(f"El path no es un directorio: {path}")
+        raise ValidationError(f"Path is not a directory: {path}")
 
 
 def ensure_parent_directory(path: Path) -> None:
-    """Asegura que el directorio padre de un path exista, creándolo si es necesario.
+    """Ensure the parent directory of a path exists, creating it if necessary.
 
     Args:
-        path: Path del archivo (el directorio padre es el que se crea)
+        path: File path (the parent directory is what gets created)
 
     Raises:
-        ValidationError: Si no se puede crear el directorio
+        ValidationError: If the directory cannot be created
     """
     parent = path.parent
     if not parent.exists():
         try:
             parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            raise ValidationError(f"No se pudo crear el directorio {parent}: {e}")
+            raise ValidationError(f"Could not create directory {parent}: {e}")

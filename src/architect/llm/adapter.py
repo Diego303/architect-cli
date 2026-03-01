@@ -1,17 +1,17 @@
 """
-Adapter para LiteLLM - Abstracción sobre múltiples proveedores LLM.
+Adapter for LiteLLM - Abstraction over multiple LLM providers.
 
-Proporciona una interfaz unificada para llamar a cualquier LLM soportado
-por LiteLLM, con retries automáticos, normalización de respuestas y
-manejo robusto de errores.
+Provides a unified interface for calling any LLM supported
+by LiteLLM, with automatic retries, response normalization, and
+robust error handling.
 
-Incluye soporte para streaming de respuestas en tiempo real.
+Includes support for real-time response streaming.
 
-Retries configurables desde LLMConfig:
-- Solo para errores transitorios: RateLimitError, ServiceUnavailableError,
-  APIConnectionError y Timeout.
-- No se reintenta en errores de autenticación ni de configuración.
-- Logging estructurado en cada reintento con número de intento y espera.
+Retries configurable from LLMConfig:
+- Only for transient errors: RateLimitError, ServiceUnavailableError,
+  APIConnectionError and Timeout.
+- Authentication and configuration errors are not retried.
+- Structured logging on each retry with attempt number and wait time.
 """
 
 import json
@@ -35,7 +35,7 @@ from .cache import LocalLLMCache
 
 logger = structlog.get_logger()
 
-# Errores transitorios que justifican reintentos
+# Transient errors that justify retries
 _RETRYABLE_ERRORS = (
     litellm.RateLimitError,
     litellm.ServiceUnavailableError,
@@ -45,80 +45,80 @@ _RETRYABLE_ERRORS = (
 
 
 class StreamChunk(BaseModel):
-    """Representa un chunk de streaming del LLM.
+    """Represents a streaming chunk from the LLM.
 
-    Usado durante streaming para enviar fragmentos de la respuesta
-    a medida que se generan.
+    Used during streaming to send response fragments
+    as they are generated.
     """
 
-    type: str = Field(description="Tipo de chunk: 'content' o 'tool_call'")
-    data: str = Field(description="Contenido del chunk")
+    type: str = Field(description="Chunk type: 'content' or 'tool_call'")
+    data: str = Field(description="Chunk content")
 
     model_config = {"extra": "forbid"}
 
 
 class ToolCall(BaseModel):
-    """Representa un tool call solicitado por el LLM.
+    """Represents a tool call requested by the LLM.
 
-    Formato normalizado independiente del proveedor.
+    Normalized format independent of the provider.
     """
 
-    id: str = Field(description="ID único del tool call")
-    name: str = Field(description="Nombre de la tool a ejecutar")
-    arguments: dict[str, Any] = Field(description="Argumentos para la tool")
+    id: str = Field(description="Unique ID of the tool call")
+    name: str = Field(description="Name of the tool to execute")
+    arguments: dict[str, Any] = Field(description="Arguments for the tool")
 
     model_config = {"extra": "forbid"}
 
 
 class LLMResponse(BaseModel):
-    """Respuesta normalizada del LLM.
+    """Normalized LLM response.
 
-    Formato interno independiente del proveedor LLM usado.
+    Internal format independent of the LLM provider used.
     """
 
     content: str | None = Field(
         default=None,
-        description="Texto de respuesta del LLM (si no hay tool calls)",
+        description="LLM response text (if there are no tool calls)",
     )
     tool_calls: list[ToolCall] = Field(
         default_factory=list,
-        description="Tool calls solicitadas por el LLM",
+        description="Tool calls requested by the LLM",
     )
     finish_reason: str = Field(
         default="stop",
-        description="Razón de finalización: stop, tool_calls, length, etc.",
+        description="Finish reason: stop, tool_calls, length, etc.",
     )
     usage: dict[str, Any] | None = Field(
         default=None,
-        description="Información de uso de tokens",
+        description="Token usage information",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class LLMAdapter:
-    """Adapter para LiteLLM con configuración, retries y normalización.
+    """Adapter for LiteLLM with configuration, retries and normalization.
 
-    Proporciona una interfaz limpia sobre LiteLLM que:
-    - Configura el provider (directo o proxy)
-    - Maneja API keys desde variables de entorno
-    - Aplica retries automáticos con backoff exponencial
-    - Normaliza respuestas a un formato interno consistente
-    - Maneja errores con logging estructurado
+    Provides a clean interface over LiteLLM that:
+    - Configures the provider (direct or proxy)
+    - Handles API keys from environment variables
+    - Applies automatic retries with exponential backoff
+    - Normalizes responses to a consistent internal format
+    - Handles errors with structured logging
     """
 
     def __init__(self, config: LLMConfig, local_cache: LocalLLMCache | None = None):
-        """Inicializa el adapter con configuración.
+        """Initialize the adapter with configuration.
 
         Args:
-            config: Configuración del LLM
-            local_cache: Cache local de respuestas (opcional, solo para desarrollo)
+            config: LLM configuration
+            local_cache: Local response cache (optional, for development only)
         """
         self.config = config
         self._local_cache = local_cache
         self.log = logger.bind(component="llm_adapter", model=config.model)
 
-        # Configurar LiteLLM
+        # Configure LiteLLM
         self._configure_litellm()
 
         self.log.info(
@@ -132,7 +132,7 @@ class LLMAdapter:
         )
 
     def _on_retry_sleep(self, retry_state: RetryCallState) -> None:
-        """Callback llamado antes de cada reintento. Logea el intento y la espera."""
+        """Callback called before each retry. Logs the attempt and wait time."""
         next_wait = retry_state.next_action.sleep if retry_state.next_action else 0
         exc = retry_state.outcome.exception() if retry_state.outcome else None
         self.log.warning(
@@ -144,13 +144,13 @@ class LLMAdapter:
         )
 
     def _call_with_retry(self, fn, *args, **kwargs) -> Any:
-        """Ejecuta fn con retries automáticos solo para errores transitorios.
+        """Execute fn with automatic retries only for transient errors.
 
-        Usa config.retries para determinar el número máximo de intentos.
-        Retries se aplican solo a errores transitorios (_RETRYABLE_ERRORS).
-        Errores de autenticación y configuración se propagan inmediatamente.
+        Uses config.retries to determine the maximum number of attempts.
+        Retries are applied only to transient errors (_RETRYABLE_ERRORS).
+        Authentication and configuration errors are propagated immediately.
         """
-        max_attempts = self.config.retries + 1  # 1 intento original + N retries
+        max_attempts = self.config.retries + 1  # 1 original attempt + N retries
         for attempt in Retrying(
             retry=retry_if_exception_type(_RETRYABLE_ERRORS),
             stop=stop_after_attempt(max_attempts),
@@ -164,17 +164,17 @@ class LLMAdapter:
     def _prepare_messages_with_caching(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Marca el system prompt con cache_control para prompt caching del proveedor.
+        """Mark the system prompt with cache_control for provider prompt caching.
 
-        Añade cache_control al contenido del mensaje system para que
-        Anthropic y OpenAI (compatible) lo cacheen automáticamente.
-        El markup se ignora en proveedores que no lo soportan.
+        Adds cache_control to the system message content so that
+        Anthropic and OpenAI (compatible) cache it automatically.
+        The markup is ignored by providers that don't support it.
 
         Args:
-            messages: Lista de mensajes originales
+            messages: Original list of messages
 
         Returns:
-            Lista de mensajes con cache_control en el system (si aplica)
+            List of messages with cache_control on the system (if applicable)
         """
         if not self.config.prompt_caching:
             return messages
@@ -183,7 +183,7 @@ class LLMAdapter:
         for msg in messages:
             if msg.get("role") == "system":
                 content = msg.get("content", "")
-                # Anthropic requiere content como lista de bloques con cache_control
+                # Anthropic requires content as a list of blocks with cache_control
                 if isinstance(content, str):
                     enhanced = {
                         **msg,
@@ -196,7 +196,7 @@ class LLMAdapter:
                         ],
                     }
                 else:
-                    # Ya es lista (p.ej. desde indexer) — añadir cache_control al último bloque
+                    # Already a list (e.g. from indexer) — add cache_control to the last block
                     enhanced = dict(msg)
                 result.append(enhanced)
             else:
@@ -204,28 +204,28 @@ class LLMAdapter:
         return result
 
     def _configure_litellm(self) -> None:
-        """Configura LiteLLM según la configuración."""
+        """Configure LiteLLM according to the configuration."""
 
-        # Configurar API base si está especificada
+        # Configure API base if specified
         if self.config.api_base:
             litellm.api_base = self.config.api_base
             self.log.debug("llm.api_base_set", api_base=self.config.api_base)
 
-        # Configurar API key desde variable de entorno
+        # Configure API key from environment variable
         api_key = os.environ.get(self.config.api_key_env)
         if api_key:
-            # LiteLLM usa diferentes env vars según el provider
-            # Setear la genérica y las específicas
+            # LiteLLM uses different env vars depending on the provider
+            # Set the generic and specific ones
             os.environ["LITELLM_API_KEY"] = api_key
             self.log.debug("llm.api_key_configured", env_var=self.config.api_key_env)
         else:
             self.log.warning(
                 "llm.no_api_key",
                 env_var=self.config.api_key_env,
-                message=f"Variable de entorno {self.config.api_key_env} no encontrada",
+                message=f"Environment variable {self.config.api_key_env} not found",
             )
 
-        # Configurar modo de logging de LiteLLM (reducir verbosidad)
+        # Configure LiteLLM logging mode (reduce verbosity)
         litellm.suppress_debug_info = True
         litellm.set_verbose = False
 
@@ -235,32 +235,32 @@ class LLMAdapter:
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
     ) -> LLMResponse:
-        """Ejecuta una llamada al LLM con retries automáticos para errores transitorios.
+        """Execute an LLM call with automatic retries for transient errors.
 
-        Solo reintenta en errores transitorios (rate limits, servicio no disponible,
-        problemas de conexión, timeouts). Los errores de autenticación y de
-        configuración se propagan inmediatamente sin reintentar.
+        Only retries on transient errors (rate limits, service unavailable,
+        connection problems, timeouts). Authentication and configuration
+        errors are propagated immediately without retrying.
 
         Args:
-            messages: Lista de mensajes en formato OpenAI
-            tools: Lista de tool schemas (opcional)
-            stream: Si True, lanza ValueError — usar completion_stream() en su lugar
+            messages: List of messages in OpenAI format
+            tools: List of tool schemas (optional)
+            stream: If True, raises ValueError -- use completion_stream() instead
 
         Returns:
-            LLMResponse normalizada
+            Normalized LLMResponse
 
         Raises:
-            ValueError: Si stream=True (usar completion_stream)
-            litellm.RateLimitError: Si se agotan los retries por rate limit
-            litellm.AuthenticationError: Inmediatamente (sin retry)
-            Exception: Cualquier otro error después de agotar retries
+            ValueError: If stream=True (use completion_stream)
+            litellm.RateLimitError: If retries for rate limit are exhausted
+            litellm.AuthenticationError: Immediately (no retry)
+            Exception: Any other error after exhausting retries
         """
         if stream:
             raise ValueError(
-                "Para streaming, use completion_stream() en lugar de completion(stream=True)"
+                "For streaming, use completion_stream() instead of completion(stream=True)"
             )
 
-        # Aplicar prompt caching si está habilitado
+        # Apply prompt caching if enabled
         messages = self._prepare_messages_with_caching(messages)
 
         self.log.info(
@@ -270,7 +270,7 @@ class LLMAdapter:
             tools_count=len(tools) if tools else 0,
         )
 
-        # Consultar local cache (desarrollo)
+        # Query local cache (development)
         if self._local_cache:
             cached = self._local_cache.get(messages, tools)
             if cached is not None:
@@ -291,7 +291,7 @@ class LLMAdapter:
             response = self._call_with_retry(_call)
             normalized = self._normalize_response(response)
 
-            # Guardar en local cache si está habilitado
+            # Save to local cache if enabled
             if self._local_cache:
                 self._local_cache.set(messages, tools, normalized)
 
@@ -317,23 +317,23 @@ class LLMAdapter:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> Generator[StreamChunk | LLMResponse, None, None]:
-        """Ejecuta una llamada al LLM con streaming.
+        """Execute an LLM call with streaming.
 
-        Yields chunks a medida que se generan, y al final retorna
-        la respuesta completa.
+        Yields chunks as they are generated, and returns
+        the complete response at the end.
 
         Args:
-            messages: Lista de mensajes en formato OpenAI
-            tools: Lista de tool schemas (opcional)
+            messages: List of messages in OpenAI format
+            tools: List of tool schemas (optional)
 
         Yields:
-            StreamChunk: Fragmentos de contenido a medida que se generan
-            LLMResponse: Respuesta completa al final (último yield)
+            StreamChunk: Content fragments as they are generated
+            LLMResponse: Complete response at the end (last yield)
 
         Raises:
-            Exception: Si falla la llamada al LLM
+            Exception: If the LLM call fails
         """
-        # Aplicar prompt caching si está habilitado
+        # Apply prompt caching if enabled
         messages = self._prepare_messages_with_caching(messages)
 
         self.log.info(
@@ -344,22 +344,22 @@ class LLMAdapter:
         )
 
         try:
-            # Preparar kwargs para LiteLLM
+            # Prepare kwargs for LiteLLM
             kwargs: dict[str, Any] = {
                 "model": self.config.model,
                 "messages": messages,
                 "timeout": self.config.timeout,
                 "stream": True,
-                # Solicitar usage en streaming (OpenAI-compatible APIs)
-                # Sin esto, usage no se devuelve y el cost tracker no registra datos
+                # Request usage in streaming (OpenAI-compatible APIs)
+                # Without this, usage is not returned and the cost tracker does not record data
                 "stream_options": {"include_usage": True},
             }
 
-            # Añadir tools si están disponibles
+            # Add tools if available
             if tools:
                 kwargs["tools"] = tools
 
-            # Acumuladores para construir respuesta completa
+            # Accumulators for building the complete response
             collected_content: list[str] = []
             collected_tool_calls: dict[int, dict[str, Any]] = {}
             finish_reason = "stop"
@@ -373,12 +373,12 @@ class LLMAdapter:
 
                 delta = choice.delta
 
-                # Contenido de texto
+                # Text content
                 if hasattr(delta, "content") and delta.content:
                     collected_content.append(delta.content)
                     yield StreamChunk(type="content", data=delta.content)
 
-                # Tool calls (se acumulan incrementalmente)
+                # Tool calls (accumulated incrementally)
                 if hasattr(delta, "tool_calls") and delta.tool_calls:
                     for tc_delta in delta.tool_calls:
                         idx = tc_delta.index
@@ -389,7 +389,7 @@ class LLMAdapter:
                                 "function": {"name": "", "arguments": ""},
                             }
 
-                        # Acumular campos
+                        # Accumulate fields
                         if tc_delta.id:
                             collected_tool_calls[idx]["id"] = tc_delta.id
 
@@ -407,7 +407,7 @@ class LLMAdapter:
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
 
-                # Usage (solo viene en el último chunk)
+                # Usage (only comes in the last chunk)
                 if hasattr(chunk, "usage") and chunk.usage:
                     usage_info = {
                         "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
@@ -415,16 +415,16 @@ class LLMAdapter:
                             chunk.usage, "completion_tokens", 0
                         ) or 0,
                         "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
-                        # Tokens servidos desde caché del proveedor (Anthropic: cache_read_input_tokens)
+                        # Tokens served from provider cache (Anthropic: cache_read_input_tokens)
                         "cache_read_input_tokens": (
                             getattr(chunk.usage, "cache_read_input_tokens", 0) or 0
                         ),
                     }
 
-            # Construir respuesta completa
+            # Build complete response
             content = "".join(collected_content) if collected_content else None
 
-            # Convertir tool calls acumulados a ToolCall objects
+            # Convert accumulated tool calls to ToolCall objects
             tool_calls = []
             for tc_dict in collected_tool_calls.values():
                 tool_calls.append(
@@ -437,9 +437,9 @@ class LLMAdapter:
                     )
                 )
 
-            # Fallback: si el provider no devolvió usage en streaming,
-            # estimar tokens usando litellm.token_counter para que el
-            # cost tracker pueda registrar datos aproximados.
+            # Fallback: if the provider did not return usage in streaming,
+            # estimate tokens using litellm.token_counter so that the
+            # cost tracker can record approximate data.
             if usage_info is None or (
                 usage_info.get("prompt_tokens", 0) == 0
                 and usage_info.get("completion_tokens", 0) == 0
@@ -463,7 +463,7 @@ class LLMAdapter:
                 usage=response.usage,
             )
 
-            # Yield respuesta completa al final
+            # Yield complete response at the end
             yield response
 
         except Exception as e:
@@ -475,27 +475,27 @@ class LLMAdapter:
             raise
 
     def _normalize_response(self, response: Any) -> LLMResponse:
-        """Normaliza la respuesta de LiteLLM a formato interno.
+        """Normalize the LiteLLM response to internal format.
 
         Args:
-            response: Respuesta cruda de litellm.completion()
+            response: Raw response from litellm.completion()
 
         Returns:
-            LLMResponse normalizada
+            Normalized LLMResponse
         """
-        # LiteLLM retorna un objeto ModelResponse
+        # LiteLLM returns a ModelResponse object
         choice = response.choices[0]
         message = choice.message
 
-        # Extraer content
+        # Extract content
         content = getattr(message, "content", None)
 
-        # Extraer tool calls si existen
+        # Extract tool calls if they exist
         tool_calls_raw = getattr(message, "tool_calls", None) or []
         tool_calls = []
 
         for tc in tool_calls_raw:
-            # LiteLLM normaliza tool calls al formato OpenAI
+            # LiteLLM normalizes tool calls to OpenAI format
             tool_calls.append(
                 ToolCall(
                     id=tc.id,
@@ -504,8 +504,8 @@ class LLMAdapter:
                 )
             )
 
-        # Fallback: algunos modelos (llama3.1, mistral vía ollama) devuelven tool calls
-        # como JSON en el campo content en lugar de usar el campo tool_calls de OpenAI.
+        # Fallback: some models (llama3.1, mistral via ollama) return tool calls
+        # as JSON in the content field instead of using the OpenAI tool_calls field.
         if not tool_calls and content:
             text_tool_calls = self._try_parse_text_tool_calls(content)
             if text_tool_calls:
@@ -515,19 +515,19 @@ class LLMAdapter:
                     tools=[tc.name for tc in text_tool_calls],
                 )
                 tool_calls = text_tool_calls
-                content = None  # El content era solo el tool call, no texto al usuario
+                content = None  # The content was just the tool call, not text to the user
 
-        # Extraer finish_reason
+        # Extract finish_reason
         finish_reason = choice.finish_reason or "stop"
 
-        # Extraer usage si está disponible
+        # Extract usage if available
         usage = None
         if hasattr(response, "usage") and response.usage:
             usage = {
                 "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
                 "completion_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
                 "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
-                # Tokens servidos desde caché del proveedor (Anthropic: cache_read_input_tokens)
+                # Tokens served from provider cache (Anthropic: cache_read_input_tokens)
                 "cache_read_input_tokens": (
                     getattr(response.usage, "cache_read_input_tokens", 0) or 0
                 ),
@@ -541,21 +541,21 @@ class LLMAdapter:
         )
 
     def _try_parse_text_tool_calls(self, content: str) -> list[ToolCall]:
-        """Intenta parsear tool calls embebidos como texto en el content.
+        """Attempt to parse tool calls embedded as text in the content.
 
-        Algunos modelos (llama3.1, mistral via ollama) no usan el campo tool_calls
-        de la API OpenAI y devuelven la llamada como JSON en el campo content.
+        Some models (llama3.1, mistral via ollama) don't use the tool_calls field
+        of the OpenAI API and return the call as JSON in the content field.
 
-        Formatos detectados:
+        Detected formats:
           {"name": "tool", "arguments": {...}}
           {"type": "function", "name": "tool", "parameters": {...}}
           [{"name": "tool1", ...}, {"name": "tool2", ...}]
 
-        Solo activa si el JSON tiene 'name' (str) + 'arguments'/'parameters'/'args'.
+        Only activates if the JSON has 'name' (str) + 'arguments'/'parameters'/'args'.
         """
         text = content.strip()
 
-        # Quitar bloques de código markdown si los hay
+        # Remove markdown code blocks if present
         if text.startswith("```"):
             lines = text.splitlines()
             inner = lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
@@ -567,7 +567,7 @@ class LLMAdapter:
             return []
 
         def _to_tool_call(d: dict) -> ToolCall | None:
-            # Formato OpenAI nativo anidado:
+            # Native nested OpenAI format:
             # {"id": "...", "type": "function", "function": {"name": "...", "arguments": {...}}}
             if "function" in d and isinstance(d["function"], dict):
                 fn = d["function"]
@@ -582,12 +582,12 @@ class LLMAdapter:
                     tc_id = d.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                     return ToolCall(id=tc_id, name=name, arguments=raw_args or {})
 
-            # Formato plano: {"name": "tool", "arguments": {...}}
-            # o {"type": "function", "name": "tool", "parameters": {...}}
+            # Flat format: {"name": "tool", "arguments": {...}}
+            # or {"type": "function", "name": "tool", "parameters": {...}}
             name = d.get("name") or d.get("tool_name")
             if not name or not isinstance(name, str):
                 return None
-            # Debe tener un campo de argumentos explícito para distinguir de JSON normal
+            # Must have an explicit arguments field to distinguish from normal JSON
             if not any(k in d for k in ("arguments", "parameters", "args")):
                 return None
             raw_args = d.get("arguments") or d.get("parameters") or d.get("args") or {}
@@ -625,18 +625,18 @@ class LLMAdapter:
         content: str | None,
         tool_calls_raw: dict[int, dict[str, Any]],
     ) -> dict[str, Any]:
-        """Estima usage cuando el provider no lo devuelve en streaming.
+        """Estimate usage when the provider does not return it in streaming.
 
-        Usa litellm.token_counter para contar tokens de los mensajes de input
-        y estima output tokens a partir del contenido generado (~4 chars/token).
+        Uses litellm.token_counter to count input message tokens
+        and estimates output tokens from the generated content (~4 chars/token).
 
         Args:
-            messages: Mensajes enviados al LLM (input)
-            content: Contenido de texto generado (output)
-            tool_calls_raw: Tool calls acumulados en streaming
+            messages: Messages sent to the LLM (input)
+            content: Generated text content (output)
+            tool_calls_raw: Tool calls accumulated in streaming
 
         Returns:
-            Dict con estimaciones de prompt_tokens y completion_tokens
+            Dict with estimates for prompt_tokens and completion_tokens
         """
         try:
             prompt_tokens = litellm.token_counter(
@@ -644,13 +644,13 @@ class LLMAdapter:
                 messages=messages,
             )
         except Exception:
-            # Fallback: estimar ~4 chars/token
+            # Fallback: estimate ~4 chars/token
             total_chars = sum(
                 len(str(m.get("content", ""))) for m in messages
             )
             prompt_tokens = total_chars // 4
 
-        # Estimar output tokens
+        # Estimate output tokens
         output_text = content or ""
         for tc_dict in tool_calls_raw.values():
             output_text += tc_dict.get("function", {}).get("name", "")
@@ -671,15 +671,15 @@ class LLMAdapter:
         }
 
     def _parse_arguments(self, arguments: Any) -> dict[str, Any]:
-        """Parsea los argumentos de un tool call.
+        """Parse the arguments of a tool call.
 
-        LiteLLM puede retornar arguments como string JSON o dict.
+        LiteLLM can return arguments as a JSON string or dict.
 
         Args:
-            arguments: Arguments en formato string o dict
+            arguments: Arguments in string or dict format.
 
         Returns:
-            Dict con argumentos parseados
+            Dict with parsed arguments.
         """
         if isinstance(arguments, dict):
             return arguments

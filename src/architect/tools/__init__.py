@@ -1,7 +1,7 @@
 """
-Módulo de tools - Herramientas disponibles para los agentes.
+Tools module - Tools available to the agents.
 
-Exporta todas las tools, el registry y los componentes base.
+Exports all tools, the registry, and base components.
 """
 
 from .base import BaseTool, ToolResult

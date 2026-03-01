@@ -1,13 +1,13 @@
 """
-Ralph Loop Nativo — Iteración automática hasta que todos los checks pasen.
+Native Ralph Loop — Automatic iteration until all checks pass.
 
-v4-C1: Killer feature. Cada iteración ejecuta un agente con contexto LIMPIO.
-Solo se pasa al agente: spec original, diff acumulado, errores de la última
-iteración, y un progress.md auto-generado.
+v4-C1: Killer feature. Each iteration runs an agent with CLEAN context.
+Only the following is passed to the agent: original spec, accumulated diff,
+errors from the last iteration, and an auto-generated progress.md.
 
-Principio fundamental: el agente NO recibe el historial de conversación de
-iteraciones anteriores. Esto evita contaminación de contexto y permite que
-cada iteración aborde el problema con perspectiva fresca.
+Fundamental principle: the agent does NOT receive the conversation history
+from previous iterations. This prevents context contamination and allows
+each iteration to approach the problem with a fresh perspective.
 """
 
 import logging
@@ -37,7 +37,7 @@ WORKTREE_BRANCH = "architect/ralph-loop"
 
 @dataclass
 class RalphConfig:
-    """Configuración de una ejecución del Ralph Loop."""
+    """Configuration for a Ralph Loop execution."""
 
     task: str
     checks: list[str]
@@ -53,7 +53,7 @@ class RalphConfig:
 
 @dataclass
 class LoopIteration:
-    """Resultado de una iteración del Ralph Loop."""
+    """Result of a single Ralph Loop iteration."""
 
     iteration: int
     steps_taken: int
@@ -67,7 +67,7 @@ class LoopIteration:
 
 @dataclass
 class RalphLoopResult:
-    """Resultado completo del Ralph Loop."""
+    """Complete result of the Ralph Loop."""
 
     iterations: list[LoopIteration] = field(default_factory=list)
     total_cost: float = 0.0
@@ -78,7 +78,7 @@ class RalphLoopResult:
 
     @property
     def total_iterations(self) -> int:
-        """Número total de iteraciones completadas."""
+        """Total number of completed iterations."""
         return len(self.iterations)
 
 
@@ -89,14 +89,14 @@ AgentFactory = Callable[..., Any]
 
 
 class RalphLoop:
-    """Implementación nativa del Ralph Wiggum Loop.
+    """Native implementation of the Ralph Wiggum Loop.
 
-    Cada iteración ejecuta el agente con contexto LIMPIO.
-    Solo se pasa al agente:
-    - La spec/task original
-    - El diff acumulado de iteraciones anteriores
-    - Los errores de la última iteración
-    - Un progress.md auto-generado
+    Each iteration runs the agent with CLEAN context.
+    Only the following is passed to the agent:
+    - The original spec/task
+    - The accumulated diff from previous iterations
+    - The errors from the last iteration
+    - An auto-generated progress.md
     """
 
     def __init__(
@@ -105,13 +105,13 @@ class RalphLoop:
         agent_factory: AgentFactory,
         workspace_root: str | None = None,
     ):
-        """Inicializa el Ralph Loop.
+        """Initialize the Ralph Loop.
 
         Args:
-            config: Configuración del loop.
-            agent_factory: Callable que crea un AgentLoop fresco.
-                Recibe kwargs: agent, model. Retorna objeto con .run(prompt) -> AgentState.
-            workspace_root: Directorio raíz del workspace. None = cwd.
+            config: Loop configuration.
+            agent_factory: Callable that creates a fresh AgentLoop.
+                Receives kwargs: agent, model. Returns an object with .run(prompt) -> AgentState.
+            workspace_root: Root directory of the workspace. None = cwd.
         """
         self.config = config
         self.agent_factory = agent_factory
@@ -121,20 +121,20 @@ class RalphLoop:
         self.log = logger.bind(component="ralph_loop")
 
     def run(self) -> RalphLoopResult:
-        """Ejecuta el loop completo.
+        """Run the complete loop.
 
-        Si use_worktree está habilitado, crea un git worktree aislado
-        y ejecuta todas las iteraciones ahí. El worktree NO se limpia
-        automáticamente — el usuario debe inspeccionarlo y mergear.
+        If use_worktree is enabled, creates an isolated git worktree
+        and runs all iterations there. The worktree is NOT cleaned up
+        automatically — the user must inspect it and merge.
 
         Returns:
-            RalphLoopResult con todas las iteraciones y métricas.
+            RalphLoopResult with all iterations and metrics.
         """
         start_time = time.time()
         total_cost = 0.0
         result = RalphLoopResult()
 
-        # Worktree: crear entorno aislado si se solicita
+        # Worktree: create isolated environment if requested
         original_workspace = self.workspace_root
         if self.config.use_worktree:
             worktree_path = self._create_worktree()
@@ -146,7 +146,7 @@ class RalphLoop:
             else:
                 self.log.warning("ralph.worktree_failed_fallback")
 
-        # Capturar git state inicial
+        # Capture initial git state
         initial_ref = self._get_current_ref()
 
         for i in range(1, self.config.max_iterations + 1):
@@ -162,7 +162,7 @@ class RalphLoop:
                 "check_cmd": self.config.checks[0] if self.config.checks else "",
             })
 
-            # Verificar límites globales
+            # Check global limits
             if self.config.max_cost and total_cost >= self.config.max_cost:
                 self.log.info("ralph.budget_exhausted", cost=total_cost)
                 result.stop_reason = "budget_exhausted"
@@ -174,10 +174,10 @@ class RalphLoop:
                 result.stop_reason = "timeout"
                 break
 
-            # Construir prompt para esta iteración
+            # Build prompt for this iteration
             prompt = self._build_iteration_prompt(i, initial_ref)
 
-            # Ejecutar agente con contexto LIMPIO
+            # Run agent with CLEAN context
             iter_start = time.time()
             iteration = self._run_single_iteration(i, prompt)
             iteration.duration = time.time() - iter_start
@@ -186,10 +186,10 @@ class RalphLoop:
             result.iterations.append(iteration)
             total_cost += iteration.cost
 
-            # Actualizar progress
+            # Update progress
             self._update_progress(iteration)
 
-            # Log resultado
+            # Log result
             self._log_iteration_result(iteration)
             passed_count = sum(1 for c in iteration.check_results if c["passed"])
             total_count = len(iteration.check_results)
@@ -209,7 +209,7 @@ class RalphLoop:
                 "duration": iteration.duration,
             })
 
-            # Terminamos si checks pasan Y tag encontrado
+            # Finish if checks pass AND tag found
             if iteration.all_checks_passed and iteration.completion_tag_found:
                 self.log.info(
                     "ralph.complete",
@@ -226,7 +226,7 @@ class RalphLoop:
                     iteration=i,
                 )
         else:
-            # Se agotaron las iteraciones
+            # Iterations exhausted
             result.stop_reason = "max_iterations"
 
         result.total_cost = total_cost
@@ -240,14 +240,14 @@ class RalphLoop:
         return result
 
     def _run_single_iteration(self, iteration: int, prompt: str) -> LoopIteration:
-        """Ejecuta una sola iteración del loop.
+        """Run a single iteration of the loop.
 
         Args:
-            iteration: Número de iteración (1-based).
-            prompt: Prompt construido para esta iteración.
+            iteration: Iteration number (1-based).
+            prompt: Prompt built for this iteration.
 
         Returns:
-            LoopIteration con los resultados.
+            LoopIteration with the results.
         """
         try:
             agent = self.agent_factory(
@@ -263,18 +263,18 @@ class RalphLoop:
                 cost = agent_result.cost_tracker.total_cost_usd
             final_response = getattr(agent_result, "final_output", "") or ""
 
-            # Ejecutar checks externos
+            # Run external checks
             check_results = self._run_checks()
             all_passed = all(c["passed"] for c in check_results) if check_results else False
 
-            # Buscar completion tag
+            # Search for completion tag
             tag_found = self.config.completion_tag in final_response
 
             return LoopIteration(
                 iteration=iteration,
                 steps_taken=steps,
                 cost=cost,
-                duration=0.0,  # Se sobreescribe en run()
+                duration=0.0,  # Overwritten in run()
                 check_results=check_results,
                 all_checks_passed=all_passed,
                 completion_tag_found=tag_found,
@@ -294,58 +294,55 @@ class RalphLoop:
             )
 
     def _build_iteration_prompt(self, iteration: int, initial_ref: str) -> str:
-        """Construye el prompt para una iteración específica.
+        """Build the prompt for a specific iteration.
 
         Args:
-            iteration: Número de iteración (1-based).
-            initial_ref: Referencia git del estado inicial.
+            iteration: Iteration number (1-based).
+            initial_ref: Git reference of the initial state.
 
         Returns:
-            Prompt completo para el agente.
+            Complete prompt for the agent.
         """
+        from architect.i18n import t
+
         parts: list[str] = []
 
-        # 1. Task/spec original
+        # 1. Original task/spec
         if self.config.spec_file:
             spec_path = Path(self.config.spec_file)
             if spec_path.exists():
                 spec = spec_path.read_text(encoding="utf-8")
-                parts.append(f"## Especificación de la Tarea\n\n{spec}")
+                parts.append(t("ralph.spec_header", spec=spec))
             else:
-                parts.append(f"## Tarea\n\n{self.config.task}")
+                parts.append(t("ralph.task_header", task=self.config.task))
         else:
-            parts.append(f"## Tarea\n\n{self.config.task}")
+            parts.append(t("ralph.task_header", task=self.config.task))
 
-        # 2. Instrucciones del Ralph Loop
+        # 2. Ralph Loop instructions
         checks_list = "\n".join(f"- `{check}`" for check in self.config.checks)
-        parts.append(
-            f"## Instrucciones de Iteración\n\n"
-            f"Esta es la **iteración {iteration}/{self.config.max_iterations}** "
-            f"de un loop de corrección automática.\n\n"
-            f"Cuando hayas completado TODA la tarea y estés seguro de que "
-            f"todo funciona correctamente, incluye la palabra "
-            f"`{self.config.completion_tag}` en tu respuesta final.\n\n"
-            f"**Verificaciones que debe pasar tu código:**\n{checks_list}"
-        )
+        parts.append(t(
+            "ralph.iteration_instructions",
+            iteration=iteration,
+            max_iterations=self.config.max_iterations,
+            completion_tag=self.config.completion_tag,
+            checks_list=checks_list,
+        ))
 
-        # 3. Diff acumulado (qué cambió en iteraciones anteriores)
+        # 3. Accumulated diff
         if iteration > 1:
             diff = self._get_accumulated_diff(initial_ref)
             if diff:
                 truncated = diff[:5000]
                 if len(diff) > 5000:
-                    truncated += "\n... (diff truncado)"
-                parts.append(
-                    f"\n## Cambios de Iteraciones Anteriores\n\n"
-                    f"```diff\n{truncated}\n```"
-                )
+                    truncated += t("ralph.diff_truncated")
+                parts.append(t("ralph.previous_diff", diff=truncated))
 
-        # 4. Errores de la última iteración
+        # 4. Errors from the previous iteration
         if self.iterations:
             last = self.iterations[-1]
             failed_checks = [c for c in last.check_results if not c["passed"]]
             if failed_checks:
-                parts.append("\n## Errores de la Iteración Anterior\n")
+                parts.append(t("ralph.previous_errors_header"))
                 for check in failed_checks:
                     output = check.get("output", "")[:2000]
                     parts.append(
@@ -353,25 +350,21 @@ class RalphLoop:
                         f"```\n{output}\n```"
                     )
             if last.error:
-                parts.append(
-                    f"\n## Error de Ejecución\n\n```\n{last.error[:1000]}\n```"
-                )
+                parts.append(t("ralph.execution_error_header", error=last.error[:1000]))
 
         # 5. Progress file
         if self.progress_file.exists():
             progress_content = self.progress_file.read_text(encoding="utf-8")
             if progress_content.strip():
-                parts.append(
-                    f"\n## Progreso Acumulado\n\n{progress_content}"
-                )
+                parts.append(t("ralph.accumulated_progress", content=progress_content))
 
         return "\n\n".join(parts)
 
     def _run_checks(self) -> list[dict[str, Any]]:
-        """Ejecuta los comandos de verificación.
+        """Run the verification commands.
 
         Returns:
-            Lista de resultados: {name, passed, output}.
+            List of results: {name, passed, output}.
         """
         results: list[dict[str, Any]] = []
         for check_cmd in self.config.checks:
@@ -404,13 +397,13 @@ class RalphLoop:
         return results
 
     def _get_accumulated_diff(self, initial_ref: str) -> str:
-        """Obtiene el diff acumulado desde el estado inicial.
+        """Get the accumulated diff since the initial state.
 
         Args:
-            initial_ref: Referencia git del estado inicial.
+            initial_ref: Git reference of the initial state.
 
         Returns:
-            Diff como string, o cadena vacía si falla.
+            Diff as a string, or empty string on failure.
         """
         try:
             result = subprocess.run(
@@ -425,10 +418,10 @@ class RalphLoop:
             return ""
 
     def _get_current_ref(self) -> str:
-        """Captura el ref de git actual.
+        """Capture the current git ref.
 
         Returns:
-            Hash del commit HEAD actual, o 'HEAD' si falla.
+            Hash of the current HEAD commit, or 'HEAD' on failure.
         """
         try:
             result = subprocess.run(
@@ -443,30 +436,31 @@ class RalphLoop:
             return "HEAD"
 
     def _update_progress(self, iteration: LoopIteration) -> None:
-        """Actualiza el archivo de progreso.
+        """Update the progress file.
 
         Args:
-            iteration: Resultado de la iteración a registrar.
+            iteration: Iteration result to record.
         """
+        from architect.i18n import t
+
         try:
             self.progress_file.parent.mkdir(parents=True, exist_ok=True)
             if not self.progress_file.exists():
                 self.progress_file.write_text(
-                    "# Ralph Loop — Progreso\n\n"
-                    "> Auto-generado. No editar manualmente.\n\n",
+                    t("ralph.progress_title") + t("ralph.progress_auto"),
                     encoding="utf-8",
                 )
 
             status = "Passed" if iteration.all_checks_passed else "Failed"
             lines = [
-                f"### Iteración {iteration.iteration}\n",
-                f"- Estado: {status}\n",
-                f"- Pasos: {iteration.steps_taken}\n",
-                f"- Coste: ${iteration.cost:.4f}\n",
-                f"- Duración: {iteration.duration:.1f}s\n",
+                t("ralph.progress_iteration", iteration=iteration.iteration),
+                t("ralph.progress_status", status=status),
+                t("ralph.progress_steps", steps=iteration.steps_taken),
+                t("ralph.progress_cost", cost=iteration.cost),
+                t("ralph.progress_duration", duration=iteration.duration),
             ]
             if iteration.error:
-                lines.append(f"- Error: {iteration.error[:200]}\n")
+                lines.append(t("ralph.progress_error", error=iteration.error[:200]))
             for check in iteration.check_results:
                 icon = "PASS" if check["passed"] else "FAIL"
                 lines.append(f"- [{icon}] {check['name']}\n")
@@ -478,10 +472,10 @@ class RalphLoop:
             self.log.warning("ralph.progress_write_error", error=str(e))
 
     def _log_iteration_result(self, iteration: LoopIteration) -> None:
-        """Log legible del resultado de la iteración.
+        """Human-readable log of the iteration result.
 
         Args:
-            iteration: Resultado de la iteración.
+            iteration: Iteration result.
         """
         for check in iteration.check_results:
             self.log.info(
@@ -498,19 +492,19 @@ class RalphLoop:
             )
 
     def _create_worktree(self) -> str | None:
-        """Crea un git worktree aislado para el loop.
+        """Create an isolated git worktree for the loop.
 
-        Crea un worktree en `<workspace>/../.architect-ralph-worktree`
-        basado en HEAD actual.
+        Creates a worktree at `<workspace>/../.architect-ralph-worktree`
+        based on the current HEAD.
 
         Returns:
-            Path absoluto al worktree, o None si falla.
+            Absolute path to the worktree, or None on failure.
         """
         root = Path(self.workspace_root)
         worktree_path = root / WORKTREE_DIR
 
         try:
-            # Limpiar worktree previo si existe
+            # Clean up previous worktree if it exists
             if worktree_path.exists():
                 subprocess.run(
                     ["git", "worktree", "remove", str(worktree_path), "--force"],
@@ -518,14 +512,14 @@ class RalphLoop:
                     cwd=self.workspace_root,
                 )
 
-            # Eliminar branch vieja si existe
+            # Delete old branch if it exists
             subprocess.run(
                 ["git", "branch", "-D", WORKTREE_BRANCH],
                 capture_output=True,
                 cwd=self.workspace_root,
             )
 
-            # Crear worktree con nueva branch desde HEAD
+            # Create worktree with new branch from HEAD
             result = subprocess.run(
                 [
                     "git", "worktree", "add",
@@ -556,19 +550,19 @@ class RalphLoop:
             return None
 
     def cleanup_worktree(self) -> bool:
-        """Limpia el worktree y branch del Ralph Loop.
+        """Clean up the Ralph Loop worktree and branch.
 
         Returns:
-            True si se limpió correctamente.
+            True if cleaned up successfully.
         """
         root = Path(self.workspace_root)
-        # Si estamos dentro del worktree, subir al root original
+        # If we are inside the worktree, go up to the original root
         worktree_path = root / WORKTREE_DIR
         if not worktree_path.exists():
-            # Intentar desde el padre (por si workspace_root ES el worktree)
+            # Try from the parent (in case workspace_root IS the worktree)
             worktree_path = root.parent / WORKTREE_DIR if WORKTREE_DIR in root.name else root / WORKTREE_DIR
 
-        # Buscar el root real del repo (no el worktree)
+        # Find the real repo root (not the worktree)
         repo_root = self.workspace_root
         try:
             result = subprocess.run(
@@ -596,14 +590,14 @@ class RalphLoop:
             )
             removed = result.returncode == 0
 
-        # Eliminar branch
+        # Delete branch
         subprocess.run(
             ["git", "branch", "-D", WORKTREE_BRANCH],
             capture_output=True,
             cwd=repo_root,
         )
 
-        # Prune worktrees huérfanos
+        # Prune orphan worktrees
         subprocess.run(
             ["git", "worktree", "prune"],
             capture_output=True,
@@ -615,6 +609,6 @@ class RalphLoop:
         return removed
 
     def cleanup_progress(self) -> None:
-        """Elimina el archivo de progreso."""
+        """Delete the progress file."""
         if self.progress_file.exists():
             self.progress_file.unlink()

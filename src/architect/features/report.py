@@ -1,8 +1,8 @@
 """
-Execution Report — Genera reportes de ejecución en múltiples formatos.
+Execution Report — Generates execution reports in multiple formats.
 
-Soporta JSON (para CI/CD parsing), Markdown (legible), y formato
-optimizado para PR comments de GitHub.
+Supports JSON (for CI/CD parsing), Markdown (human-readable), and a format
+optimized for GitHub PR comments.
 """
 
 import json
@@ -17,10 +17,10 @@ logger = structlog.get_logger()
 
 @dataclass
 class ExecutionReport:
-    """Datos completos de un reporte de ejecución.
+    """Complete data of an execution report.
 
-    Recopilados por el AgentLoop durante la ejecución y entregados
-    al ReportGenerator para formatear.
+    Collected by the AgentLoop during execution and passed
+    to the ReportGenerator for formatting.
     """
 
     task: str
@@ -39,29 +39,29 @@ class ExecutionReport:
 
 
 class ReportGenerator:
-    """Genera reportes en múltiples formatos a partir de ExecutionReport."""
+    """Generates reports in multiple formats from an ExecutionReport."""
 
     def __init__(self, report: ExecutionReport):
-        """Inicializa el generador.
+        """Initialize the generator.
 
         Args:
-            report: ExecutionReport con los datos de la ejecución.
+            report: ExecutionReport with the execution data.
         """
         self.report = report
 
     def to_json(self) -> str:
-        """Reporte en JSON (para CI/CD parsing).
+        """Report in JSON format (for CI/CD parsing).
 
         Returns:
-            String JSON con indentación.
+            Indented JSON string.
         """
         return json.dumps(asdict(self.report), indent=2, default=str, ensure_ascii=False)
 
     def to_markdown(self) -> str:
-        """Reporte en Markdown legible.
+        """Human-readable Markdown report.
 
         Returns:
-            String con el reporte formateado en Markdown.
+            String with the report formatted in Markdown.
         """
         r = self.report
         status_icon = {
@@ -133,10 +133,10 @@ class ReportGenerator:
         return "\n".join(lines)
 
     def to_github_pr_comment(self) -> str:
-        """Formato optimizado para PR comment en GitHub.
+        """Format optimized for GitHub PR comments.
 
         Returns:
-            String con el comentario formateado para GitHub.
+            String with the comment formatted for GitHub.
         """
         r = self.report
         status = "OK" if r.status == "success" else "WARN"
@@ -170,13 +170,13 @@ class ReportGenerator:
 
 
 def collect_git_diff(workspace_root: str | None = None) -> str | None:
-    """Recopila el git diff del workspace actual.
+    """Collect the git diff from the current workspace.
 
     Args:
-        workspace_root: Directorio del workspace. None = cwd.
+        workspace_root: Workspace directory. None = cwd.
 
     Returns:
-        String con el diff, o None si no hay cambios o no es un repo git.
+        String with the diff, or None if there are no changes or not a git repo.
     """
     try:
         result = subprocess.run(

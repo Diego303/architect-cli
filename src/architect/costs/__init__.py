@@ -1,8 +1,7 @@
 """
-Módulo de cost tracking — seguimiento de costes de llamadas al LLM (F14).
+Cost tracking module -- tracks LLM call costs (F14).
 
-Exporta los componentes principales para tracking de costes
-y presupuesto.
+Exports the main components for cost tracking and budgeting.
 """
 
 from .prices import ModelPricing, PriceLoader

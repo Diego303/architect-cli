@@ -1,10 +1,10 @@
 """
-Mixed Mode Runner - Ejecuta plan → build automáticamente.
+Mixed Mode Runner - Executes plan -> build automatically.
 
-El modo mixto se activa con ``architect run --mode mixed "prompt"``
-o como alias ``architect plan-build "prompt"``.
-Ejecuta primero el agente 'plan' para analizar la tarea,
-y luego el agente 'build' con el plan como contexto.
+Mixed mode is activated with ``architect run --mode mixed "prompt"``
+or as an alias ``architect plan-build "prompt"``.
+First runs the 'plan' agent to analyze the task,
+then runs the 'build' agent with the plan as context.
 """
 
 from typing import TYPE_CHECKING, Callable
@@ -26,15 +26,15 @@ logger = structlog.get_logger()
 
 
 class MixedModeRunner:
-    """Ejecuta plan primero, luego build con el plan como contexto.
+    """Executes plan first, then build with the plan as context.
 
-    Flujo:
-    1. Ejecutar agente 'plan' con el prompt del usuario
-    2. Si plan falla o se recibe shutdown, retornar el estado
-    3. Si plan tiene éxito, ejecutar agente 'build' con:
-       - Prompt original del usuario
-       - Plan generado como contexto adicional
-    4. Retornar el estado de build
+    Flow:
+    1. Run 'plan' agent with the user's prompt
+    2. If plan fails or shutdown is received, return the state
+    3. If plan succeeds, run 'build' agent with:
+       - Original user prompt
+       - Generated plan as additional context
+    4. Return the build state
     """
 
     def __init__(
@@ -49,18 +49,18 @@ class MixedModeRunner:
         context_manager: ContextManager | None = None,
         cost_tracker: "CostTracker | None" = None,
     ):
-        """Inicializa el mixed mode runner.
+        """Initialize the mixed mode runner.
 
         Args:
-            llm: LLMAdapter configurado
-            engine: ExecutionEngine configurado
-            plan_config: Configuración del agente plan
-            build_config: Configuración del agente build
-            context_builder: ContextBuilder para mensajes
-            shutdown: GracefulShutdown para detectar interrupciones (opcional)
-            step_timeout: Segundos máximos por step. 0 = sin timeout.
-            context_manager: ContextManager para pruning del contexto (F11).
-            cost_tracker: CostTracker para registrar costes (F14, opcional).
+            llm: Configured LLMAdapter
+            engine: Configured ExecutionEngine
+            plan_config: Plan agent configuration
+            build_config: Build agent configuration
+            context_builder: ContextBuilder for messages
+            shutdown: GracefulShutdown to detect interruptions (optional)
+            step_timeout: Maximum seconds per step. 0 = no timeout.
+            context_manager: ContextManager for context pruning (F11).
+            cost_tracker: CostTracker to record costs (F14, optional).
         """
         self.llm = llm
         self.engine = engine
@@ -79,22 +79,22 @@ class MixedModeRunner:
         stream: bool = False,
         on_stream_chunk: Callable[[str], None] | None = None,
     ) -> AgentState:
-        """Ejecuta el flujo plan → build.
+        """Execute the plan -> build flow.
 
         Args:
-            prompt: Prompt original del usuario
-            stream: Si True, usa streaming del LLM en la fase build
-            on_stream_chunk: Callback opcional para chunks de streaming
+            prompt: Original user prompt
+            stream: If True, use LLM streaming in the build phase
+            on_stream_chunk: Optional callback for streaming chunks
 
         Returns:
-            AgentState final (del agente build, o plan si plan falló)
+            Final AgentState (from the build agent, or plan if plan failed)
         """
         self.log.info(
             "mixed_mode.start",
             prompt=prompt[:100] + "..." if len(prompt) > 100 else prompt,
         )
 
-        # Fase 1: Ejecutar plan (sin streaming — plan es rápido y silencioso)
+        # Phase 1: Run plan (without streaming -- plan is fast and silent)
         self.log.info("mixed_mode.phase.plan")
         plan_loop = AgentLoop(
             self.llm,
@@ -109,12 +109,12 @@ class MixedModeRunner:
 
         plan_state = plan_loop.run(prompt, stream=False)
 
-        # Si se recibió shutdown durante la fase plan, retornar inmediatamente
+        # If shutdown was received during the plan phase, return immediately
         if self.shutdown and self.shutdown.should_stop:
             self.log.warning("mixed_mode.shutdown_after_plan")
             return plan_state
 
-        # Verificar resultado del plan
+        # Check plan result
         if plan_state.status == "failed":
             self.log.error(
                 "mixed_mode.plan_failed",
@@ -124,8 +124,8 @@ class MixedModeRunner:
 
         if not plan_state.final_output:
             self.log.warning("mixed_mode.plan_no_output")
-            # Continuar de todos modos con plan vacío
-            plan_output = "(El agente de planificación no produjo output)"
+            # Continue anyway with empty plan
+            plan_output = "(The planning agent produced no output)"
         else:
             plan_output = plan_state.final_output
 
@@ -137,10 +137,10 @@ class MixedModeRunner:
             else plan_output,
         )
 
-        # Fase 2: Ejecutar build con el plan como contexto
+        # Phase 2: Run build with the plan as context
         self.log.info("mixed_mode.phase.build")
 
-        # Construir prompt enriquecido con el plan
+        # Build enriched prompt with the plan
         enriched_prompt = self._build_enriched_prompt(prompt, plan_output)
 
         build_loop = AgentLoop(
@@ -154,7 +154,7 @@ class MixedModeRunner:
             cost_tracker=self.cost_tracker,
         )
 
-        # Ejecutar build (con streaming si está habilitado)
+        # Run build (with streaming if enabled)
         build_state = build_loop.run(enriched_prompt, stream=stream, on_stream_chunk=on_stream_chunk)
 
         self.log.info(
@@ -164,29 +164,29 @@ class MixedModeRunner:
             total_tool_calls=plan_state.total_tool_calls + build_state.total_tool_calls,
         )
 
-        # Retornar el estado de build
-        # TODO: En el futuro, podríamos combinar ambos estados
+        # Return the build state
+        # TODO: In the future, we could combine both states
         return build_state
 
     def _build_enriched_prompt(self, original_prompt: str, plan: str) -> str:
-        """Construye un prompt enriquecido con el plan.
+        """Build an enriched prompt with the plan.
 
         Args:
-            original_prompt: Prompt original del usuario
-            plan: Plan generado por el agente plan
+            original_prompt: Original user prompt
+            plan: Plan generated by the plan agent
 
         Returns:
-            Prompt enriquecido para el agente build
+            Enriched prompt for the build agent
         """
-        return f"""El usuario pidió:
+        return f"""The user requested:
 {original_prompt}
 
-Un agente de planificación analizó la tarea y generó este plan:
+A planning agent analyzed the task and generated this plan:
 
 ---
 {plan}
 ---
 
-Tu trabajo es ejecutar este plan paso a paso. Usa las herramientas disponibles
-para completar la tarea según lo planificado. Si algo del plan no es claro o
-necesita ajustes, usa tu criterio para adaptarlo."""
+Your job is to execute this plan step by step. Use the available tools
+to complete the task as planned. If something in the plan is unclear or
+needs adjustments, use your judgment to adapt it."""

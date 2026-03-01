@@ -421,6 +421,9 @@ Config:
   --log-level LEVEL         debug | info | human | warn | error
   --log-file PATH           Archivo de logs JSON
 
+Env vars notables:
+  ARCHITECT_LANGUAGE         Idioma: en (default) | es
+
 Comandos adicionales (v1.0.0):
   architect eval PROMPT     Evaluación competitiva multi-modelo
   architect init            Inicializar proyecto con presets
@@ -431,9 +434,29 @@ Comandos adicionales (v1.0.0):
 
 ---
 
+## Idioma (v1.1.0)
+
+Por defecto, todos los mensajes del sistema (logs, prompts, reportes) están en **inglés**. Para cambiar a español:
+
+```yaml
+# En config.yaml
+language: es
+```
+
+```bash
+# O via env var
+export ARCHITECT_LANGUAGE=es
+```
+
+Ver [`i18n.md`](i18n.md) para detalles completos sobre qué cambia y qué no.
+
+---
+
 ## Ejemplo de config.yaml completa para desarrollo
 
 ```yaml
+language: en               # "en" (default) | "es" — idioma de mensajes del sistema
+
 llm:
   model: gpt-4o
   stream: true

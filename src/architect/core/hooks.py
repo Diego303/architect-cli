@@ -1,23 +1,23 @@
 """
-Hook System — Sistema completo de hooks para el lifecycle del agente.
+Hook System — Complete hook system for the agent lifecycle.
 
-v4-A1: Reemplaza el sistema PostEditHooks de v3-M4 con un sistema general
-de hooks que cubre todo el lifecycle: pre/post tool, pre/post LLM, session,
+v4-A1: Replaces the PostEditHooks system from v3-M4 with a general
+hook system covering the entire lifecycle: pre/post tool, pre/post LLM, session,
 agent_complete, budget_warning, context_compress, on_error.
 
-Los hooks se ejecutan como subprocesses (shell=True) y reciben contexto
-vía env vars (ARCHITECT_EVENT, ARCHITECT_TOOL_NAME, etc.) y stdin JSON.
+Hooks are executed as subprocesses (shell=True) and receive context
+via env vars (ARCHITECT_EVENT, ARCHITECT_TOOL_NAME, etc.) and stdin JSON.
 
-Protocolo de exit codes:
-- Exit 0  = ALLOW  (permitir la acción, opcionalmente con contexto adicional)
-- Exit 2  = BLOCK  (bloquear la acción, stderr = razón)
-- Otro    = Error del hook (se logea WARNING, no bloquea)
+Exit code protocol:
+- Exit 0  = ALLOW  (allow the action, optionally with additional context)
+- Exit 2  = BLOCK  (block the action, stderr = reason)
+- Other   = Hook error (logged as WARNING, does not block)
 
-Invariantes:
-- Los hooks NUNCA rompen el loop (errores → log + retorno ALLOW)
-- El timeout de cada hook es configurable (default 10s)
-- Los hooks async se ejecutan en background sin esperar resultado
-- Si un pre-hook bloquea, no se ejecutan los hooks siguientes del mismo evento
+Invariants:
+- Hooks NEVER break the loop (errors -> log + return ALLOW)
+- Each hook's timeout is configurable (default 10s)
+- Async hooks run in background without waiting for result
+- If a pre-hook blocks, subsequent hooks for the same event are not executed
 """
 
 import fnmatch
@@ -46,7 +46,7 @@ __all__ = [
 
 
 class HookEvent(Enum):
-    """Eventos del lifecycle donde se pueden inyectar hooks."""
+    """Lifecycle events where hooks can be injected."""
 
     PRE_TOOL_USE = "pre_tool_use"
     POST_TOOL_USE = "post_tool_use"
@@ -61,7 +61,7 @@ class HookEvent(Enum):
 
 
 class HookDecision(Enum):
-    """Decisión de un pre-hook."""
+    """Decision from a pre-hook."""
 
     ALLOW = "allow"
     BLOCK = "block"
@@ -70,7 +70,7 @@ class HookDecision(Enum):
 
 @dataclass
 class HookResult:
-    """Resultado de ejecutar un hook."""
+    """Result of executing a hook."""
 
     decision: HookDecision = HookDecision.ALLOW
     reason: str | None = None
@@ -81,16 +81,16 @@ class HookResult:
 
 @dataclass
 class HookConfig:
-    """Configuración de un hook individual.
+    """Configuration for an individual hook.
 
     Attributes:
-        command: Comando shell a ejecutar.
-        matcher: Regex/glob del tool name (para tool hooks). '*' matchea todo.
-        file_patterns: Filtro por extensión de archivo.
-        timeout: Segundos máx de ejecución.
-        is_async: Si True, el hook se ejecuta en background sin bloquear.
-        enabled: Si False, el hook se ignora.
-        name: Nombre descriptivo del hook.
+        command: Shell command to execute.
+        matcher: Regex/glob of the tool name (for tool hooks). '*' matches all.
+        file_patterns: Filter by file extension.
+        timeout: Maximum execution seconds.
+        is_async: If True, the hook runs in background without blocking.
+        enabled: If False, the hook is ignored.
+        name: Descriptive hook name.
     """
 
     command: str
@@ -104,60 +104,60 @@ class HookConfig:
 
 @dataclass
 class HooksRegistry:
-    """Registro completo de hooks por evento."""
+    """Complete registry of hooks by event."""
 
     hooks: dict[HookEvent, list[HookConfig]] = field(default_factory=dict)
 
     def get_hooks(self, event: HookEvent) -> list[HookConfig]:
-        """Retorna los hooks activos para un evento.
+        """Return active hooks for an event.
 
         Args:
-            event: Evento del lifecycle.
+            event: Lifecycle event.
 
         Returns:
-            Lista de HookConfig habilitados para ese evento.
+            List of enabled HookConfig for that event.
         """
         return [h for h in self.hooks.get(event, []) if h.enabled]
 
     def has_hooks(self) -> bool:
-        """Retorna True si hay al menos un hook registrado."""
+        """Return True if at least one hook is registered."""
         return any(hooks for hooks in self.hooks.values())
 
 
 class HookExecutor:
-    """Ejecuta hooks inyectando contexto vía env vars y stdin.
+    """Executes hooks injecting context via env vars and stdin.
 
-    El executor es el punto central de ejecución de hooks. Se encarga de:
-    - Construir el environment con ARCHITECT_* variables
-    - Ejecutar el subprocess con timeout
-    - Interpretar el exit code y stdout/stderr
-    - Filtrar hooks por matcher y file_patterns
-    - Manejar hooks async (background)
+    The executor is the central point for hook execution. It handles:
+    - Building the environment with ARCHITECT_* variables
+    - Running the subprocess with timeout
+    - Interpreting the exit code and stdout/stderr
+    - Filtering hooks by matcher and file_patterns
+    - Handling async hooks (background)
     """
 
     def __init__(self, registry: HooksRegistry, workspace_root: str) -> None:
-        """Inicializa el executor.
+        """Initialize the executor.
 
         Args:
-            registry: Registro de hooks por evento.
-            workspace_root: Directorio raíz del workspace para CWD.
+            registry: Hook registry by event.
+            workspace_root: Workspace root directory for CWD.
         """
         self.registry = registry
         self.workspace_root = workspace_root
         self.log = logger.bind(component="hooks")
 
     def _build_env(self, event: HookEvent, context: dict[str, Any]) -> dict[str, str]:
-        """Construye variables de entorno para el hook.
+        """Build environment variables for the hook.
 
-        Inyecta ARCHITECT_EVENT, ARCHITECT_WORKSPACE y cada clave del
-        contexto como ARCHITECT_{KEY.upper()}.
+        Injects ARCHITECT_EVENT, ARCHITECT_WORKSPACE and each context key
+        as ARCHITECT_{KEY.upper()}.
 
         Args:
-            event: Evento que disparó el hook.
-            context: Diccionario de contexto con datos del evento.
+            event: Event that triggered the hook.
+            context: Context dictionary with event data.
 
         Returns:
-            Dict de env vars para subprocess.
+            Dict of env vars for subprocess.
         """
         env = os.environ.copy()
         env["ARCHITECT_EVENT"] = event.value
@@ -174,16 +174,16 @@ class HookExecutor:
         context: dict[str, Any],
         stdin_data: dict[str, Any] | None = None,
     ) -> HookResult:
-        """Ejecuta un hook individual.
+        """Execute an individual hook.
 
         Args:
-            hook: Configuración del hook a ejecutar.
-            event: Evento que disparó el hook.
-            context: Diccionario de contexto para env vars.
-            stdin_data: Datos JSON opcionales para pasar por stdin.
+            hook: Configuration of the hook to execute.
+            event: Event that triggered the hook.
+            context: Context dictionary for env vars.
+            stdin_data: Optional JSON data to pass via stdin.
 
         Returns:
-            HookResult con la decisión y datos asociados.
+            HookResult with the decision and associated data.
         """
         start = time.monotonic()
         env = self._build_env(event, context)
@@ -207,7 +207,7 @@ class HookExecutor:
                 result.duration_ms = duration
                 return result
             elif proc.returncode == 2:
-                reason = proc.stderr.strip() or f"Hook '{hook.name}' bloqueó la acción"
+                reason = proc.stderr.strip() or f"Hook '{hook.name}' blocked the action"
                 return HookResult(
                     decision=HookDecision.BLOCK,
                     reason=reason,
@@ -230,17 +230,17 @@ class HookExecutor:
             return HookResult()
 
     def _parse_allow_output(self, stdout: str) -> HookResult:
-        """Parsea stdout JSON de un hook que permite la acción.
+        """Parse JSON stdout from a hook that allows the action.
 
-        Si stdout es JSON con 'updatedInput', retorna MODIFY.
-        Si tiene 'additionalContext', lo adjunta.
-        Si no es JSON, lo trata como contexto adicional de texto.
+        If stdout is JSON with 'updatedInput', returns MODIFY.
+        If it has 'additionalContext', attaches it.
+        If not JSON, treats it as additional text context.
 
         Args:
-            stdout: Salida estándar del hook.
+            stdout: Standard output from the hook.
 
         Returns:
-            HookResult con ALLOW o MODIFY.
+            HookResult with ALLOW or MODIFY.
         """
         if not stdout.strip():
             return HookResult(decision=HookDecision.ALLOW)
@@ -268,30 +268,30 @@ class HookExecutor:
         context: dict[str, Any],
         stdin_data: dict[str, Any] | None = None,
     ) -> list[HookResult]:
-        """Ejecuta todos los hooks de un evento.
+        """Execute all hooks for an event.
 
-        Filtra hooks por matcher (para tool hooks) y file_patterns.
-        Si un hook bloquea, no se ejecutan los siguientes.
-        Los hooks async se ejecutan en background.
+        Filters hooks by matcher (for tool hooks) and file_patterns.
+        If a hook blocks, subsequent hooks are not executed.
+        Async hooks run in background.
 
         Args:
-            event: Evento del lifecycle.
-            context: Diccionario de contexto con datos del evento.
-            stdin_data: Datos JSON opcionales para pasar por stdin.
+            event: Lifecycle event.
+            context: Context dictionary with event data.
+            stdin_data: Optional JSON data to pass via stdin.
 
         Returns:
-            Lista de HookResult (uno por hook ejecutado).
+            List of HookResult (one per executed hook).
         """
         hooks = self.registry.get_hooks(event)
         results: list[HookResult] = []
 
         for hook in hooks:
-            # Filtro por matcher (para tool hooks)
+            # Filter by matcher (for tool hooks)
             if hook.matcher != "*" and "tool_name" in context:
                 if not re.match(hook.matcher, context["tool_name"]):
                     continue
 
-            # Filtro por file_patterns
+            # Filter by file_patterns
             if hook.file_patterns and "file_path" in context:
                 file_path = context["file_path"]
                 if not any(fnmatch.fnmatch(file_path, p) for p in hook.file_patterns):
@@ -308,7 +308,7 @@ class HookExecutor:
                 result = self.execute_hook(hook, event, context, stdin_data)
                 results.append(result)
 
-                # Si un pre-hook bloquea, no ejecutar los siguientes
+                # If a pre-hook blocks, do not execute the following ones
                 if result.decision == HookDecision.BLOCK:
                     break
 
@@ -317,17 +317,17 @@ class HookExecutor:
     # ── Backward compatibility with PostEditHooks (v3-M4) ─────────────
 
     def run_post_edit(self, tool_name: str, args: dict[str, Any]) -> str | None:
-        """Ejecuta post-edit hooks para backward compatibility con v3-M4.
+        """Execute post-edit hooks for backward compatibility with v3-M4.
 
-        Esto permite que el código existente que llamaba a
-        PostEditHooks.run_for_tool() siga funcionando con el nuevo sistema.
+        This allows existing code that called
+        PostEditHooks.run_for_tool() to keep working with the new system.
 
         Args:
-            tool_name: Nombre del tool ejecutado.
-            args: Argumentos del tool.
+            tool_name: Name of the executed tool.
+            args: Tool arguments.
 
         Returns:
-            Texto con resultados concatenados, o None si no aplican.
+            Text with concatenated results, or None if not applicable.
         """
         edit_tools = frozenset({"edit_file", "write_file", "apply_patch"})
         if tool_name not in edit_tools:
@@ -343,7 +343,7 @@ class HookExecutor:
         }
         results = self.run_event(HookEvent.POST_TOOL_USE, context)
 
-        # Recolectar contexto adicional de hooks que produjeron output
+        # Collect additional context from hooks that produced output
         outputs: list[str] = []
         for result in results:
             if result.additional_context:

@@ -98,7 +98,7 @@ class TestCheckCommand:
     def test_rm_rf_blocked(self, engine: GuardrailsEngine):
         allowed, reason = engine.check_command("rm -rf /")
         assert not allowed
-        assert "rm" in reason.lower() or "bloqueado" in reason.lower()
+        assert "rm" in reason.lower() or "blocked" in reason.lower()
 
     def test_force_push_main_blocked(self, engine: GuardrailsEngine):
         allowed, reason = engine.check_command("git push --force origin main")
@@ -124,7 +124,7 @@ class TestCheckCommand:
         eng.record_command()
         allowed, reason = eng.check_command("echo ok")
         assert not allowed
-        assert "Límite" in reason
+        assert "limit" in reason.lower()
 
     def test_redirect_to_env_blocked(self, engine: GuardrailsEngine):
         """Redirección shell a .env debe ser bloqueada."""
@@ -214,7 +214,7 @@ class TestCheckEditLimits:
         eng.check_edit_limits("b.py", 1, 0)
         allowed, reason = eng.check_edit_limits("c.py", 1, 0)
         assert not allowed
-        assert "archivos" in reason.lower()
+        assert "file" in reason.lower()
 
     def test_lines_limit_exceeded(self, workspace: Path):
         config = GuardrailsConfig(enabled=True, max_lines_changed=10)
@@ -223,7 +223,7 @@ class TestCheckEditLimits:
         eng.check_edit_limits("a.py", 5, 0)
         allowed, reason = eng.check_edit_limits("a.py", 6, 0)
         assert not allowed
-        assert "líneas" in reason.lower()
+        assert "line" in reason.lower()
 
     def test_same_file_counted_once(self, engine: GuardrailsEngine):
         engine.check_edit_limits("src/main.py", 5, 0)
@@ -484,7 +484,7 @@ class TestSensitiveFiles:
     def test_read_env_blocked(self, sensitive_engine: GuardrailsEngine):
         allowed, reason = sensitive_engine.check_file_access(".env", "read_file")
         assert not allowed
-        assert "sensible" in reason.lower()
+        assert "sensitive" in reason.lower()
 
     def test_read_env_variant_blocked(self, sensitive_engine: GuardrailsEngine):
         allowed, reason = sensitive_engine.check_file_access(".env.production", "read_file")
@@ -512,7 +512,7 @@ class TestSensitiveFiles:
     def test_write_env_blocked(self, sensitive_engine: GuardrailsEngine):
         allowed, reason = sensitive_engine.check_file_access(".env", "write_file")
         assert not allowed
-        assert "sensible" in reason.lower()
+        assert "sensitive" in reason.lower()
 
     def test_edit_pem_blocked(self, sensitive_engine: GuardrailsEngine):
         allowed, reason = sensitive_engine.check_file_access("server.pem", "edit_file")
@@ -544,7 +544,7 @@ class TestSensitiveFiles:
         """protected_files (*.lock) debe seguir bloqueando escritura."""
         allowed, reason = sensitive_engine.check_file_access("package.lock", "write_file")
         assert not allowed
-        assert "protegido" in reason.lower()
+        assert "protected" in reason.lower()
 
     def test_edit_production_yaml_blocked(self, sensitive_engine: GuardrailsEngine):
         """protected_files debe seguir bloqueando edición."""

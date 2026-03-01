@@ -1,7 +1,7 @@
 """
-Módulo de logging - Sistema de logging estructurado.
+Logging module - Structured logging system.
 
-v3-M5: Añadido nivel HUMAN (25), HumanLogHandler, HumanLog helper.
+v3-M5: Added HUMAN level (25), HumanLogHandler, HumanLog helper.
 """
 
 from .human import HumanLog, HumanLogHandler, _summarize_args

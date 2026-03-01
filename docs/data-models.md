@@ -233,6 +233,7 @@ Override desde CLI: `--cache` (enabled=True), `--no-cache` (enabled=False), `--c
 
 ```python
 class AppConfig(BaseModel):
+    language:   Literal["en", "es"] = "en"   # v1.1.0: idioma de mensajes del sistema
     llm:        LLMConfig        = LLMConfig()
     agents:     dict[str, AgentConfig] = {}   # agentes custom del YAML
     logging:    LoggingConfig    = LoggingConfig()

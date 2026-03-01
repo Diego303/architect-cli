@@ -1,9 +1,9 @@
 """
-Skills Loader — Descubre y carga .architect.md y skills del proyecto (v4-A3).
+Skills Loader -- Discovers and loads .architect.md and project skills (v4-A3).
 
-Dos capas complementarias:
-1. .architect.md / AGENTS.md / CLAUDE.md → contexto siempre presente en system prompt
-2. Skills (.architect/skills/, .architect/installed-skills/) → workflows invocables por glob
+Two complementary layers:
+1. .architect.md / AGENTS.md / CLAUDE.md -> context always present in system prompt
+2. Skills (.architect/skills/, .architect/installed-skills/) -> workflows invocable by glob
 """
 
 import fnmatch
@@ -19,7 +19,7 @@ logger = structlog.get_logger()
 
 @dataclass
 class SkillInfo:
-    """Metadata de una skill."""
+    """Metadata for a skill."""
 
     name: str
     description: str = ""
@@ -29,7 +29,7 @@ class SkillInfo:
 
 
 class SkillsLoader:
-    """Descubre y carga .architect.md y skills del proyecto."""
+    """Discovers and loads .architect.md and project skills."""
 
     ARCHITECT_MD_NAMES = [".architect.md", "AGENTS.md", "CLAUDE.md"]
     SKILLS_DIRS = [".architect/skills", ".architect/installed-skills"]
@@ -40,7 +40,7 @@ class SkillsLoader:
         self._skills: list[SkillInfo] = []
 
     def load_project_context(self) -> str | None:
-        """Carga .architect.md (o equivalentes). Siempre se inyecta en system prompt."""
+        """Load .architect.md (or equivalents). Always injected into the system prompt."""
         for name in self.ARCHITECT_MD_NAMES:
             path = self.root / name
             if path.exists():
@@ -51,7 +51,7 @@ class SkillsLoader:
         return None
 
     def discover_skills(self) -> list[SkillInfo]:
-        """Descubre todas las skills disponibles en directorios de skills."""
+        """Discover all available skills in skill directories."""
         skills: list[SkillInfo] = []
         for skills_dir_name in self.SKILLS_DIRS:
             skills_dir = self.root / skills_dir_name
@@ -73,14 +73,14 @@ class SkillsLoader:
         return skills
 
     def _parse_skill(self, path: Path) -> SkillInfo | None:
-        """Parsea un SKILL.md con frontmatter YAML opcional."""
+        """Parse a SKILL.md with optional YAML frontmatter."""
         try:
             content = path.read_text(encoding="utf-8")
         except OSError as e:
             logger.warning("skill_read_error", path=str(path), error=str(e))
             return None
 
-        # Extraer YAML frontmatter
+        # Extract YAML frontmatter
         frontmatter_match = re.match(
             r"^---\s*\n(.*?)\n---\s*\n(.*)$", content, re.DOTALL
         )
@@ -104,7 +104,7 @@ class SkillsLoader:
         )
 
     def get_relevant_skills(self, file_paths: list[str]) -> list[SkillInfo]:
-        """Retorna skills cuyo glob matchea algún archivo en juego."""
+        """Return skills whose glob matches any file in play."""
         relevant: list[SkillInfo] = []
         for skill in self._skills:
             if not skill.globs:
@@ -116,21 +116,21 @@ class SkillsLoader:
         return relevant
 
     def build_system_context(self, active_files: list[str] | None = None) -> str:
-        """Construye el bloque de contexto para inyectar en system prompt.
+        """Build the context block to inject into the system prompt.
 
         Args:
-            active_files: Lista de archivos activos para filtrar skills por glob.
+            active_files: List of active files to filter skills by glob.
 
         Returns:
-            String con el contexto completo para inyectar, o "" si no hay nada.
+            String with the complete context to inject, or "" if there is nothing.
         """
         parts: list[str] = []
 
-        # 1. Contexto del proyecto (.architect.md) — SIEMPRE presente
+        # 1. Project context (.architect.md) -- ALWAYS present
         if self._project_context:
-            parts.append(f"# Instrucciones del Proyecto\n\n{self._project_context}")
+            parts.append(f"# Project Instructions\n\n{self._project_context}")
 
-        # 2. Skills relevantes por glob — solo si hay archivos activos
+        # 2. Relevant skills by glob -- only if there are active files
         if active_files:
             relevant = self.get_relevant_skills(active_files)
             for skill in relevant:

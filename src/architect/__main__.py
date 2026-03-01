@@ -1,5 +1,5 @@
 """
-Entry point para ejecutar architect como módulo: python -m architect
+Entry point to run architect as a module: python -m architect
 """
 
 from .cli import main

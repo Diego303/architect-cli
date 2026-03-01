@@ -1,18 +1,18 @@
 """
-Modelos Pydantic para argumentos de tools.
+Pydantic models for tool arguments.
 
-Cada tool define su schema de argumentos como un modelo Pydantic,
-lo que proporciona validación automática y generación de JSON Schema.
+Each tool defines its argument schema as a Pydantic model,
+which provides automatic validation and JSON Schema generation.
 """
 
 from pydantic import BaseModel, Field, field_validator
 
 
 class ReadFileArgs(BaseModel):
-    """Argumentos para read_file tool."""
+    """Arguments for the read_file tool."""
 
     path: str = Field(
-        description="Path relativo al workspace del archivo a leer",
+        description="Path relative to the workspace of the file to read",
         examples=["README.md", "src/main.py", "config/settings.yaml"],
     )
 
@@ -20,18 +20,18 @@ class ReadFileArgs(BaseModel):
 
 
 class WriteFileArgs(BaseModel):
-    """Argumentos para write_file tool."""
+    """Arguments for the write_file tool."""
 
     path: str = Field(
-        description="Path relativo al workspace del archivo a escribir",
+        description="Path relative to the workspace of the file to write",
         examples=["output.txt", "src/generated.py"],
     )
     content: str = Field(
-        description="Contenido a escribir en el archivo",
+        description="Content to write to the file",
     )
     mode: str = Field(
         default="overwrite",
-        description="Modo de escritura: 'overwrite' (reemplaza) o 'append' (añade al final)",
+        description="Write mode: 'overwrite' (replaces) or 'append' (adds to the end)",
         pattern="^(overwrite|append)$",
     )
 
@@ -39,10 +39,10 @@ class WriteFileArgs(BaseModel):
 
 
 class DeleteFileArgs(BaseModel):
-    """Argumentos para delete_file tool."""
+    """Arguments for the delete_file tool."""
 
     path: str = Field(
-        description="Path relativo al workspace del archivo a eliminar",
+        description="Path relative to the workspace of the file to delete",
         examples=["temp.txt", "old_config.yaml"],
     )
 
@@ -50,22 +50,22 @@ class DeleteFileArgs(BaseModel):
 
 
 class EditFileArgs(BaseModel):
-    """Argumentos para edit_file tool (str_replace)."""
+    """Arguments for the edit_file tool (str_replace)."""
 
     path: str = Field(
-        description="Path relativo al workspace del archivo a editar",
+        description="Path relative to the workspace of the file to edit",
         examples=["src/main.py", "README.md"],
     )
     old_str: str = Field(
         description=(
-            "Texto exacto a reemplazar. Debe aparecer exactamente una vez en el archivo. "
-            "Incluye líneas de contexto vecinas para hacerlo inequívoco si es necesario."
+            "Exact text to replace. Must appear exactly once in the file. "
+            "Include neighboring context lines to make it unambiguous if necessary."
         ),
     )
     new_str: str = Field(
         description=(
-            "Texto de reemplazo. Puede ser cadena vacía para eliminar el bloque. "
-            "Mantén la indentación correcta."
+            "Replacement text. Can be an empty string to delete the block. "
+            "Maintain correct indentation."
         ),
     )
 
@@ -73,17 +73,17 @@ class EditFileArgs(BaseModel):
 
 
 class ApplyPatchArgs(BaseModel):
-    """Argumentos para apply_patch tool (unified diff)."""
+    """Arguments for the apply_patch tool (unified diff)."""
 
     path: str = Field(
-        description="Path relativo al workspace del archivo a parchear",
+        description="Path relative to the workspace of the file to patch",
         examples=["src/main.py", "config.yaml"],
     )
     patch: str = Field(
         description=(
-            "Parche en formato unified diff. Puede incluir una o varias secciones @@ -a,b +c,d @@. "
-            "Las cabeceras --- / +++ son opcionales. "
-            "Ejemplo: '@@ -3,4 +3,5 @@\\n contexto\\n-línea vieja\\n+línea nueva\\n contexto'"
+            "Patch in unified diff format. Can include one or more @@ -a,b +c,d @@ sections. "
+            "The --- / +++ headers are optional. "
+            "Example: '@@ -3,4 +3,5 @@\\n context\\n-old line\\n+new line\\n context'"
         ),
     )
 
@@ -91,127 +91,127 @@ class ApplyPatchArgs(BaseModel):
 
 
 class ListFilesArgs(BaseModel):
-    """Argumentos para list_files tool."""
+    """Arguments for the list_files tool."""
 
     path: str = Field(
         default=".",
-        description="Path relativo al workspace del directorio a listar",
+        description="Path relative to the workspace of the directory to list",
         examples=[".", "src", "tests/fixtures"],
     )
     pattern: str | None = Field(
         default=None,
-        description="Patrón glob opcional para filtrar archivos (ej: '*.py', 'test_*.py')",
+        description="Optional glob pattern to filter files (e.g.: '*.py', 'test_*.py')",
         examples=["*.py", "*.md", "test_*.py"],
     )
     recursive: bool = Field(
         default=False,
-        description="Si True, lista archivos recursivamente en subdirectorios",
+        description="If True, list files recursively in subdirectories",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class SearchCodeArgs(BaseModel):
-    """Argumentos para search_code tool."""
+    """Arguments for the search_code tool."""
 
     pattern: str = Field(
         description=(
-            "Patrón regex a buscar en el código. "
-            "Ejemplos: 'def process_', 'class.*Tool', 'import (os|sys)'"
+            "Regex pattern to search for in code. "
+            "Examples: 'def process_', 'class.*Tool', 'import (os|sys)'"
         ),
     )
     path: str = Field(
         default=".",
-        description="Directorio o archivo donde buscar (relativo al workspace)",
+        description="Directory or file to search in (relative to the workspace)",
     )
     file_pattern: str | None = Field(
         default=None,
-        description="Filtro de archivos por nombre glob (ej: '*.py', '*.ts')",
+        description="File filter by name glob (e.g.: '*.py', '*.ts')",
         examples=["*.py", "*.js", "*.ts", "*.yaml"],
     )
     max_results: int = Field(
         default=20,
-        description="Número máximo de resultados a retornar",
+        description="Maximum number of results to return",
         ge=1,
         le=200,
     )
     context_lines: int = Field(
         default=2,
-        description="Líneas de contexto antes y después de cada coincidencia",
+        description="Context lines before and after each match",
         ge=0,
         le=10,
     )
     case_sensitive: bool = Field(
         default=True,
-        description="Si False, la búsqueda ignora mayúsculas/minúsculas",
+        description="If False, the search ignores case",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class GrepArgs(BaseModel):
-    """Argumentos para grep tool."""
+    """Arguments for the grep tool."""
 
     text: str = Field(
         description=(
-            "Texto literal a buscar (no regex). "
-            "Más rápido que search_code para strings simples."
+            "Literal text to search for (not regex). "
+            "Faster than search_code for simple strings."
         ),
     )
     path: str = Field(
         default=".",
-        description="Directorio o archivo donde buscar (relativo al workspace)",
+        description="Directory or file to search in (relative to the workspace)",
     )
     file_pattern: str | None = Field(
         default=None,
-        description="Filtro de archivos por nombre glob (ej: '*.py')",
+        description="File filter by name glob (e.g.: '*.py')",
         examples=["*.py", "*.js", "*.md"],
     )
     max_results: int = Field(
         default=30,
-        description="Número máximo de resultados a retornar",
+        description="Maximum number of results to return",
         ge=1,
         le=500,
     )
     case_sensitive: bool = Field(
         default=True,
-        description="Si False, la búsqueda ignora mayúsculas/minúsculas",
+        description="If False, the search ignores case",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class FindFilesArgs(BaseModel):
-    """Argumentos para find_files tool."""
+    """Arguments for the find_files tool."""
 
     pattern: str = Field(
         description=(
-            "Patrón glob para nombres de archivo. "
-            "Ejemplos: '*.test.py', 'Dockerfile*', 'config.yaml', '*.env'"
+            "Glob pattern for file names. "
+            "Examples: '*.test.py', 'Dockerfile*', 'config.yaml', '*.env'"
         ),
     )
     path: str = Field(
         default=".",
-        description="Directorio donde buscar (relativo al workspace)",
+        description="Directory to search in (relative to the workspace)",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class RunCommandArgs(BaseModel):
-    """Argumentos para run_command tool (F13)."""
+    """Arguments for the run_command tool (F13)."""
 
     command: str = Field(
         description=(
-            "Comando a ejecutar en el shell. Puede incluir pipes y redirecciones. "
-            "Ejemplos: 'pytest tests/', 'python -m mypy src/', 'git status', 'make build'"
+            "Command to execute in the shell. Can include pipes and redirections. "
+            "Examples: 'pytest tests/', 'python -m mypy src/', 'git status', 'make build'"
         ),
     )
     cwd: str | None = Field(
         default=None,
         description=(
-            "Directorio de trabajo relativo al workspace (opcional). "
-            "Si no se especifica, se usa el workspace root."
+            "Working directory relative to the workspace (optional). "
+            "If not specified, the workspace root is used."
         ),
         examples=["src", "tests", "frontend"],
     )
@@ -219,13 +219,13 @@ class RunCommandArgs(BaseModel):
         default=30,
         ge=1,
         le=600,
-        description="Timeout en segundos para el comando (1-600). Default: 30s.",
+        description="Timeout in seconds for the command (1-600). Default: 30s.",
     )
     env: dict[str, str] | None = Field(
         default=None,
         description=(
-            "Variables de entorno adicionales para el proceso (se fusionan con el entorno actual). "
-            "Ejemplo: {'DEBUG': '1', 'PYTHONPATH': 'src'}"
+            "Additional environment variables for the process (merged with the current environment). "
+            "Example: {'DEBUG': '1', 'PYTHONPATH': 'src'}"
         ),
     )
 

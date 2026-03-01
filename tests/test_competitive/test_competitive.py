@@ -342,7 +342,7 @@ class TestReportGeneration:
         ]
         report = ev.generate_report(results)
 
-        assert "Detalle de Checks" in report
+        assert "Check Details" in report
         assert "FAIL" in report
         assert "3 errors found" in report
 
@@ -578,7 +578,7 @@ class TestHumanFormatterCompetitive:
         fmt = HumanFormatter()
         result = fmt.format_event("competitive.ranking", ranking=[])
         assert result is not None
-        assert "sin resultados" in result
+        assert "no results" in result
 
 
 class TestHumanLogCompetitive:

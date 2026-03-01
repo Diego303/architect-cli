@@ -1,214 +1,240 @@
 # Changelog
 
-Todos los cambios notables en el proyecto architect serán documentados en este archivo.
+All notable changes to the architect project will be documented in this file.
 
-El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
-y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0] - 2026-02-28
+## [1.1.0] - 2026-03-01
 
-### Guardrails: `sensitive_files` — Protección de lectura y escritura
+### Internationalization (i18n) + Full English Translation
 
-#### Añadido
+#### Added
 
-- **`sensitive_files` en GuardrailsConfig** — Nuevo campo que bloquea LECTURA y ESCRITURA de archivos sensibles. A diferencia de `protected_files` (que solo bloquea escritura), `sensitive_files` impide que el agente lea el contenido de archivos como `.env`, `*.pem`, `*.key`, evitando que secrets se envíen al proveedor de LLM. (`src/architect/config/schema.py`)
-- **Detección de lecturas shell** — Nuevo regex `_READ_CMD_RE` y helper `_extract_read_targets()` que detectan comandos `cat`, `head`, `tail`, `less`, `more` intentando leer archivos sensibles. (`src/architect/core/guardrails.py`)
-- **`read_file` en guardrails check** — El tool `read_file` ahora pasa por `check_file_access()` en el ExecutionEngine, bloqueándose si el archivo está en `sensitive_files`. (`src/architect/execution/engine.py`)
-- **Auto-enable** — `sensitive_files` activa automáticamente el sistema de guardrails si tiene patrones configurados, igual que `protected_files` y otros campos. (`src/architect/config/schema.py`)
-- **30 tests nuevos** — `TestSensitiveFiles` (22 tests: lectura bloqueada, escritura bloqueada, protected vs sensitive, shell reads, shell redirects, basename matching), `TestExtractReadTargets` (6 tests), `TestGuardrailsConfigSchema` ampliado (3 tests). (`tests/test_guardrails/test_guardrails.py`)
+- **i18n system** (`src/architect/i18n/`) — New module with `t(key, **kwargs)` translation API, `set_language()` / `get_language()`, and `get_prompt()` for multiline agent prompts. Thread-safe `LanguageRegistry` singleton with fallback chain: current language → English → raw key. 160 translation keys with full EN/ES parity.
+- **`language` config field** — New `language: Literal["en", "es"] = "en"` field in `AppConfig`. Configurable via `.architect.yaml` or `ARCHITECT_LANGUAGE` environment variable. (`src/architect/config/schema.py`, `src/architect/config/loader.py`)
+- **English translation strings** (`src/architect/i18n/en.py`) — 160 keys organized in namespaces: `human.*` (41), `prompt.*` (5), `close.*` (5), `eval.*` (15), `ralph.*` (16), `dispatch.*` (13), `health.*` (14), `guardrail.*` (10), `context.*` (9), `competitive.*` (17), `reviewer.*` (5), `pipeline.*` (7), `dryrun.*` (3).
+- **Spanish translation strings** (`src/architect/i18n/es.py`) — Same 160 keys with Spanish translations, preserving all original Spanish text from before the migration.
+- **Lazy prompt resolution** — `_PromptProxy` for `DEFAULT_PROMPTS`, `_LazyAgentDict` for `DEFAULT_AGENTS`, `_LazyPrompt` for `REVIEW_SYSTEM_PROMPT`, `_LazyStr` for backward-compatible module-level constants (`BUILD_PROMPT`, `PLAN_PROMPT`, etc.). All resolve at access time via `t()` / `get_prompt()`, not at import time.
+- **25 i18n tests** (`tests/test_i18n/test_i18n.py`) — Registry, `t()` interpolation, fallback, key parity EN/ES, config integration, language switching.
 
-### Reports: Inferencia de formato por extensión de archivo
+#### Changed
 
-#### Añadido
-
-- **`_infer_report_format()`** — Cuando se usa `--report-file` sin `--report`, el formato se infiere automáticamente de la extensión: `.json` → json, `.md`/`.markdown` → markdown, `.html` → github, otro → markdown. (`src/architect/cli.py`)
-- **`_write_report_file()`** — Escritura robusta de reportes: crea directorios padres automáticamente, con fallback al directorio actual si falla, y notificación al usuario si no se puede escribir. Reemplaza los 4 `Path.write_text()` directos en `run`, `loop`, `pipeline` y `eval`. (`src/architect/cli.py`)
-- **13 tests nuevos** — `TestInferReportFormat` (8 tests: extensiones, case-insensitive, paths con directorios) + `TestWriteReportFile` (5 tests: creación de directorios, fallback, fallo total, sobreescritura). (`tests/test_reports/test_reports.py`)
-
-#### Corregido
-
-- **`--report-file` sin `--report` no generaba reporte** — La lógica de generación estaba condicionada a `if report_format:`, que era `None` cuando no se pasaba `--report`. Ahora se infiere el formato de la extensión del archivo en los 3 puntos de generación: `run`, `loop` y `pipeline`. (`src/architect/cli.py`)
-- **`--report-file` con directorio inexistente crasheaba** — `Path.write_text()` no crea directorios padres, causando `FileNotFoundError` con rutas como `reports/ralph-run.json`. Ahora `_write_report_file()` crea los directorios automáticamente. (`src/architect/cli.py`)
-
-### Pipelines: Validación de YAML antes de ejecutar
-
-#### Añadido
-
-- **`PipelineValidationError`** — Excepción dedicada para errores de validación de pipeline YAML. Hereda de `ValueError` para backward compatibility. (`src/architect/features/pipelines.py`)
-- **`_validate_steps()`** — Validación completa del YAML antes de ejecutar: `prompt` requerido y no vacío, campos desconocidos rechazados (con hint `task` → "¿quisiste decir `prompt`?"), al menos 1 step, entradas non-dict rechazadas. Recopila todos los errores en un solo mensaje. (`src/architect/features/pipelines.py`)
-- **CLI captura `PipelineValidationError`** — Muestra error limpio sin traceback y sale con `EXIT_CONFIG_ERROR` (3). (`src/architect/cli.py`)
-- **9 tests nuevos** — `TestPipelineYamlValidation`: `task` rechazado con hint, prompt vacío, prompt missing, no steps, campos desconocidos, errores coleccionados, YAML válido pasa, whitespace-only rechazado, `steps` key missing. (`tests/test_pipelines/test_pipelines.py`)
-
-### HUMAN Logging para features de alto nivel
-
-#### Añadido
-
-- **Trazabilidad visual para Pipelines** — 3 eventos HUMAN (`pipeline.step_start`, `pipeline.step_skipped`, `pipeline.step_done`) emitidos desde `pipelines.py`. El usuario ve banners con separadores `━` entre steps, indicando agente, índice, estado, coste y duración. (`src/architect/features/pipelines.py`)
-- **Trazabilidad visual para Ralph Loop** — 4 eventos HUMAN (`ralph.iteration_start`, `ralph.checks_result`, `ralph.iteration_done`, `ralph.complete`) emitidos desde `ralph.py`. El usuario ve cada iteración con su banner, resultado de checks (passed/total), estado por iteración, y resumen final con coste total. (`src/architect/features/ralph.py`)
-- **Trazabilidad visual para Auto-Reviewer** — 2 eventos HUMAN (`reviewer.start`, `reviewer.complete`) emitidos desde `reviewer.py`. El usuario ve banner con líneas de diff y resultado (aprobado/no aprobado, issues, score). (`src/architect/agents/reviewer.py`)
-- **Trazabilidad visual para Parallel Runs** — 3 eventos HUMAN (`parallel.worker_done`, `parallel.worker_error`, `parallel.complete`) emitidos desde `parallel.py`. El usuario ve estado de cada worker con modelo, coste y duración, más resumen final con workers exitosos/fallidos. (`src/architect/features/parallel.py`)
-- **Trazabilidad visual para Competitive Eval** — 2 eventos HUMAN (`competitive.model_done`, `competitive.ranking`) emitidos desde `competitive.py`. El usuario ve ranking con medallas (🏆🥈🥉), scores, checks y coste por modelo, más ranking final ordenado. (`src/architect/features/competitive.py`)
-- **14 nuevos case handlers en HumanFormatter** — Cada evento tiene su formato visual optimizado con iconos, barras separadoras y métricas. (`src/architect/logging/human.py`)
-- **11 nuevos métodos en HumanLog** — Helpers tipados para emitir cada evento desde código que usa structlog. (`src/architect/logging/human.py`)
-- **56 tests nuevos** — `TestPipelineHumanLogging` (4) + `TestHumanFormatterPipeline` (6) + `TestHumanLogPipeline` (3) en `tests/test_pipelines/`, `TestRalphHumanLogging` (4) + `TestHumanFormatterRalph` (7) + `TestHumanLogRalph` (4) en `tests/test_ralph/`, `TestReviewerHumanLogging` (4) + `TestHumanFormatterReviewer` (3) + `TestHumanLogReviewer` (2) en `tests/test_reviewer/`, `TestParallelHumanLogging` (3) + `TestHumanFormatterParallel` (4) + `TestHumanLogParallel` (3) en `tests/test_parallel/`, `TestCompetitiveHumanLogging` (2) + `TestHumanFormatterCompetitive` (5) + `TestHumanLogCompetitive` (2) en `tests/test_competitive/`.
-
-#### Cambiado
-
-- **`check_file_access()` ahora usa el parámetro `action`** — El método ya recibía `action` pero lo ignoraba. Ahora diferencia entre acciones de lectura (solo `sensitive_files`) y escritura (`protected_files` + `sensitive_files`). Backward compatible: todos los callers existentes pasan acciones de escritura. (`src/architect/core/guardrails.py`)
-- **`check_command()` ampliado** — Las redirecciones shell (`>`, `>>`, `| tee`) ahora se verifican contra `protected_files` + `sensitive_files` combinados. (`src/architect/core/guardrails.py`)
+- **Human logs** — All 41 `HumanFormatter` output strings now resolve via `t()`. Supports EN/ES switching at runtime. (`src/architect/logging/human.py`)
+- **Agent prompts** — Built-in prompts (build, plan, resume, review) and `REVIEW_SYSTEM_PROMPT` resolve lazily via i18n. Custom user prompts are unchanged. (`src/architect/agents/prompts.py`, `src/architect/agents/reviewer.py`, `src/architect/agents/registry.py`)
+- **Close instructions** — Safety net messages (max_steps, budget_exceeded, context_full, timeout) resolve via `t()`. (`src/architect/core/loop.py`)
+- **Context manager** — Summary headers, truncation markers, and step format strings resolve via `t()`. (`src/architect/core/context.py`)
+- **Self-evaluator** — Eval system prompt, user prompt, correction prompt, and all feedback strings resolve via `t()`. (`src/architect/core/evaluator.py`)
+- **Reports** — Health delta report labels, competitive eval report headers, ralph progress file content, and iteration prompt sections all resolve via `t()`. (`src/architect/core/health.py`, `src/architect/features/competitive.py`, `src/architect/features/ralph.py`)
+- **Guardrails** — All blocking messages (sensitive file, protected file, command blocked, limits exceeded) resolve via `t()`. (`src/architect/core/guardrails.py`)
+- **Dispatch** — Sub-agent prompt sections and tool descriptions translated to English. (`src/architect/tools/dispatch.py`)
+- **Commands** — Tool description and error messages translated to English. (`src/architect/tools/commands.py`)
+- **Full English translation** — All source code translated to English: CLI help strings (~50 options), echo messages (~80), docstrings (~200 functions/classes), comments (~300+), and user-facing strings across 50+ files. Only `i18n/es.py` and detection patterns in `memory.py` retain intentional Spanish.
+- **Default language is now English** — All output defaults to English. Spanish available via `language: es` in config or `ARCHITECT_LANGUAGE=es`.
 
 #### Tests
 
-- **795 passed**, 9 skipped, 0 failures
-- 31 E2E checks pasando sin cambios
+- **834 passed**, 9 skipped, 0 failures
+- ~30 test assertions updated across test files (Spanish → English)
+- 25 new i18n tests
+
+### Guardrails: `sensitive_files` — Read and write protection
+
+#### Added
+
+- **`sensitive_files` in GuardrailsConfig** — New field that blocks READING and WRITING of sensitive files. Unlike `protected_files` (write-only), `sensitive_files` prevents the agent from reading file contents like `.env`, `*.pem`, `*.key`, preventing secrets from being sent to the LLM provider. (`src/architect/config/schema.py`)
+- **Shell read detection** — New regex `_READ_CMD_RE` and helper `_extract_read_targets()` that detect `cat`, `head`, `tail`, `less`, `more` commands attempting to read sensitive files. (`src/architect/core/guardrails.py`)
+- **`read_file` in guardrails check** — The `read_file` tool now goes through `check_file_access()` in the ExecutionEngine, blocking if the file is in `sensitive_files`. (`src/architect/execution/engine.py`)
+- **Auto-enable** — `sensitive_files` automatically enables the guardrails system if patterns are configured, like `protected_files` and other fields. (`src/architect/config/schema.py`)
+- **30 new tests** — `TestSensitiveFiles` (22 tests: read blocked, write blocked, protected vs sensitive, shell reads, shell redirects, basename matching), `TestExtractReadTargets` (6 tests), `TestGuardrailsConfigSchema` extended (3 tests). (`tests/test_guardrails/test_guardrails.py`)
+
+### Reports: Format inference from file extension
+
+#### Added
+
+- **`_infer_report_format()`** — When using `--report-file` without `--report`, the format is automatically inferred from the extension: `.json` → json, `.md`/`.markdown` → markdown, `.html` → github, other → markdown. (`src/architect/cli.py`)
+- **`_write_report_file()`** — Robust report writing: creates parent directories automatically, falls back to the current directory on failure, and notifies the user without crashing. Replaces the 4 direct `Path.write_text()` calls in `run`, `loop`, `pipeline`, and `eval`. (`src/architect/cli.py`)
+- **13 new tests** — `TestInferReportFormat` (8 tests: extensions, case-insensitive, paths with directories) + `TestWriteReportFile` (5 tests: directory creation, fallback, total failure, overwrite). (`tests/test_reports/test_reports.py`)
+
+#### Fixed
+
+- **`--report-file` without `--report` did not generate a report** — The generation logic was conditional on `if report_format:`, which was `None` when `--report` was not passed. Now the format is inferred from the file extension in all 3 generation points: `run`, `loop`, and `pipeline`. (`src/architect/cli.py`)
+- **`--report-file` with non-existent directory crashed** — `Path.write_text()` doesn't create parent directories, causing `FileNotFoundError` with paths like `reports/ralph-run.json`. Now `_write_report_file()` creates directories automatically. (`src/architect/cli.py`)
+
+### Pipelines: YAML validation before execution
+
+#### Added
+
+- **`PipelineValidationError`** — Dedicated exception for pipeline YAML validation errors. Inherits from `ValueError` for backward compatibility. (`src/architect/features/pipelines.py`)
+- **`_validate_steps()`** — Complete YAML validation before execution: `prompt` required and non-empty, unknown fields rejected (with hint `task` → "did you mean `prompt`?"), at least 1 step, non-dict entries rejected. Collects all errors into a single message. (`src/architect/features/pipelines.py`)
+- **CLI catches `PipelineValidationError`** — Shows clean error without traceback and exits with `EXIT_CONFIG_ERROR` (3). (`src/architect/cli.py`)
+- **9 new tests** — `TestPipelineYamlValidation`: `task` rejected with hint, empty prompt, missing prompt, no steps, unknown fields, errors collected, valid YAML passes, whitespace-only rejected, `steps` key missing. (`tests/test_pipelines/test_pipelines.py`)
+
+### HUMAN Logging for high-level features
+
+#### Added
+
+- **Visual traceability for Pipelines** — 3 HUMAN events (`pipeline.step_start`, `pipeline.step_skipped`, `pipeline.step_done`) emitted from `pipelines.py`. User sees banners with `━` separators between steps, showing agent, index, status, cost, and duration. (`src/architect/features/pipelines.py`)
+- **Visual traceability for Ralph Loop** — 4 HUMAN events (`ralph.iteration_start`, `ralph.checks_result`, `ralph.iteration_done`, `ralph.complete`) emitted from `ralph.py`. User sees each iteration with its banner, check results (passed/total), per-iteration status, and final summary with total cost. (`src/architect/features/ralph.py`)
+- **Visual traceability for Auto-Reviewer** — 2 HUMAN events (`reviewer.start`, `reviewer.complete`) emitted from `reviewer.py`. User sees banner with diff lines and result (approved/not approved, issues, score). (`src/architect/agents/reviewer.py`)
+- **Visual traceability for Parallel Runs** — 3 HUMAN events (`parallel.worker_done`, `parallel.worker_error`, `parallel.complete`) emitted from `parallel.py`. User sees each worker's status with model, cost, and duration, plus final summary with successful/failed workers. (`src/architect/features/parallel.py`)
+- **Visual traceability for Competitive Eval** — 2 HUMAN events (`competitive.model_done`, `competitive.ranking`) emitted from `competitive.py`. User sees ranking with medals, scores, checks, and cost per model, plus sorted final ranking. (`src/architect/features/competitive.py`)
+- **14 new case handlers in HumanFormatter** — Each event has its optimized visual format with icons, separator bars, and metrics. (`src/architect/logging/human.py`)
+- **11 new methods in HumanLog** — Typed helpers to emit each event from code using structlog. (`src/architect/logging/human.py`)
+- **56 new tests** — Integration + formatter + HumanLog tests across `tests/test_pipelines/`, `tests/test_ralph/`, `tests/test_reviewer/`, `tests/test_parallel/`, `tests/test_competitive/`.
+
+#### Changed
+
+- **`check_file_access()` now uses the `action` parameter** — The method already received `action` but ignored it. Now it differentiates between read actions (`sensitive_files` only) and write actions (`protected_files` + `sensitive_files`). Backward compatible: all existing callers pass write actions. (`src/architect/core/guardrails.py`)
+- **`check_command()` expanded** — Shell redirects (`>`, `>>`, `| tee`) are now verified against `protected_files` + `sensitive_files` combined. (`src/architect/core/guardrails.py`)
 
 ---
 
 ## [1.0.1] - 2026-02-26
 
-### Correcciones post-release
+### Post-release fixes
 
-#### Corregido
+#### Fixed
 
-- Correcciones de errores encontrados en tests tras la release v1.0.0
-- Correcciones generales de estabilidad
-- Traducciones y documentos de LICENCIA y SEGURIDAD
+- Bug fixes found in tests after the v1.0.0 release
+- General stability fixes
+- Translations and LICENSE and SECURITY documents
 
 ---
 
 ## [1.0.0] - 2026-02-24
 
-### Release 1.0.0 — Primera versión estable
+### Release 1.0.0 — First stable version
 
-Primera release pública de architect CLI. Culminación de 4 fases de desarrollo (Plan V4: A, B, C, D) sobre la base del core v3, resultando en una herramienta CLI completa, robusta y extensible para orquestar agentes de IA sobre código local.
+First public release of architect CLI. Culmination of 4 development phases (Plan V4: A, B, C, D) on top of the core v3, resulting in a complete, robust, and extensible CLI tool for orchestrating AI agents over local code.
 
-#### Resumen de capacidades
+#### Capabilities summary
 
-**Core del agente**:
-- Loop determinista `while True` con el LLM decidiendo cuándo parar
-- 4 agentes por defecto: `build`, `plan`, `resume`, `review` + agentes custom en YAML
-- 8 tools locales: `read_file`, `write_file`, `edit_file`, `delete_file`, `list_files`, `search_code`, `grep`, `find_files`, `apply_patch`, `run_command`, `dispatch_subagent`
-- Gestión de contexto inteligente: compresión, pruning, enforce_window
-- Auto-evaluación (`--self-eval basic|full`) con reintentos automáticos
-- Safety nets: max_steps, budget, timeout, context_full — todos con cierre limpio (graceful close)
+**Agent core**:
+- Deterministic `while True` loop with the LLM deciding when to stop
+- 4 default agents: `build`, `plan`, `resume`, `review` + custom agents in YAML
+- 11 local tools: `read_file`, `write_file`, `edit_file`, `delete_file`, `list_files`, `search_code`, `grep`, `find_files`, `apply_patch`, `run_command`, `dispatch_subagent`
+- Intelligent context management: compression, pruning, enforce_window
+- Self-evaluation (`--self-eval basic|full`) with automatic retries
+- Safety nets: max_steps, budget, timeout, context_full — all with graceful close
 
-**Seguridad (Phase A)**:
-- Hooks del lifecycle (10 eventos: pre/post tool, pre/post LLM, session, agent, error, budget, context)
-- Guardrails deterministas: archivos protegidos, comandos bloqueados, límites de edición, code_rules (warn/block)
-- Quality gates post-build con re-ejecución automática si fallan
-- Skills ecosystem: `.architect.md`, `.architect/skills/`, instalación desde GitHub
-- Memoria procedural: correcciones del usuario persistidas entre sesiones
+**Security (Phase A)**:
+- Lifecycle hooks (10 events: pre/post tool, pre/post LLM, session, agent, error, budget, context)
+- Deterministic guardrails: protected files, blocked commands, edit limits, code_rules (warn/block)
+- Post-build quality gates with automatic re-execution on failure
+- Skills ecosystem: `.architect.md`, `.architect/skills/`, install from GitHub
+- Procedural memory: user corrections persisted across sessions
 
-**Operaciones (Phase B)**:
-- Sesiones persistentes con resume (`architect sessions`, `architect resume`)
-- Reportes multi-formato: JSON, Markdown, GitHub PR comment
-- 10+ flags CI/CD nativos: `--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`
-- Dry-run/preview mode con registro de acciones simuladas
+**Operations (Phase B)**:
+- Persistent sessions with resume (`architect sessions`, `architect resume`)
+- Multi-format reports: JSON, Markdown, GitHub PR comment
+- 10+ native CI/CD flags: `--dry-run`, `--report`, `--session`, `--context-git-diff`, `--confirm-mode`, `--exit-code-on-partial`
+- Dry-run/preview mode with simulated action recording
 
-**Orquestación (Phase C)**:
-- Ralph Loop: iteración automática hasta que checks pasen (`architect loop`)
-- Pipeline Mode: workflows YAML multi-step con variables, condiciones, checkpoints (`architect pipeline`)
-- Ejecución paralela en git worktrees aislados (`architect parallel`)
-- Checkpoints git con rollback (`architect rollback`, `architect history`)
-- Auto-review post-build con contexto limpio
+**Orchestration (Phase C)**:
+- Ralph Loop: automatic iteration until checks pass (`architect loop`)
+- Pipeline Mode: multi-step YAML workflows with variables, conditions, checkpoints (`architect pipeline`)
+- Parallel execution in isolated git worktrees (`architect parallel`)
+- Git checkpoints with rollback (`architect rollback`, `architect history`)
+- Post-build auto-review with clean context
 
-**Extensiones (Phase D)**:
-- Sub-agentes delegados: explore, test, review (`dispatch_subagent`)
-- Análisis de salud del código: complejidad, duplicados, funciones largas (`--health`)
-- Evaluación competitiva multi-modelo con ranking (`architect eval`)
-- Trazabilidad OpenTelemetry: session/llm/tool spans (otlp, console, json-file)
-- Presets de configuración: python, node-react, ci, paranoid, yolo (`architect init`)
+**Extensions (Phase D)**:
+- Delegated sub-agents: explore, test, review (`dispatch_subagent`)
+- Code health analysis: complexity, duplicates, long functions (`--health`)
+- Competitive multi-model evaluation with ranking (`architect eval`)
+- OpenTelemetry traceability: session/llm/tool spans (otlp, console, json-file)
+- Configuration presets: python, node-react, ci, paranoid, yolo (`architect init`)
 
-**Infraestructura**:
-- 15 comandos CLI: `run`, `loop`, `pipeline`, `parallel`, `parallel-cleanup`, `eval`, `init`, `sessions`, `resume`, `cleanup`, `agents`, `validate-config`, `skill`, `rollback`, `history`
-- Control de costes: `CostTracker`, `--budget`, prompt caching, `--show-costs`
-- Logging triple pipeline: HUMAN (stderr), técnico (stderr con -v), JSON file (--log-file)
-- Proveedores LLM vía LiteLLM: OpenAI, Anthropic, Google, Ollama, proxies
-- MCP (Model Context Protocol): tools remotas vía HTTP, auto-discovery
+**Infrastructure**:
+- 15 CLI commands: `run`, `loop`, `pipeline`, `parallel`, `parallel-cleanup`, `eval`, `init`, `sessions`, `resume`, `cleanup`, `agents`, `validate-config`, `skill`, `rollback`, `history`
+- Cost control: `CostTracker`, `--budget`, prompt caching, `--show-costs`
+- Logging triple pipeline: HUMAN (stderr), technical (stderr with -v), JSON file (--log-file)
+- LLM providers via LiteLLM: OpenAI, Anthropic, Google, Ollama, proxies
+- MCP (Model Context Protocol): remote tools via HTTP, auto-discovery
 
-**Calidad**:
-- 687 tests unitarios (pytest), 9 skipped, 0 failures
+**Quality**:
+- 687 unit tests (pytest), 9 skipped, 0 failures
 - 31 E2E script checks
-- 7 bugs de QA corregidos (BUG-1 a BUG-7)
-- Tipado estricto con mypy, formato con black (100 chars), linting con ruff
+- 7 QA bugs fixed (BUG-1 to BUG-7)
+- Strict typing with mypy, formatting with black (100 chars), linting with ruff
 
 ---
 
 ## [0.19.0] - 2026-02-24
 
-### v4 Phase D — Extensiones Avanzadas y QA
+### v4 Phase D — Advanced Extensions and QA
 
-Extensiones avanzadas del agente: sub-agentes despachables, análisis de salud del código, evaluación competitiva multi-modelo, trazas OpenTelemetry, presets de configuración, y 7 bugs corregidos del QA exhaustivo.
+Advanced agent extensions: dispatchable sub-agents, code health analysis, competitive multi-model evaluation, OpenTelemetry traces, configuration presets, and 7 bugs fixed from exhaustive QA.
 
-#### Añadido
+#### Added
 
 **D1 — Sub-Agents / Dispatch**:
-- `DispatchSubagentTool` — tool `dispatch_subagent` que delega sub-tareas a agentes con contexto independiente
-- Tres tipos de sub-agente: `explore` (solo lectura/búsqueda), `test` (lectura + ejecución de tests), `review` (lectura + análisis)
-- `SUBAGENT_MAX_STEPS=15`, `SUBAGENT_SUMMARY_MAX_CHARS=1000` — límites para no consumir contexto/coste
-- `register_dispatch_tool()` en `tools/setup.py` — registro con agent_factory callable
-- Wiring completo en `cli.py`: `_subagent_factory()` closure que crea AgentLoops frescos para sub-agentes
+- `DispatchSubagentTool` — `dispatch_subagent` tool that delegates sub-tasks to agents with independent context
+- Three sub-agent types: `explore` (read-only/search), `test` (read + test execution), `review` (read + analysis)
+- `SUBAGENT_MAX_STEPS=15`, `SUBAGENT_SUMMARY_MAX_CHARS=1000` — limits to avoid consuming context/cost
+- `register_dispatch_tool()` in `tools/setup.py` — registration with agent_factory callable
+- Full wiring in `cli.py`: `_subagent_factory()` closure that creates fresh AgentLoops for sub-agents
 
 **D2 — Code Health Delta**:
-- `CodeHealthAnalyzer` — analiza métricas de salud del código Python (AST nativo + radon opcional)
+- `CodeHealthAnalyzer` — analyzes Python code health metrics (native AST + optional radon)
 - `HealthSnapshot` — files_analyzed, total_functions, avg_complexity, max_complexity, long_functions, duplicate_blocks
-- `HealthDelta` — delta entre snapshots con `to_report()` en formato markdown
-- `FunctionMetric` — métricas por función (file, name, lines, complexity)
-- Detección de duplicación por hashing de bloques (ventana deslizante MD5)
-- Flag `--health` en `architect run` — toma snapshot antes/después y muestra delta report
-- `HealthConfig` en `AppConfig` — `enabled`, `include_patterns`, `exclude_dirs`
+- `HealthDelta` — delta between snapshots with `to_report()` in markdown format
+- `FunctionMetric` — per-function metrics (file, name, lines, complexity)
+- Duplicate detection via block hashing (sliding window MD5)
+- `--health` flag in `architect run` — takes before/after snapshots and shows delta report
+- `HealthConfig` in `AppConfig` — `enabled`, `include_patterns`, `exclude_dirs`
 
 **D3 — Competitive Eval**:
-- `CompetitiveEval` — ejecuta misma tarea con múltiples modelos en worktrees aislados
+- `CompetitiveEval` — runs the same task with multiple models in isolated worktrees
 - `CompetitiveConfig` — task, models, checks, agent, max_steps, budget_per_model, timeout_per_model
 - `CompetitiveResult` — model, status, steps, cost, duration, checks_passed/total, worktree_path
-- `generate_report()` — reporte markdown con tabla comparativa, ranking por score compuesto (checks 40% + status 30% + efficiency 20% + cost 10%)
-- Comando `architect eval` — `--models` (requerido), `--check` (repetible), `--report-file`
+- `generate_report()` — markdown report with comparison table, ranking by composite score (checks 40% + status 30% + efficiency 20% + cost 10%)
+- `architect eval` command — `--models` (required), `--check` (repeatable), `--report-file`
 
 **D4 — OpenTelemetry Traces**:
-- `ArchitectTracer` — emite spans para sesiones, llamadas LLM y tools (GenAI Semantic Conventions)
-- `NoopTracer` / `NoopSpan` — pattern para cuando OTel no está instalado
-- `create_tracer()` factory — retorna ArchitectTracer o NoopTracer según configuración
-- Exporters: `otlp` (gRPC), `console` (stderr), `json-file` (archivo JSON)
-- `TelemetryConfig` en `AppConfig` — `enabled`, `exporter`, `endpoint`, `trace_file`
-- Wiring completo en `cli.py`: `create_tracer()` + `tracer.start_session()` envuelve ejecución + `tracer.shutdown()`
+- `ArchitectTracer` — emits spans for sessions, LLM calls, and tools (GenAI Semantic Conventions)
+- `NoopTracer` / `NoopSpan` — pattern for when OTel is not installed
+- `create_tracer()` factory — returns ArchitectTracer or NoopTracer based on configuration
+- Exporters: `otlp` (gRPC), `console` (stderr), `json-file` (JSON file)
+- `TelemetryConfig` in `AppConfig` — `enabled`, `exporter`, `endpoint`, `trace_file`
+- Full wiring in `cli.py`: `create_tracer()` + `tracer.start_session()` wraps execution + `tracer.shutdown()`
 
 **D5 — Preset Configs**:
-- `PresetManager` — genera `.architect.md` y `config.yaml` desde presets predefinidos
-- 5 presets: `python` (ruff/mypy/pytest), `node-react` (eslint/jest), `ci` (yolo headless), `paranoid` (máxima seguridad), `yolo` (sin restricciones)
-- `AVAILABLE_PRESETS` dict con metadata (description, tags, files)
-- Comando `architect init --preset <name>` con `--overwrite` y `--list-presets`
+- `PresetManager` — generates `.architect.md` and `config.yaml` from predefined presets
+- 5 presets: `python` (ruff/mypy/pytest), `node-react` (eslint/jest), `ci` (yolo headless), `paranoid` (maximum security), `yolo` (no restrictions)
+- `AVAILABLE_PRESETS` dict with metadata (description, tags, files)
+- `architect init --preset <name>` command with `--overwrite` and `--list-presets`
 
-**Nuevos módulos**:
+**New modules**:
 - `src/architect/tools/dispatch.py` — DispatchSubagentTool
 - `src/architect/core/health.py` — CodeHealthAnalyzer
 - `src/architect/features/competitive.py` — CompetitiveEval
 - `src/architect/telemetry/otel.py` — ArchitectTracer
 - `src/architect/config/presets.py` — PresetManager
 
-**Dependencias opcionales** (pyproject.toml):
+**Optional dependencies** (pyproject.toml):
 - `telemetry` — opentelemetry-api, opentelemetry-sdk, opentelemetry-exporter-otlp (>=1.20)
 - `health` — radon (>=6.0)
 
-**Tests**: 687 pytest (646 pre-existentes + 41 nuevos bugfix tests), 9 skipped, 0 failures. Tests nuevos en:
+**Tests**: 687 pytest (646 pre-existing + 41 new bugfix tests), 9 skipped, 0 failures. New tests in:
 - `tests/test_dispatch/` (36 tests) — DispatchSubagentTool unit tests
 - `tests/test_health/` (28 tests) — CodeHealthAnalyzer unit tests
 - `tests/test_competitive/` — CompetitiveEval unit tests
-- `tests/test_telemetry/` (16 tests) — ArchitectTracer y NoopTracer unit tests
+- `tests/test_telemetry/` (16 tests) — ArchitectTracer and NoopTracer unit tests
 - `tests/test_presets/` — PresetManager unit tests
-- `tests/test_bugfixes/` (41 tests) — validación específica de los 7 bugs corregidos
+- `tests/test_bugfixes/` (41 tests) — specific validation of 7 fixed bugs
 
-#### Corregido
+#### Fixed
 
-- **[CRITICAL] BUG-1: CLI commands `eval` e `init` usaban `@cli.command` en vez de `@main.command`** — Rompía toda la importación del módulo CLI. Fix: cambiado a `@main.command("eval")` y `@main.command("init")`. (`src/architect/cli.py`)
-- **[MEDIUM] BUG-2: Versión inconsistente** — `pyproject.toml` en 0.19.0 pero `__init__.py` y `cli.py` en 0.18.0. Fix: actualizado ambos a 0.19.0. (`src/architect/__init__.py`, `src/architect/cli.py`)
-- **[HIGH] BUG-3: `code_rules` severity:block no prevenía escrituras** — `check_code_rules` se ejecutaba DESPUÉS de `execute_tool_call`, el archivo ya estaba escrito en disco. Fix: movido el check a ANTES de la ejecución en `_execute_single_tool`; si hay violación block, retorna ToolResult failure sin ejecutar. `record_edit()` movido a `execute_tool_call` solo tras éxito. (`src/architect/core/loop.py`, `src/architect/execution/engine.py`)
-- **[MEDIUM] BUG-4: `dispatch_subagent` tool no registrada en CLI run** — `register_dispatch_tool()` existía pero no se llamaba. Fix: añadido wiring en `cli.py` con closure `_subagent_factory()` que crea AgentLoops frescos. (`src/architect/cli.py`)
-- **[MEDIUM] BUG-5: `TelemetryConfig` parseada pero `create_tracer()` nunca llamado** — La config existía en schema pero no se conectaba. Fix: añadido `create_tracer()` desde config, `tracer.start_session()` envolviendo ejecución, y `tracer.shutdown()` al finalizar. (`src/architect/cli.py`)
-- **[MEDIUM] BUG-6: `HealthConfig` parseada pero `CodeHealthAnalyzer` nunca invocado** — Config en schema sin wiring. Fix: añadido flag `--health` en run command, `CodeHealthAnalyzer` con snapshots before/after y delta report. (`src/architect/cli.py`)
-- **[MEDIUM] BUG-7: Parallel workers no propagaban `--config` ni `--api-base`** — `_run_worker_process` no incluía estos flags en el subprocess. Fix: añadidos `config_path` y `api_base` a `ParallelConfig` y `_run_worker_process`, y `--config`/`--api-base` en CLI parallel. (`src/architect/features/parallel.py`, `src/architect/cli.py`)
+- **[CRITICAL] BUG-1: CLI commands `eval` and `init` used `@cli.command` instead of `@main.command`** — Broke the entire CLI module import. Fix: changed to `@main.command("eval")` and `@main.command("init")`. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-2: Inconsistent version** — `pyproject.toml` at 0.19.0 but `__init__.py` and `cli.py` at 0.18.0. Fix: updated both to 0.19.0. (`src/architect/__init__.py`, `src/architect/cli.py`)
+- **[HIGH] BUG-3: `code_rules` severity:block did not prevent writes** — `check_code_rules` ran AFTER `execute_tool_call`, so the file was already written to disk. Fix: moved the check to BEFORE execution in `_execute_single_tool`; if a block violation is found, returns ToolResult failure without executing. `record_edit()` moved to `execute_tool_call` only after success. (`src/architect/core/loop.py`, `src/architect/execution/engine.py`)
+- **[MEDIUM] BUG-4: `dispatch_subagent` tool not registered in CLI run** — `register_dispatch_tool()` existed but was never called. Fix: added wiring in `cli.py` with `_subagent_factory()` closure that creates fresh AgentLoops. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-5: `TelemetryConfig` parsed but `create_tracer()` never called** — Config existed in schema but was not connected. Fix: added `create_tracer()` from config, `tracer.start_session()` wrapping execution, and `tracer.shutdown()` on finish. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-6: `HealthConfig` parsed but `CodeHealthAnalyzer` never invoked** — Config in schema without wiring. Fix: added `--health` flag in run command, `CodeHealthAnalyzer` with before/after snapshots and delta report. (`src/architect/cli.py`)
+- **[MEDIUM] BUG-7: Parallel workers did not propagate `--config` or `--api-base`** — `_run_worker_process` did not include these flags in the subprocess. Fix: added `config_path` and `api_base` to `ParallelConfig` and `_run_worker_process`, and `--config`/`--api-base` in CLI parallel. (`src/architect/features/parallel.py`, `src/architect/cli.py`)
 
 ---
 

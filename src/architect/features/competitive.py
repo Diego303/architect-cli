@@ -1,11 +1,11 @@
 """
-Competitive Eval — Ejecuta la misma tarea con múltiples modelos y genera un report comparativo.
+Competitive Eval — Runs the same task with multiple models and generates a comparative report.
 
-v4-D3: Wrapper sobre ParallelRunner que configura un worker por modelo,
-ejecuta la misma tarea en todos, y recolecta métricas comparativas:
-tests pasados, errores lint, pasos, coste, tiempo.
+v4-D3: Wrapper over ParallelRunner that configures one worker per model,
+runs the same task on all of them, and collects comparative metrics:
+tests passed, lint errors, steps, cost, time.
 
-Requiere: ParallelRunner (v4-C2).
+Requires: ParallelRunner (v4-C2).
 """
 
 import logging
@@ -32,20 +32,20 @@ __all__ = [
 
 @dataclass
 class CompetitiveResult:
-    """Resultado de una evaluación competitiva de un modelo.
+    """Result of a competitive evaluation for a model.
 
     Attributes:
-        model: Nombre del modelo evaluado.
-        status: Estado final (success, partial, failed, timeout).
-        steps: Pasos ejecutados por el agente.
-        cost: Coste en USD.
-        duration: Duración en segundos.
-        files_modified: Archivos modificados por el agente.
-        checks_passed: Número de checks que pasaron.
-        checks_total: Número total de checks.
-        check_details: Detalle de cada check {name, passed, output}.
-        worktree_path: Path al worktree con los cambios.
-        branch: Branch de git donde están los cambios.
+        model: Name of the evaluated model.
+        status: Final status (success, partial, failed, timeout).
+        steps: Steps executed by the agent.
+        cost: Cost in USD.
+        duration: Duration in seconds.
+        files_modified: Files modified by the agent.
+        checks_passed: Number of checks that passed.
+        checks_total: Total number of checks.
+        check_details: Detail of each check {name, passed, output}.
+        worktree_path: Path to the worktree with the changes.
+        branch: Git branch where the changes are.
     """
 
     model: str
@@ -63,16 +63,16 @@ class CompetitiveResult:
 
 @dataclass
 class CompetitiveConfig:
-    """Configuración para evaluación competitiva.
+    """Configuration for competitive evaluation.
 
     Attributes:
-        task: Tarea a ejecutar con todos los modelos.
-        models: Lista de modelos a comparar.
-        checks: Comandos de verificación a ejecutar después.
-        agent: Agente a usar (default: build).
-        max_steps: Máximo de pasos por modelo.
-        budget_per_model: Presupuesto USD por modelo.
-        timeout_per_model: Timeout en segundos por modelo.
+        task: Task to execute with all models.
+        models: List of models to compare.
+        checks: Verification commands to run afterwards.
+        agent: Agent to use (default: build).
+        max_steps: Maximum steps per model.
+        budget_per_model: USD budget per model.
+        timeout_per_model: Timeout in seconds per model.
     """
 
     task: str
@@ -85,29 +85,29 @@ class CompetitiveConfig:
 
 
 class CompetitiveEval:
-    """Ejecuta evaluación competitiva de múltiples modelos.
+    """Runs competitive evaluation of multiple models.
 
-    Usa ParallelRunner para ejecutar la misma tarea con diferentes modelos
-    en worktrees aislados, luego ejecuta los checks en cada worktree
-    y genera un report comparativo.
+    Uses ParallelRunner to execute the same task with different models
+    in isolated worktrees, then runs checks in each worktree
+    and generates a comparative report.
     """
 
     def __init__(self, config: CompetitiveConfig, workspace_root: str) -> None:
-        """Inicializa la evaluación competitiva.
+        """Initialize the competitive evaluation.
 
         Args:
-            config: Configuración de la evaluación.
-            workspace_root: Directorio raíz del repositorio.
+            config: Evaluation configuration.
+            workspace_root: Root directory of the repository.
         """
         self.config = config
         self.workspace_root = workspace_root
         self.log = logger.bind(component="competitive_eval")
 
     def run(self) -> list[CompetitiveResult]:
-        """Ejecuta la evaluación competitiva.
+        """Run the competitive evaluation.
 
         Returns:
-            Lista de CompetitiveResult, uno por modelo, ordenada por modelo.
+            List of CompetitiveResult, one per model, sorted by model.
         """
         self.log.info(
             "competitive.start",
@@ -116,7 +116,7 @@ class CompetitiveEval:
             checks=self.config.checks,
         )
 
-        # Configurar ParallelRunner: misma tarea, un worker por modelo
+        # Configure ParallelRunner: same task, one worker per model
         parallel_config = ParallelConfig(
             tasks=[self.config.task],
             workers=len(self.config.models),
@@ -130,7 +130,7 @@ class CompetitiveEval:
         runner = ParallelRunner(parallel_config, self.workspace_root)
         worker_results = runner.run()
 
-        # Ejecutar checks en cada worktree
+        # Run checks in each worktree
         results: list[CompetitiveResult] = []
         for wr in worker_results:
             check_details = self._run_checks_in_worktree(wr.worktree_path)
@@ -184,13 +184,13 @@ class CompetitiveEval:
     def _run_checks_in_worktree(
         self, worktree_path: str
     ) -> list[dict[str, str | bool]]:
-        """Ejecuta los checks configurados en un worktree.
+        """Run the configured checks in a worktree.
 
         Args:
-            worktree_path: Path al worktree donde ejecutar.
+            worktree_path: Path to the worktree where checks are executed.
 
         Returns:
-            Lista de {name, passed, output} por check.
+            List of {name, passed, output} per check.
         """
         if not self.config.checks or not worktree_path:
             return []
@@ -227,28 +227,32 @@ class CompetitiveEval:
         return results
 
     def generate_report(self, results: list[CompetitiveResult]) -> str:
-        """Genera un reporte comparativo en formato markdown.
+        """Generate a comparative markdown report.
 
         Args:
-            results: Lista de resultados de la evaluación.
+            results: List of evaluation results.
 
         Returns:
-            String con el reporte en formato markdown.
+            String with the report in markdown format.
         """
+        from architect.i18n import t
+
         lines = [
-            "# Competitive Eval Report\n",
-            f"**Tarea**: {self.config.task}\n",
-            f"**Modelos**: {len(results)}\n",
+            t("competitive.report_title"),
+            t("competitive.task_label", task=self.config.task),
+            t("competitive.models_label", count=len(results)),
         ]
 
         if self.config.checks:
-            lines.append(f"**Checks**: {', '.join(self.config.checks)}\n")
+            lines.append(t("competitive.checks_label", checks=", ".join(self.config.checks)))
 
-        # Tabla comparativa
-        lines.append("\n## Resultados\n")
+        # Results table
+        lines.append(t("competitive.results_header"))
         lines.append(
-            "| Modelo | Estado | Pasos | Coste | Tiempo | "
-            "Checks | Archivos |"
+            f"| {t('competitive.col_model')} | {t('competitive.col_status')} "
+            f"| {t('competitive.col_steps')} | {t('competitive.col_cost')} "
+            f"| {t('competitive.col_time')} | {t('competitive.col_checks')} "
+            f"| {t('competitive.col_files')} |"
         )
         lines.append(
             "|--------|--------|-------|-------|--------|"
@@ -265,7 +269,7 @@ class CompetitiveEval:
             )
 
         # Ranking
-        lines.append("\n## Ranking\n")
+        lines.append(t("competitive.ranking_header"))
         ranked = self._rank_results(results)
         for i, (r, score) in enumerate(ranked, 1):
             medal = ["1st", "2nd", "3rd"][i - 1] if i <= 3 else f"{i}th"
@@ -273,13 +277,13 @@ class CompetitiveEval:
                 f"{i}. **{medal}** — {r.model} (score: {score:.1f})"
             )
 
-        # Detalle de checks por modelo
+        # Check details per model
         if self.config.checks:
-            lines.append("\n## Detalle de Checks\n")
+            lines.append(t("competitive.check_details_header"))
             for r in results:
                 lines.append(f"\n### {r.model}\n")
                 if not r.check_details:
-                    lines.append("No se ejecutaron checks.\n")
+                    lines.append(t("competitive.no_checks_run"))
                     continue
                 for check in r.check_details:
                     icon = "pass" if check["passed"] else "FAIL"
@@ -288,9 +292,9 @@ class CompetitiveEval:
                         output = str(check["output"])[:200]
                         lines.append(f"  ```\n  {output}\n  ```")
 
-        # Worktrees para inspección
-        lines.append("\n## Worktrees\n")
-        lines.append("Para inspeccionar los resultados de cada modelo:\n")
+        # Worktrees for inspection
+        lines.append(t("competitive.worktrees_header"))
+        lines.append(t("competitive.worktrees_desc"))
         for r in results:
             if r.worktree_path:
                 lines.append(f"- **{r.model}**: `{r.worktree_path}` (branch: `{r.branch}`)")
@@ -300,16 +304,16 @@ class CompetitiveEval:
     def _rank_results(
         self, results: list[CompetitiveResult]
     ) -> list[tuple[CompetitiveResult, float]]:
-        """Rankea resultados usando un score compuesto.
+        """Rank results using a composite score.
 
         Score = (checks_passed/total * 40) + (status_score * 30) +
                 (efficiency_score * 20) + (cost_score * 10)
 
         Args:
-            results: Lista de resultados.
+            results: List of results.
 
         Returns:
-            Lista de (resultado, score) ordenada por score descendente.
+            List of (result, score) sorted by score descending.
         """
         scored: list[tuple[CompetitiveResult, float]] = []
 
@@ -321,7 +325,7 @@ class CompetitiveEval:
             if r.checks_total > 0:
                 checks_score = (r.checks_passed / r.checks_total) * 40
             else:
-                checks_score = 20.0  # Neutral si no hay checks
+                checks_score = 20.0  # Neutral if no checks
 
             # Status score (0-30)
             status_scores = {
@@ -332,17 +336,17 @@ class CompetitiveEval:
             }
             status_score = status_scores.get(r.status, 0.0)
 
-            # Efficiency score (0-20): menos pasos es mejor
+            # Efficiency score (0-20): fewer steps is better
             if r.steps > 0 and max_steps > 0:
                 efficiency_score = (1 - r.steps / max_steps) * 20
             else:
                 efficiency_score = 0.0
 
-            # Cost score (0-10): menos coste es mejor
+            # Cost score (0-10): lower cost is better
             if r.cost > 0 and max_cost > 0:
                 cost_score = (1 - r.cost / max_cost) * 10
             else:
-                cost_score = 10.0  # Sin coste = máximo score
+                cost_score = 10.0  # No cost = maximum score
 
             total = checks_score + status_score + efficiency_score + cost_score
             scored.append((r, round(total, 1)))
@@ -351,7 +355,7 @@ class CompetitiveEval:
 
     @staticmethod
     def _status_icon(status: str) -> str:
-        """Retorna icono según estado."""
+        """Return icon based on status."""
         icons = {
             "success": "OK",
             "partial": "WARN",

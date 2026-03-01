@@ -1,8 +1,8 @@
 """
-Módulo indexer — Indexación del repositorio.
+Indexer module — Repository indexing.
 
-Proporciona un índice ligero del workspace para que el agente
-conozca la estructura del proyecto sin necesidad de leer cada archivo.
+Provides a lightweight workspace index so the agent can know the
+project structure without having to read each file.
 """
 
 from .cache import IndexCache

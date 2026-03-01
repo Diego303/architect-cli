@@ -1,9 +1,9 @@
 """
-Parallel Runs + Worktrees — Ejecución paralela de agentes en worktrees git aislados.
+Parallel Runs + Worktrees — Parallel agent execution in isolated git worktrees.
 
-v4-C2: Cada worker se ejecuta en un git worktree separado con aislamiento total.
-Los workers se lanzan con ProcessPoolExecutor y cada uno invoca `architect run`
-como subprocess en su propio worktree.
+v4-C2: Each worker runs in a separate git worktree with total isolation.
+Workers are launched with ProcessPoolExecutor and each one invokes `architect run`
+as a subprocess in its own worktree.
 """
 
 import json
@@ -32,7 +32,7 @@ WORKTREE_PREFIX = ".architect-parallel"
 
 @dataclass
 class WorkerResult:
-    """Resultado de un worker paralelo."""
+    """Result of a parallel worker."""
 
     worker_id: int
     branch: str
@@ -47,7 +47,7 @@ class WorkerResult:
 
 @dataclass
 class ParallelConfig:
-    """Configuración de ejecución paralela."""
+    """Parallel execution configuration."""
 
     tasks: list[str]
     workers: int = 3
@@ -62,23 +62,23 @@ class ParallelConfig:
 
 
 class ParallelRunner:
-    """Ejecuta múltiples agentes en paralelo usando git worktrees.
+    """Executes multiple agents in parallel using git worktrees.
 
-    Cada worker:
-    1. Tiene su propio git worktree (branch separada)
-    2. Ejecuta `architect run` como subprocess
-    3. Retorna WorkerResult con métricas
+    Each worker:
+    1. Has its own git worktree (separate branch)
+    2. Runs `architect run` as a subprocess
+    3. Returns WorkerResult with metrics
 
-    Los worktrees NO se limpian automáticamente — el usuario los inspecciona
-    y decide cuál mergear.
+    Worktrees are NOT cleaned up automatically — the user inspects them
+    and decides which one to merge.
     """
 
     def __init__(self, config: ParallelConfig, workspace_root: str):
-        """Inicializa el runner paralelo.
+        """Initialize the parallel runner.
 
         Args:
-            config: Configuración de la ejecución paralela.
-            workspace_root: Directorio raíz del repositorio git.
+            config: Parallel execution configuration.
+            workspace_root: Root directory of the git repository.
         """
         self.config = config
         self.root = Path(workspace_root)
@@ -86,18 +86,18 @@ class ParallelRunner:
         self.log = logger.bind(component="parallel_runner")
 
     def run(self) -> list[WorkerResult]:
-        """Ejecuta todos los workers en paralelo.
+        """Run all workers in parallel.
 
         Returns:
-            Lista de WorkerResult ordenada por worker_id.
+            List of WorkerResult sorted by worker_id.
         """
         results: list[WorkerResult] = []
 
         try:
-            # Crear worktrees
+            # Create worktrees
             self._create_worktrees()
 
-            # Lanzar workers en paralelo
+            # Launch workers in parallel
             with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
                 futures = {}
                 for i in range(self.config.workers):
@@ -182,14 +182,14 @@ class ParallelRunner:
         return sorted(results, key=lambda r: r.worker_id)
 
     def _create_worktrees(self) -> None:
-        """Crea git worktrees para cada worker."""
+        """Create git worktrees for each worker."""
         base_branch = self.config.base_branch or self._get_current_branch()
 
         for i in range(self.config.workers):
             branch_name = f"architect/parallel-{i + 1}"
             worktree_path = self.root / f"{WORKTREE_PREFIX}-{i + 1}"
 
-            # Limpiar si existe
+            # Clean up if exists
             if worktree_path.exists():
                 subprocess.run(
                     ["git", "worktree", "remove", str(worktree_path), "--force"],
@@ -197,14 +197,14 @@ class ParallelRunner:
                     cwd=str(self.root),
                 )
 
-            # Eliminar branch vieja si existe
+            # Delete old branch if it exists
             subprocess.run(
                 ["git", "branch", "-D", branch_name],
                 capture_output=True,
                 cwd=str(self.root),
             )
 
-            # Crear branch y worktree
+            # Create branch and worktree
             result = subprocess.run(
                 [
                     "git", "worktree", "add",
@@ -218,7 +218,7 @@ class ParallelRunner:
             )
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"Error creando worktree {worktree_path}: {result.stderr}"
+                    f"Error creating worktree {worktree_path}: {result.stderr}"
                 )
 
             self.worktrees.append(worktree_path)
@@ -230,14 +230,14 @@ class ParallelRunner:
             )
 
     def cleanup(self) -> int:
-        """Limpia worktrees y branches de ejecuciones paralelas.
+        """Clean up worktrees and branches from parallel executions.
 
         Returns:
-            Número de worktrees eliminados.
+            Number of worktrees removed.
         """
         removed = 0
 
-        # Buscar worktrees con nuestro prefijo
+        # Find worktrees with our prefix
         for path in self.root.parent.glob(f"{self.root.name}/{WORKTREE_PREFIX}-*"):
             if path.is_dir():
                 subprocess.run(
@@ -247,7 +247,7 @@ class ParallelRunner:
                 )
                 removed += 1
 
-        # También buscar directamente en el root
+        # Also search directly in the root
         for path in self.root.glob(f"{WORKTREE_PREFIX}-*"):
             if path.is_dir():
                 subprocess.run(
@@ -257,7 +257,7 @@ class ParallelRunner:
                 )
                 removed += 1
 
-        # Limpiar branches
+        # Clean up branches
         result = subprocess.run(
             ["git", "branch", "--list", "architect/parallel-*"],
             capture_output=True,
@@ -273,7 +273,7 @@ class ParallelRunner:
                     cwd=str(self.root),
                 )
 
-        # Prune worktrees huérfanos
+        # Prune orphan worktrees
         subprocess.run(
             ["git", "worktree", "prune"],
             capture_output=True,
@@ -283,19 +283,19 @@ class ParallelRunner:
         return removed
 
     def _get_task_for_worker(self, index: int) -> str:
-        """Obtiene la tarea para un worker por su índice."""
+        """Get the task for a worker by its index."""
         if index < len(self.config.tasks):
             return self.config.tasks[index]
-        return self.config.tasks[0]  # Misma tarea para todos
+        return self.config.tasks[0]  # Same task for all
 
     def _get_model_for_worker(self, index: int) -> str | None:
-        """Obtiene el modelo para un worker por su índice."""
+        """Get the model for a worker by its index."""
         if self.config.models and index < len(self.config.models):
             return self.config.models[index]
         return None
 
     def _get_current_branch(self) -> str:
-        """Obtiene la branch actual del repositorio."""
+        """Get the current branch of the repository."""
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
@@ -306,13 +306,13 @@ class ParallelRunner:
 
     @staticmethod
     def list_worktrees(workspace_root: str) -> list[dict[str, str]]:
-        """Lista worktrees de ejecuciones paralelas.
+        """List worktrees from parallel executions.
 
         Args:
-            workspace_root: Directorio raíz del repositorio.
+            workspace_root: Root directory of the repository.
 
         Returns:
-            Lista de {path, branch} para cada worktree.
+            List of {path, branch} for each worktree.
         """
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
@@ -347,25 +347,25 @@ def _run_worker_process(
     config_path: str | None = None,
     api_base: str | None = None,
 ) -> WorkerResult:
-    """Ejecuta un worker en un worktree. Función top-level para ProcessPoolExecutor.
+    """Run a worker in a worktree. Top-level function for ProcessPoolExecutor.
 
-    Invoca `architect run` como subprocess en el worktree para aislamiento total.
+    Invokes `architect run` as a subprocess in the worktree for total isolation.
 
     Args:
-        worker_id: ID del worker (1-based).
-        task: Tarea a ejecutar.
-        model: Modelo LLM. None = default.
-        worktree_path: Path al git worktree.
-        branch: Nombre de la branch.
-        agent: Agente a usar.
-        max_steps: Máximo de pasos.
-        budget: Presupuesto USD. None = sin límite.
-        timeout: Timeout en segundos. None = 600.
-        config_path: Path al archivo de configuración. None = default.
-        api_base: URL base de la API del LLM. None = default.
+        worker_id: Worker ID (1-based).
+        task: Task to execute.
+        model: LLM model. None = default.
+        worktree_path: Path to the git worktree.
+        branch: Branch name.
+        agent: Agent to use.
+        max_steps: Maximum number of steps.
+        budget: USD budget. None = no limit.
+        timeout: Timeout in seconds. None = 600.
+        config_path: Path to the configuration file. None = default.
+        api_base: Base URL of the LLM API. None = default.
 
     Returns:
-        WorkerResult con métricas de la ejecución.
+        WorkerResult with execution metrics.
     """
     start = time.time()
 
@@ -399,7 +399,7 @@ def _run_worker_process(
         )
         duration = time.time() - start
 
-        # Parsear output JSON
+        # Parse JSON output
         try:
             data = json.loads(proc.stdout)
             # Cost can be at top-level "cost" or nested in "costs.total_cost_usd"

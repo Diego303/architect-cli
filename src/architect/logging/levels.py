@@ -1,33 +1,33 @@
 """
-Nivel de logging HUMAN — Trazabilidad legible del agente.
+HUMAN logging level -- Readable agent traceability.
 
-v3-M5: Nivel custom entre INFO (20) y WARNING (30).
-No indica severidad — indica trazabilidad de alto nivel para que el usuario
-pueda seguir qué hace el agente sin ruido técnico.
+v3-M5: Custom level between INFO (20) and WARNING (30).
+Does not indicate severity -- indicates high-level traceability so the user
+can follow what the agent does without technical noise.
 
-Jerarquía:
-    debug  (10) → HTTP payloads, args completos, timing
-    info   (20) → Operaciones del sistema (config loaded, tool registered)
-    human  (25) → ★ Qué hace el agente: LLM call, tool use, resultado
-    warn   (30) → Problemas no fatales
-    error  (40) → Errores
+Hierarchy:
+    debug  (10) -> HTTP payloads, full args, timing
+    info   (20) -> System operations (config loaded, tool registered)
+    human  (25) -> * What the agent does: LLM call, tool use, result
+    warn   (30) -> Non-fatal problems
+    error  (40) -> Errors
 """
 
 import logging
 
-# Nivel custom: entre INFO (20) y WARNING (30)
+# Custom level: between INFO (20) and WARNING (30)
 HUMAN = 25
 logging.addLevelName(HUMAN, "HUMAN")
 
-# Inyectar el método .human() en la clase Logger de Python 
-# Esto evita el AttributeError: object has no attribute 'human'
+# Inject the .human() method into Python's Logger class
+# This avoids the AttributeError: object has no attribute 'human'
 def _human_method(self, message, *args, **kwargs):
     if self.isEnabledFor(HUMAN):
         self._log(HUMAN, message, args, **kwargs)
 
 logging.Logger.human = _human_method
 
-# Registrar el nivel en structlog para evitar KeyError: 25
+# Register the level in structlog to avoid KeyError: 25
 import structlog
 if hasattr(structlog, "stdlib"):
     try:

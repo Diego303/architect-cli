@@ -1,14 +1,14 @@
 """
-Tools de búsqueda de código.
+Code search tools.
 
-Proporciona capacidades para encontrar código en el workspace sin
-necesidad de leer archivo por archivo. Incluye:
+Provides capabilities for finding code in the workspace without
+needing to read file by file. Includes:
 
-- search_code: búsqueda regex con contexto
-- grep: búsqueda de texto literal (usa rg/grep del sistema si está disponible)
-- find_files: búsqueda de archivos por patrón glob
+- search_code: regex search with context
+- grep: literal text search (uses system rg/grep if available)
+- find_files: file search by glob pattern
 
-Todas respetan los mismos directorios de exclusión que el indexador
+All respect the same exclusion directories as the indexer
 (.git, node_modules, __pycache__, etc.).
 """
 
@@ -25,7 +25,7 @@ from .base import BaseTool, ToolResult
 from .schemas import FindFilesArgs, GrepArgs, SearchCodeArgs
 
 
-# Directorios ignorados en búsquedas (mismos que el indexador)
+# Directories ignored in searches (same as the indexer)
 SEARCH_IGNORE_DIRS: frozenset[str] = frozenset({
     ".git",
     "node_modules",
@@ -43,17 +43,17 @@ SEARCH_IGNORE_DIRS: frozenset[str] = frozenset({
 
 
 def _iter_files(search_root: Path, file_pattern: str | None = None) -> Iterator[Path]:
-    """Itera sobre archivos del workspace respetando exclusiones.
+    """Iterate over workspace files respecting exclusions.
 
     Args:
-        search_root: Directorio raíz de búsqueda
-        file_pattern: Patrón glob opcional para filtrar archivos por nombre
+        search_root: Root directory for search
+        file_pattern: Optional glob pattern to filter files by name
 
     Yields:
-        Path de cada archivo que pasa los filtros
+        Path of each file that passes the filters
     """
     for dirpath, dirnames, filenames in os.walk(search_root):
-        # Excluir directorios ignorados y ocultos (in-place)
+        # Exclude ignored and hidden directories (in-place)
         dirnames[:] = sorted(
             d for d in dirnames
             if d not in SEARCH_IGNORE_DIRS and not d.startswith(".")
@@ -66,35 +66,35 @@ def _iter_files(search_root: Path, file_pattern: str | None = None) -> Iterator[
 
 
 class SearchCodeTool(BaseTool):
-    """Busca un patrón regex en archivos del workspace."""
+    """Searches for a regex pattern in workspace files."""
 
     def __init__(self, workspace_root: Path) -> None:
         self.name = "search_code"
         self.description = (
-            "Busca un patrón regex en archivos del proyecto. "
-            "Retorna coincidencias con contexto (líneas vecinas). "
-            "Útil para encontrar definiciones, usos, imports, etc. "
-            "Ejemplo: search_code(pattern='def process_', file_pattern='*.py'). "
-            "Para texto literal simple, usa grep (más rápido). "
-            "Para localizar archivos por nombre, usa find_files."
+            "Search for a regex pattern in project files. "
+            "Returns matches with context (neighboring lines). "
+            "Useful for finding definitions, usages, imports, etc. "
+            "Example: search_code(pattern='def process_', file_pattern='*.py'). "
+            "For simple literal text, use grep (faster). "
+            "To locate files by name, use find_files."
         )
         self.sensitive = False
         self.args_model = SearchCodeArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Ejecuta búsqueda regex en el workspace.
+        """Execute regex search in the workspace.
 
         Args:
-            pattern: Regex a buscar
-            path: Directorio o archivo donde buscar
-            file_pattern: Filtro de nombres de archivo (glob)
-            max_results: Límite de resultados
-            context_lines: Líneas de contexto
-            case_sensitive: Sensibilidad a mayúsculas
+            pattern: Regex to search for
+            path: Directory or file to search in
+            file_pattern: File name filter (glob)
+            max_results: Result limit
+            context_lines: Context lines
+            case_sensitive: Case sensitivity
 
         Returns:
-            ToolResult con coincidencias y contexto, o error
+            ToolResult with matches and context, or error
         """
         try:
             args = self.validate_args(kwargs)
@@ -106,7 +106,7 @@ class SearchCodeTool(BaseTool):
         except (PathTraversalError, Exception) as e:
             return ToolResult(success=False, output="", error=str(e))
 
-        # Compilar regex
+        # Compile regex
         try:
             flags = 0 if args.case_sensitive else re.IGNORECASE
             regex = re.compile(args.pattern, flags)
@@ -114,7 +114,7 @@ class SearchCodeTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Patrón regex inválido: {e}",
+                error=f"Invalid regex pattern: {e}",
             )
 
         matches: list[dict] = []
@@ -152,13 +152,13 @@ class SearchCodeTool(BaseTool):
                 break
 
         if not matches:
-            suffix = f" en {args.file_pattern}" if args.file_pattern else ""
+            suffix = f" in {args.file_pattern}" if args.file_pattern else ""
             return ToolResult(
                 success=True,
-                output=f"Sin resultados para '{args.pattern}'{suffix}",
+                output=f"No results for '{args.pattern}'{suffix}",
             )
 
-        parts = [f"Encontrados {len(matches)} resultado(s) para '{args.pattern}':\n"]
+        parts = [f"Found {len(matches)} result(s) for '{args.pattern}':\n"]
         for m in matches:
             parts.append(f"📄 {m['file']}:{m['line']}")
             parts.append(m["context"])
@@ -167,45 +167,45 @@ class SearchCodeTool(BaseTool):
         result = "\n".join(parts)
         if len(matches) >= args.max_results:
             result += (
-                f"\n[Máximo de {args.max_results} resultados alcanzado. "
-                "Refina el patrón o añade file_pattern para reducir resultados.]"
+                f"\n[Maximum of {args.max_results} results reached. "
+                "Refine the pattern or add file_pattern to narrow results.]"
             )
 
         return ToolResult(success=True, output=result)
 
 
 class GrepTool(BaseTool):
-    """Busca texto literal en archivos del workspace."""
+    """Searches for literal text in workspace files."""
 
     def __init__(self, workspace_root: Path) -> None:
         self.name = "grep"
         self.description = (
-            "Busca texto literal en archivos. Más rápido que search_code para "
-            "búsquedas simples de strings exactos. "
-            "Útil para encontrar nombres de variables, imports específicos, strings, etc. "
-            "Ejemplo: grep(text='from architect import', file_pattern='*.py'). "
-            "Para patrones complejos usa search_code. "
-            "Para localizar archivos por nombre usa find_files."
+            "Search for literal text in files. Faster than search_code for "
+            "simple exact string searches. "
+            "Useful for finding variable names, specific imports, strings, etc. "
+            "Example: grep(text='from architect import', file_pattern='*.py'). "
+            "For complex patterns use search_code. "
+            "To locate files by name use find_files."
         )
         self.sensitive = False
         self.args_model = GrepArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Busca texto literal en el workspace.
+        """Search for literal text in the workspace.
 
-        Intenta usar rg (ripgrep) o grep del sistema primero por rendimiento.
-        Usa implementación Python como fallback.
+        Tries to use system rg (ripgrep) or grep first for performance.
+        Falls back to Python implementation.
 
         Args:
-            text: Texto literal a buscar
-            path: Directorio o archivo donde buscar
-            file_pattern: Filtro de nombres de archivo (glob)
-            max_results: Límite de resultados
-            case_sensitive: Sensibilidad a mayúsculas
+            text: Literal text to search for
+            path: Directory or file to search in
+            file_pattern: File name filter (glob)
+            max_results: Result limit
+            case_sensitive: Case sensitivity
 
         Returns:
-            ToolResult con coincidencias o error
+            ToolResult with matches or error
         """
         try:
             args = self.validate_args(kwargs)
@@ -217,21 +217,21 @@ class GrepTool(BaseTool):
         except (PathTraversalError, Exception) as e:
             return ToolResult(success=False, output="", error=str(e))
 
-        # Intentar con sistema primero (más rápido)
+        # Try system first (faster)
         system_result = self._system_grep(args, search_root)
         if system_result is not None:
             return system_result
 
-        # Fallback a Python
+        # Fallback to Python
         return self._python_grep(args, search_root)
 
     def _system_grep(self, args: GrepArgs, search_root: Path) -> ToolResult | None:
-        """Usa rg o grep del sistema si está disponible.
+        """Use system rg or grep if available.
 
         Returns:
-            ToolResult si el sistema tiene grep/rg, None para usar fallback Python
+            ToolResult if system has grep/rg, None to use Python fallback
         """
-        # Preferir ripgrep (mucho más rápido)
+        # Prefer ripgrep (much faster)
         grep_cmd = shutil.which("rg") or shutil.which("grep")
         if not grep_cmd:
             return None
@@ -242,16 +242,16 @@ class GrepTool(BaseTool):
             if is_rg:
                 cmd = [
                     grep_cmd,
-                    "--fixed-strings",   # Texto literal (no regex)
-                    "-n",                # Números de línea
-                    "--max-count", "1",  # Max matches por archivo
+                    "--fixed-strings",   # Literal text (not regex)
+                    "-n",                # Line numbers
+                    "--max-count", "1",  # Max matches per file
                     "-m", str(args.max_results),
                 ]
                 if not args.case_sensitive:
                     cmd.append("--ignore-case")
                 if args.file_pattern:
                     cmd += ["--glob", args.file_pattern]
-                # Excluir dirs estándar
+                # Exclude standard dirs
                 for d in sorted(SEARCH_IGNORE_DIRS):
                     cmd += ["--glob", f"!{d}"]
                 cmd += [args.text, str(search_root)]
@@ -259,9 +259,9 @@ class GrepTool(BaseTool):
                 # GNU grep / BSD grep
                 cmd = [
                     grep_cmd,
-                    "-r",               # Recursivo
-                    "-F",               # Fixed strings (no regex)
-                    "-n",               # Números de línea
+                    "-r",               # Recursive
+                    "-F",               # Fixed strings (not regex)
+                    "-n",               # Line numbers
                     "--max-count", str(args.max_results),
                 ]
                 if not args.case_sensitive:
@@ -279,19 +279,19 @@ class GrepTool(BaseTool):
                 timeout=15,
             )
 
-            # grep retorna 1 cuando no hay coincidencias (no es un error)
+            # grep returns 1 when there are no matches (not an error)
             output = proc.stdout.strip()
             if not output:
-                suffix = f" en {args.file_pattern}" if args.file_pattern else ""
+                suffix = f" in {args.file_pattern}" if args.file_pattern else ""
                 return ToolResult(
                     success=True,
-                    output=f"Sin resultados para '{args.text}'{suffix}",
+                    output=f"No results for '{args.text}'{suffix}",
                 )
 
-            # Reformatear output con paths relativos al workspace
+            # Reformat output with paths relative to workspace
             result_lines: list[str] = []
             for line in output.splitlines()[:args.max_results]:
-                # Reemplazar path absoluto por relativo
+                # Replace absolute path with relative
                 search_root_str = str(search_root)
                 if line.startswith(search_root_str):
                     rel = line[len(search_root_str):].lstrip("/\\")
@@ -301,19 +301,19 @@ class GrepTool(BaseTool):
 
             result = "\n".join(result_lines)
             if len(result_lines) >= args.max_results:
-                result += f"\n\n[Máximo de {args.max_results} resultados alcanzado.]"
+                result += f"\n\n[Maximum of {args.max_results} results reached.]"
 
             return ToolResult(success=True, output=result)
 
         except subprocess.TimeoutExpired:
-            return None  # Timeout → fallback a Python
+            return None  # Timeout -> fallback to Python
         except (OSError, FileNotFoundError):
-            return None  # grep no disponible → fallback a Python
+            return None  # grep not available -> fallback to Python
         except Exception:
-            return None  # Cualquier otro error → fallback a Python
+            return None  # Any other error -> fallback to Python
 
     def _python_grep(self, args: GrepArgs, search_root: Path) -> ToolResult:
-        """Implementación Python pura de búsqueda de texto literal."""
+        """Pure Python implementation of literal text search."""
         search_text = args.text if args.case_sensitive else args.text.lower()
         matches: list[str] = []
 
@@ -336,44 +336,44 @@ class GrepTool(BaseTool):
                 break
 
         if not matches:
-            suffix = f" en {args.file_pattern}" if args.file_pattern else ""
+            suffix = f" in {args.file_pattern}" if args.file_pattern else ""
             return ToolResult(
                 success=True,
-                output=f"Sin resultados para '{args.text}'{suffix}",
+                output=f"No results for '{args.text}'{suffix}",
             )
 
         result = "\n".join(matches)
         if len(matches) >= args.max_results:
-            result += f"\n\n[Máximo de {args.max_results} resultados alcanzado.]"
+            result += f"\n\n[Maximum of {args.max_results} results reached.]"
 
         return ToolResult(success=True, output=result)
 
 
 class FindFilesTool(BaseTool):
-    """Encuentra archivos por patrón glob de nombre."""
+    """Finds files by glob name pattern."""
 
     def __init__(self, workspace_root: Path) -> None:
         self.name = "find_files"
         self.description = (
-            "Encuentra archivos por nombre usando patrones glob. "
-            "Útil para localizar archivos de configuración, tests, módulos, etc. "
-            "Ejemplo: find_files(pattern='*.test.py'), find_files(pattern='Dockerfile*'), "
+            "Find files by name using glob patterns. "
+            "Useful for locating config files, tests, modules, etc. "
+            "Example: find_files(pattern='*.test.py'), find_files(pattern='Dockerfile*'), "
             "find_files(pattern='config.yaml'). "
-            "Para buscar contenido dentro de archivos usa grep o search_code."
+            "To search for content inside files use grep or search_code."
         )
         self.sensitive = False
         self.args_model = FindFilesArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Busca archivos por nombre en el workspace.
+        """Search for files by name in the workspace.
 
         Args:
-            pattern: Patrón glob para nombres de archivo
-            path: Directorio donde buscar
+            pattern: Glob pattern for file names
+            path: Directory to search in
 
         Returns:
-            ToolResult con la lista de archivos encontrados
+            ToolResult with the list of found files
         """
         try:
             args = self.validate_args(kwargs)
@@ -395,13 +395,13 @@ class FindFilesTool(BaseTool):
         if not found:
             return ToolResult(
                 success=True,
-                output=f"No se encontraron archivos que coincidan con '{args.pattern}'",
+                output=f"No files found matching '{args.pattern}'",
             )
 
         found.sort()
         output = (
-            f"Archivos que coinciden con '{args.pattern}' "
-            f"({len(found)} encontrado(s)):\n\n"
+            f"Files matching '{args.pattern}' "
+            f"({len(found)} found):\n\n"
             + "\n".join(f"  {f}" for f in found)
         )
 

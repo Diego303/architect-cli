@@ -1,27 +1,27 @@
 """
-Human Log — Formatter y helper para logs de trazabilidad del agente.
+Human Log — Formatter and helper for agent traceability logs.
 
-v3-M5+M6: Produce output legible con iconos y estructura clara.
-El usuario ve qué hace el agente paso a paso, sin ruido técnico.
+v3-M5+M6: Produces readable output with icons and clear structure.
+The user sees what the agent does step by step, without technical noise.
 
-Formato de ejemplo:
+Example format:
     ─── architect · build · gpt-4.1 ──────────────────
 
-    🔄 Paso 1 → Llamada al LLM (3 mensajes)
-       ✓ LLM respondió con 2 tool calls
+    🔄 Step 1 → LLM call (3 messages)
+       ✓ LLM responded with 2 tool calls
 
        🔧 read_file → src/main.py
-          ✓ OK (142 líneas)
+          ✓ OK
 
        🔧 edit_file → src/main.py
           ✓ OK
           🔍 Hook python-lint: OK
 
-    🔄 Paso 2 → Llamada al LLM (7 mensajes)
-       ✓ LLM respondió con texto final
+    🔄 Step 2 → LLM call (7 messages)
+       ✓ LLM responded with final text
 
-    ✅ Agente completado (2 pasos)
-       Razón: LLM decidió que terminó
+    ✅ Agent complete (2 steps)
+       Reason: LLM decided it was done
 """
 
 import logging
@@ -32,48 +32,50 @@ from .levels import HUMAN
 
 
 class HumanFormatter:
-    """Formateador de eventos de trazabilidad del agente.
+    """Formatter for agent traceability events.
 
-    Convierte eventos estructurados a texto legible con formato consistente.
-    Cada tipo de evento tiene su formato propio.
+    Converts structured events to readable text with consistent formatting.
+    Each event type has its own format. All user-facing strings resolve
+    via i18n at render time.
     """
 
     def format_event(self, event: str, **kw) -> str | None:
-        """Formatea un evento a texto legible.
+        """Format an event to readable text.
 
         Args:
-            event: Nombre del evento (ej: "llm.call", "tool.call")
-            **kw: Parámetros del evento
+            event: Event name (e.g. "llm.call", "tool.call")
+            **kw: Event parameters
 
         Returns:
-            Texto formateado o None si el evento no tiene formato definido
+            Formatted text or None if the event has no defined format
         """
+        from architect.i18n import t
+
         match event:
 
             # ── LLM ─────────────────────────────────────────────────────
             case "agent.step.start":
-                # Suprimido — se imprime en agent.llm.call
                 return None
 
             case "agent.llm.call":
                 step = kw.get("step", "?")
                 msgs = kw.get("messages_count", "?")
-                return f"\n🔄 Paso {step + 1} → Llamada al LLM ({msgs} mensajes)"
+                return t("human.llm_call", step=step + 1, messages=msgs)
 
             case "agent.llm.response":
                 tool_count = kw.get("tool_calls", 0)
                 if tool_count:
                     s = "s" if tool_count > 1 else ""
-                    return f"   ✓ LLM respondió con {tool_count} tool call{s}"
-                return "   ✓ LLM respondió con texto final"
+                    return t("human.llm_response_tools", count=tool_count, s=s)
+                return t("human.llm_response_text")
 
             case "agent.complete":
                 step = kw.get("step", "?")
                 cost = kw.get("cost")
                 cost_line = ""
                 if cost:
-                    cost_line = f"\n   Coste: {cost}"
-                return f"\n✅ Agente completado ({step} pasos)\n   Razón: LLM decidió que terminó{cost_line}"
+                    cost_line = t("human.cost_line", cost=cost)
+                return t("human.agent_complete", steps=step, cost_line=cost_line)
 
             # ── TOOLS ────────────────────────────────────────────────────
             case "agent.tool_call.execute":
@@ -83,16 +85,16 @@ class HumanFormatter:
                 is_mcp = kw.get("is_mcp", False)
                 if is_mcp:
                     server = kw.get("mcp_server", "")
-                    return f"\n   🌐 {tool} → {summary}  (MCP: {server})"
-                return f"\n   🔧 {tool} → {summary}"
+                    return t("human.tool_call_mcp", tool=tool, summary=summary, server=server)
+                return t("human.tool_call", tool=tool, summary=summary)
 
             case "agent.tool_call.complete":
                 tool = kw.get("tool", "?")
                 success = kw.get("success", True)
                 error = kw.get("error")
                 if success:
-                    return "      ✓ OK"
-                return f"      ✗ ERROR: {error}"
+                    return t("human.tool_ok")
+                return t("human.tool_error", error=error)
 
             case "agent.hook.complete":
                 hook = kw.get("hook", "")
@@ -100,46 +102,46 @@ class HumanFormatter:
                 detail = kw.get("detail", "")
                 icon = "✓" if success else "⚠️"
                 if hook:
-                    line = f"      🔍 Hook {hook}: {icon}"
+                    line = t("human.hook_complete", hook=hook, icon=icon)
                     if detail:
                         line += f" {detail}"
                     return line
-                return "      🔍 hooks ejecutados"
+                return t("human.hooks_executed")
 
             # ── SAFETY NETS ──────────────────────────────────────────────
             case "safety.user_interrupt":
-                return "\n⚠️  Interrumpido por el usuario"
+                return t("human.user_interrupt")
 
             case "safety.max_steps":
                 step = kw.get("step", "?")
                 mx = kw.get("max_steps", "?")
-                return f"\n⚠️  Límite de pasos alcanzado ({step}/{mx})\n    Pidiendo al agente que resuma..."
+                return t("human.max_steps", step=step, max_steps=mx)
 
             case "safety.budget_exceeded" | "safety.budget":
                 spent = kw.get("spent", kw.get("error", "?"))
                 budget = kw.get("budget", "?")
-                return f"\n⚠️  Presupuesto excedido (${spent}/{budget})\n    Pidiendo al agente que resuma..."
+                return t("human.budget_exceeded", spent=spent, budget=budget)
 
             case "safety.timeout":
-                return "\n⚠️  Timeout alcanzado\n    Pidiendo al agente que resuma..."
+                return t("human.timeout")
 
             case "safety.context_full":
-                return "\n⚠️  Contexto lleno\n    Pidiendo al agente que resuma..."
+                return t("human.context_full")
 
             # ── LLM ERRORS ──────────────────────────────────────────────
             case "agent.llm_error":
-                error = kw.get("error", "desconocido")
-                return f"\n❌ Error del LLM: {error}"
+                error = kw.get("error", "unknown")
+                return t("human.llm_error", error=error)
 
             case "agent.step_timeout":
                 seconds = kw.get("seconds", "?")
-                return f"\n⚠️  Step timeout ({seconds}s)\n    Pidiendo al agente que resuma..."
+                return t("human.step_timeout", seconds=seconds)
 
             # ── AGENT LIFECYCLE ──────────────────────────────────────────
             case "agent.closing":
                 reason = kw.get("reason", "?")
                 steps = kw.get("steps", "?")
-                return f"\n🔄 Cerrando ({reason}, {steps} pasos completados)"
+                return t("human.closing", reason=reason, steps=steps)
 
             case "agent.loop.complete":
                 status = kw.get("status", "?")
@@ -149,12 +151,12 @@ class HumanFormatter:
                 cost = kw.get("cost")
                 cost_line = ""
                 if cost:
-                    cost_line = f"\n   Coste: {cost}"
+                    cost_line = t("human.cost_line", cost=cost)
                 if status == "success":
-                    return f"  ({steps} pasos, {tool_calls} tool calls){cost_line}"
+                    return t("human.loop_complete_success", steps=steps, tool_calls=tool_calls, cost_line=cost_line)
                 else:
                     reason_str = f" — {stop_reason}" if stop_reason else ""
-                    return f"\n⚡ Detenido ({status}{reason_str}, {steps} pasos){cost_line}"
+                    return t("human.loop_complete_stopped", status=status, reason_str=reason_str, steps=steps, cost_line=cost_line)
 
             # ── PIPELINE ─────────────────────────────────────────────────
             case "pipeline.step_start":
@@ -168,7 +170,7 @@ class HumanFormatter:
 
             case "pipeline.step_skipped":
                 step = kw.get("step", "?")
-                return f"\n   ⏭️  Step '{step}' omitido (condición no cumplida)"
+                return t("human.pipeline_step_skipped", step=step)
 
             case "pipeline.step_done":
                 step = kw.get("step", "?")
@@ -178,7 +180,7 @@ class HumanFormatter:
                 icon = "✓" if status == "success" else "✗"
                 cost_str = f"${cost:.4f}" if cost else "$0"
                 dur_str = f"{duration:.1f}s" if duration else "0s"
-                return f"\n   {icon} Step '{step}' → {status} ({cost_str}, {dur_str})"
+                return t("human.pipeline_step_done", icon=icon, step=step, status=status, cost_str=cost_str, dur_str=dur_str)
 
             # ── RALPH LOOP ──────────────────────────────────────────────
             case "ralph.iteration_start":
@@ -198,7 +200,7 @@ class HumanFormatter:
                 total = kw.get("total", 0)
                 all_passed = kw.get("all_passed", False)
                 check_icon = " ✓" if all_passed else ""
-                return f"   🧪 Checks: {passed}/{total} passed{check_icon}"
+                return t("human.ralph_checks", passed=passed, total=total, check_icon=check_icon)
 
             case "ralph.iteration_done":
                 iteration = kw.get("iteration", "?")
@@ -208,7 +210,7 @@ class HumanFormatter:
                 icon = "✓" if status in ("success", "passed") else "✗"
                 cost_str = f"${cost:.4f}" if cost else "$0"
                 dur_str = f"{duration:.1f}s" if duration else "0s"
-                return f"   {icon} Iteration {iteration} → {status} ({cost_str}, {dur_str})"
+                return t("human.ralph_iteration_done", icon=icon, iteration=iteration, status=status, cost_str=cost_str, dur_str=dur_str)
 
             case "ralph.complete":
                 total_iterations = kw.get("total_iterations", "?")
@@ -216,12 +218,12 @@ class HumanFormatter:
                 total_cost = kw.get("total_cost", 0)
                 cost_str = f"${total_cost:.4f}" if total_cost else "$0"
                 icon = "✅" if status == "success" else "⚠️"
-                return f"\n{icon} Ralph complete — {total_iterations} iterations, {status} ({cost_str})"
+                return t("human.ralph_complete", icon=icon, total_iterations=total_iterations, status=status, cost_str=cost_str)
 
             # ── AUTO-REVIEWER ───────────────────────────────────────────
             case "reviewer.start":
                 diff_lines = kw.get("diff_lines", "?")
-                label = f" Auto-Review ({diff_lines} líneas de diff) "
+                label = t("human.reviewer_start_label", diff_lines=diff_lines)
                 bar = f"━{label:━<58}━"
                 return f"\n{bar}"
 
@@ -230,8 +232,8 @@ class HumanFormatter:
                 issues = kw.get("issues", 0)
                 score = kw.get("score", "?")
                 icon = "✓" if approved else "✗"
-                status = "aprobado" if approved else "no aprobado"
-                return f"   {icon} Review completo: {status}, {issues} issues, score {score}"
+                status = t("human.reviewer_status_approved") if approved else t("human.reviewer_status_rejected")
+                return t("human.reviewer_complete", icon=icon, status=status, issues=issues, score=score)
 
             # ── PARALLEL RUNS ───────────────────────────────────────────
             case "parallel.worker_done":
@@ -243,12 +245,12 @@ class HumanFormatter:
                 icon = "✓" if status == "success" else "✗"
                 cost_str = f"${cost:.4f}" if cost else "$0"
                 dur_str = f"{duration:.1f}s" if duration else "0s"
-                return f"   {icon} Worker {worker} ({model}) → {status} ({cost_str}, {dur_str})"
+                return t("human.parallel_worker_done", icon=icon, worker=worker, model=model, status=status, cost_str=cost_str, dur_str=dur_str)
 
             case "parallel.worker_error":
                 worker = kw.get("worker", "?")
                 error = kw.get("error", "?")
-                return f"   ✗ Worker {worker} → error: {error}"
+                return t("human.parallel_worker_error", worker=worker, error=error)
 
             case "parallel.complete":
                 total_workers = kw.get("total_workers", "?")
@@ -256,7 +258,7 @@ class HumanFormatter:
                 failed = kw.get("failed", 0)
                 total_cost = kw.get("total_cost", 0)
                 cost_str = f"${total_cost:.4f}" if total_cost else "$0"
-                return f"\n⚡ Parallel complete — {total_workers} workers: {succeeded} success, {failed} failed ({cost_str})"
+                return t("human.parallel_complete", total_workers=total_workers, succeeded=succeeded, failed=failed, cost_str=cost_str)
 
             # ── COMPETITIVE EVAL ────────────────────────────────────────
             case "competitive.model_done":
@@ -274,28 +276,28 @@ class HumanFormatter:
             case "competitive.ranking":
                 ranking = kw.get("ranking", [])
                 if not ranking:
-                    return "\n🏁 Ranking final: (sin resultados)"
+                    return t("human.competitive_ranking_empty")
                 names = [r.get("model", "?") for r in ranking]
-                return f"\n🏁 Ranking final: {' > '.join(names)}"
+                return t("human.competitive_ranking", ranking=" > ".join(names))
 
             # ── CONTEXT ──────────────────────────────────────────────────
             case "context.compressing":
                 exchanges = kw.get("tool_exchanges", "?")
-                return f"   📦 Comprimiendo contexto — {exchanges} intercambios"
+                return t("human.context_compressing", exchanges=exchanges)
 
             case "context.window_enforced":
                 removed = kw.get("removed_messages", "?")
-                return f"   📦 Ventana de contexto: eliminados {removed} mensajes antiguos"
+                return t("human.context_window_enforced", removed=removed)
 
             case _:
                 return None
 
 
 class HumanLogHandler(logging.Handler):
-    """Handler de logging que filtra eventos HUMAN y los formatea.
+    """Logging handler that filters HUMAN events and formats them.
 
-    Solo procesa registros de nivel HUMAN (25). El resto los ignora.
-    Escribe a stderr para no romper pipes stdout.
+    Only processes records at HUMAN level (25). Ignores everything else.
+    Writes to stderr so it doesn't break stdout pipes.
     """
 
     def __init__(self, stream=None) -> None:
@@ -303,7 +305,6 @@ class HumanLogHandler(logging.Handler):
         self.stream = stream or sys.stderr
         self.formatter_inst = HumanFormatter()
 
-    # Campos estándar de LogRecord (para fallback, extracción de record.__dict__)
     _RECORD_FIELDS = frozenset({
         "msg", "args", "levelname", "levelno", "pathname",
         "filename", "module", "exc_info", "exc_text", "stack_info",
@@ -313,19 +314,15 @@ class HumanLogHandler(logging.Handler):
         "log_level", "logger", "logger_name", "timestamp",
     })
 
-    # Campos añadidos por procesadores de structlog (para event dict de wrap_for_formatter)
     _STRUCTLOG_META = frozenset({
         "event", "level", "log_level", "logger", "logger_name", "timestamp",
     })
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            # Solo procesar eventos de nivel HUMAN exacto
             if record.levelno != HUMAN:
                 return
 
-            # Extraer event y kwargs del record.
-            # wrap_for_formatter almacena el event dict completo en record.msg
             if isinstance(record.msg, dict) and not record.args:
                 event_dict = record.msg
                 event = event_dict.get("event", "")
@@ -334,7 +331,6 @@ class HumanLogHandler(logging.Handler):
                     if k not in self._STRUCTLOG_META
                 }
             else:
-                # Fallback: extraer de atributos del record
                 event = getattr(record, "event", None) or record.getMessage()
                 kw = {
                     k: v for k, v in record.__dict__.items()
@@ -350,12 +346,12 @@ class HumanLogHandler(logging.Handler):
 
 
 class HumanLog:
-    """Helper tipado para emitir logs de nivel HUMAN desde el código.
+    """Typed helper for emitting HUMAN-level logs from code.
 
-    En lugar de llamar log.log(HUMAN, "event", ...) directamente,
-    usa métodos con nombres semánticos claros.
+    Instead of calling log.log(HUMAN, "event", ...) directly,
+    use methods with clear semantic names.
 
-    Uso:
+    Usage:
         hlog = HumanLog(structlog.get_logger())
         hlog.llm_call(step=0, messages_count=2)
         hlog.tool_call("read_file", {"path": "main.py"})
@@ -506,18 +502,20 @@ class HumanLog:
 
 
 def _summarize_args(tool_name: str, args: dict) -> str:
-    """Resume los argumentos de una tool para logs human legibles (v3-M6).
+    """Summarize tool arguments for human-readable logs.
 
-    Cada tool tiene su resumen óptimo para que el usuario entienda
-    qué está haciendo el agente de un vistazo.
+    Each tool has an optimal summary so the user understands
+    what the agent is doing at a glance.
 
     Args:
-        tool_name: Nombre del tool
-        args: Argumentos del tool
+        tool_name: Tool name
+        args: Tool arguments
 
     Returns:
-        String resumen (ej: "src/main.py", '"def foo" en src/')
+        Summary string (e.g. "src/main.py", '"def foo" in src/')
     """
+    from architect.i18n import t
+
     match tool_name:
         case "read_file" | "delete_file":
             return str(args.get("path", "?"))
@@ -526,13 +524,13 @@ def _summarize_args(tool_name: str, args: dict) -> str:
             path = args.get("path", "?")
             content = str(args.get("content", ""))
             lines = content.count("\n") + 1
-            return f"{path} ({lines} líneas)"
+            return t("human.summary_lines", path=path, lines=lines)
 
         case "edit_file":
             path = args.get("path", "?")
             old = str(args.get("old_str", args.get("old_content", "")))
             new = str(args.get("new_str", args.get("new_content", "")))
-            return f"{path} ({len(old.splitlines())}→{len(new.splitlines())} líneas)"
+            return t("human.summary_edit", path=path, old=len(old.splitlines()), new=len(new.splitlines()))
 
         case "apply_patch":
             path = args.get("path", "?")
@@ -545,13 +543,13 @@ def _summarize_args(tool_name: str, args: dict) -> str:
             pattern = args.get("pattern", "?")
             path = args.get("path", args.get("file_pattern", "."))
             short_pattern = pattern[:40] + "..." if len(str(pattern)) > 40 else pattern
-            return f'"{short_pattern}" en {path}'
+            return t("human.summary_search", pattern=short_pattern, path=path)
 
         case "grep":
             text = args.get("text", args.get("pattern", "?"))
             path = args.get("path", args.get("file_pattern", "."))
             short_text = str(text)[:40] + "..." if len(str(text)) > 40 else text
-            return f'"{short_text}" en {path}'
+            return t("human.summary_search", pattern=short_text, path=path)
 
         case "list_files" | "find_files":
             return str(args.get("path", args.get("pattern", ".")))
@@ -561,9 +559,8 @@ def _summarize_args(tool_name: str, args: dict) -> str:
             return cmd[:60] + "..." if len(cmd) > 60 else cmd
 
         case _:
-            # MCP u otra tool: mostrar primer arg o resumen genérico
             if args:
                 first_val = next(iter(args.values()), "")
                 val_str = str(first_val)
                 return val_str[:60] + "..." if len(val_str) > 60 else val_str
-            return "(sin args)"
+            return t("human.summary_no_args")

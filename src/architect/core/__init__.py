@@ -1,11 +1,11 @@
 """
-Módulo Core - Agent loop y gestión de estado.
+Core Module - Agent loop and state management.
 
-Exporta el AgentLoop, ContextBuilder, ContextManager y estructuras de estado,
-además de las utilidades de robustez (GracefulShutdown, StepTimeout).
+Exports AgentLoop, ContextBuilder, ContextManager, and state structures,
+as well as robustness utilities (GracefulShutdown, StepTimeout).
 
-v3: Añadido StopReason.
-v4-A1: Añadido sistema de hooks completo (HookEvent, HookExecutor, HooksRegistry).
+v3: Added StopReason.
+v4-A1: Added complete hook system (HookEvent, HookExecutor, HooksRegistry).
 """
 
 from .context import ContextBuilder, ContextManager

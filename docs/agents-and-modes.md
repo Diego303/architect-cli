@@ -19,6 +19,8 @@ Las tools de búsqueda (`search_code`, `grep`, `find_files`) están disponibles 
 
 ## System prompts (`agents/prompts.py`)
 
+> **v1.1.0**: Los prompts de los agentes default se resuelven de forma **lazy** via el sistema i18n. Esto significa que `DEFAULT_PROMPTS["build"]` retorna el prompt en el idioma configurado (`language` en config). La resolución ocurre en runtime, no en import-time, permitiendo cambiar el idioma después de importar el módulo. Ver [`i18n.md`](i18n.md).
+
 ### `PLAN_PROMPT`
 - Rol: analista y planificador.
 - **Nunca ejecuta acciones** — su output es el plan, no los cambios.

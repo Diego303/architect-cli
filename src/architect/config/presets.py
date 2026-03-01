@@ -1,15 +1,15 @@
 """
-Preset Configs — Templates de configuración para inicializar proyectos.
+Preset Configs -- Configuration templates for initializing projects.
 
-v4-D5: Permite inicializar un proyecto con configuraciones predefinidas
-según el stack tecnológico o perfil de seguridad deseado.
+v4-D5: Allows initializing a project with predefined configurations
+according to the desired technology stack or security profile.
 
-Presets disponibles:
-- python: Configuración para proyectos Python (pytest, ruff, mypy)
-- node-react: Configuración para proyectos Node.js/React
-- ci: Configuración mínima para CI/CD headless
-- paranoid: Configuración con máxima seguridad y guardrails estrictos
-- yolo: Configuración mínima sin restricciones
+Available presets:
+- python: Configuration for Python projects (pytest, ruff, mypy)
+- node-react: Configuration for Node.js/React projects
+- ci: Minimal configuration for headless CI/CD
+- paranoid: Configuration with maximum security and strict guardrails
+- yolo: Minimal configuration with no restrictions
 """
 
 from pathlib import Path
@@ -25,7 +25,7 @@ __all__ = [
 
 AVAILABLE_PRESETS = frozenset({"python", "node-react", "ci", "paranoid", "yolo"})
 
-# ── Template Contents ────────────────────────────────────────────────────────
+# -- Template Contents --------------------------------------------------------
 
 PRESET_TEMPLATES: dict[str, dict[str, str]] = {
     "python": {
@@ -250,16 +250,16 @@ PRESET_TEMPLATES: dict[str, dict[str, str]] = {
             "      timeout: 60\n"
             "  code_rules:\n"
             "    - pattern: 'eval\\('\n"
-            '      message: "Prohibido usar eval(). Usa alternativas seguras."\n'
+            '      message: "Using eval() is forbidden. Use safe alternatives."\n'
             "      severity: block\n"
             "    - pattern: 'import\\s+pickle'\n"
-            '      message: "Prohibido importar pickle por riesgo de seguridad."\n'
+            '      message: "Importing pickle is forbidden due to security risk."\n'
             "      severity: block\n"
             "    - pattern: 'os\\.system\\('\n"
-            '      message: "Prohibido usar os.system(). Usa subprocess."\n'
+            '      message: "Using os.system() is forbidden. Use subprocess."\n'
             "      severity: block\n"
             "    - pattern: '\\bprint\\s*\\('\n"
-            '      message: "Usa el módulo logging en vez de print()."\n'
+            '      message: "Use the logging module instead of print()."\n'
             "      severity: warn\n\n"
             "memory:\n"
             "  enabled: true\n\n"
@@ -296,20 +296,20 @@ PRESET_TEMPLATES: dict[str, dict[str, str]] = {
 
 
 class PresetManager:
-    """Gestiona presets de configuración para inicializar proyectos.
+    """Manages configuration presets for initializing projects.
 
-    Los presets son templates de configuración que incluyen:
-    - .architect.md (instrucciones del proyecto)
-    - config.yaml (configuración de architect)
+    Presets are configuration templates that include:
+    - .architect.md (project instructions)
+    - config.yaml (architect configuration)
 
-    Se copian al directorio del proyecto, creando la estructura necesaria.
+    They are copied to the project directory, creating the necessary structure.
     """
 
     def __init__(self, workspace_root: str) -> None:
-        """Inicializa el manager.
+        """Initialize the manager.
 
         Args:
-            workspace_root: Directorio raíz del proyecto.
+            workspace_root: Root directory of the project.
         """
         self.root = Path(workspace_root)
         self.log = logger.bind(component="presets")
@@ -317,22 +317,22 @@ class PresetManager:
     def apply_preset(
         self, preset_name: str, overwrite: bool = False
     ) -> list[str]:
-        """Aplica un preset al proyecto.
+        """Apply a preset to the project.
 
         Args:
-            preset_name: Nombre del preset (python, node-react, ci, paranoid, yolo).
-            overwrite: Si True, sobrescribe archivos existentes.
+            preset_name: Name of the preset (python, node-react, ci, paranoid, yolo).
+            overwrite: If True, overwrites existing files.
 
         Returns:
-            Lista de archivos creados/actualizados.
+            List of files created/updated.
 
         Raises:
-            ValueError: Si el preset no existe.
+            ValueError: If the preset does not exist.
         """
         if preset_name not in AVAILABLE_PRESETS:
             raise ValueError(
-                f"Preset '{preset_name}' no existe. "
-                f"Disponibles: {', '.join(sorted(AVAILABLE_PRESETS))}"
+                f"Preset '{preset_name}' does not exist. "
+                f"Available: {', '.join(sorted(AVAILABLE_PRESETS))}"
             )
 
         templates = PRESET_TEMPLATES[preset_name]
@@ -357,7 +357,7 @@ class PresetManager:
                 preset=preset_name,
             )
 
-        # Crear directorio .architect si no existe
+        # Create .architect directory if it doesn't exist
         architect_dir = self.root / ".architect"
         architect_dir.mkdir(parents=True, exist_ok=True)
 
@@ -370,10 +370,10 @@ class PresetManager:
         return created_files
 
     def list_presets(self) -> list[dict[str, str]]:
-        """Lista presets disponibles con descripción.
+        """List available presets with descriptions.
 
         Returns:
-            Lista de {name, description} para cada preset.
+            List of {name, description} for each preset.
         """
         descriptions = {
             "python": "Python project (pytest, ruff, mypy, black)",
@@ -388,20 +388,20 @@ class PresetManager:
         ]
 
     def get_preset_files(self, preset_name: str) -> dict[str, str]:
-        """Obtiene los archivos de un preset sin aplicarlos.
+        """Get the files of a preset without applying them.
 
         Args:
-            preset_name: Nombre del preset.
+            preset_name: Name of the preset.
 
         Returns:
-            Dict de {filename: content}.
+            Dict of {filename: content}.
 
         Raises:
-            ValueError: Si el preset no existe.
+            ValueError: If the preset does not exist.
         """
         if preset_name not in AVAILABLE_PRESETS:
             raise ValueError(
-                f"Preset '{preset_name}' no existe. "
-                f"Disponibles: {', '.join(sorted(AVAILABLE_PRESETS))}"
+                f"Preset '{preset_name}' does not exist. "
+                f"Available: {', '.join(sorted(AVAILABLE_PRESETS))}"
             )
         return dict(PRESET_TEMPLATES[preset_name])

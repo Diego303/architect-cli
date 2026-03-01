@@ -6,7 +6,63 @@ Para el historial detallado de cada fase y tarea individual, consultar `SEGUIMIE
 
 ---
 
-## Release v1.1.0 — 2026-02-28
+## Release v1.1.0 — 2026-03-01
+
+### Internacionalización (i18n) + Traducción completa a inglés
+
+Se implementó un sistema completo de i18n con soporte para inglés (default) y español, y se tradujo todo el código fuente a inglés.
+
+**Nuevo módulo `src/architect/i18n/`**:
+
+| Archivo | Descripción |
+|---------|-------------|
+| `__init__.py` | API pública: `t()`, `set_language()`, `get_language()`, `get_prompt()` |
+| `registry.py` | `LanguageRegistry` singleton thread-safe con fallback chain (current → EN → raw key) |
+| `en.py` | 160 keys en inglés organizadas en 14 namespaces |
+| `es.py` | 160 keys en español con paridad completa |
+
+**Namespaces de i18n (160 keys)**:
+
+| Namespace | Keys | Cobertura |
+|-----------|------|-----------|
+| `human.*` | 41 | HumanFormatter — todos los mensajes de pasos y herramientas |
+| `competitive.*` | 17 | Reporte de evaluación competitiva |
+| `ralph.*` | 16 | Prompts de iteración y archivo de progreso |
+| `eval.*` | 15 | Self-evaluator prompts y feedback |
+| `health.*` | 14 | Reporte de delta de salud del código |
+| `dispatch.*` | 13 | Prompts de sub-agentes y descripciones de tools |
+| `guardrail.*` | 10 | Mensajes de bloqueo de guardrails |
+| `context.*` | 9 | Marcadores de resumen y truncado |
+| `pipeline.*` | 7 | Labels de pipelines |
+| `close.*` | 5 | Instrucciones de cierre de safety nets |
+| `prompt.*` | 5 | System prompts de agentes (build, plan, resume, review) |
+| `reviewer.*` | 5 | Mensajes del auto-reviewer |
+| `dryrun.*` | 3 | Labels de dry run |
+
+**Resolución lazy**: Todas las strings se resuelven en runtime via `t()`, no en import-time. Esto es crítico porque `set_language()` se llama después de importar los módulos. Se usan proxies lazy: `_PromptProxy` para `DEFAULT_PROMPTS`, `_LazyAgentDict` para `DEFAULT_AGENTS`, `_LazyPrompt` para `REVIEW_SYSTEM_PROMPT`, `_LazyStr` para constantes backward-compatible (`BUILD_PROMPT`, etc.).
+
+| Cambio | Archivo |
+|--------|---------|
+| API i18n + registry + 160 keys EN + 160 keys ES | `src/architect/i18n/` (4 archivos nuevos) |
+| Campo `language: Literal["en", "es"] = "en"` | `src/architect/config/schema.py` |
+| Env var `ARCHITECT_LANGUAGE` | `src/architect/config/loader.py` |
+| `set_language()` al inicio del CLI | `src/architect/cli.py` |
+| 41 mensajes HumanFormatter → `t()` | `src/architect/logging/human.py` |
+| Prompts lazy via `_PromptProxy` + `_LazyStr` | `src/architect/agents/prompts.py` |
+| `DEFAULT_AGENTS` lazy via `_LazyAgentDict` | `src/architect/agents/registry.py` |
+| `REVIEW_SYSTEM_PROMPT` lazy via `_LazyPrompt` | `src/architect/agents/reviewer.py` |
+| Close instructions → `t()` | `src/architect/core/loop.py` |
+| Context strings → `t()` | `src/architect/core/context.py` |
+| Evaluator strings → `t()` | `src/architect/core/evaluator.py` |
+| Health report labels → `t()` | `src/architect/core/health.py` |
+| Guardrail messages → `t()` | `src/architect/core/guardrails.py` |
+| Competitive report → `t()` | `src/architect/features/competitive.py` |
+| Ralph prompts/progress → `t()` | `src/architect/features/ralph.py` |
+| Dispatch strings → English directo | `src/architect/tools/dispatch.py` |
+| Commands strings → English directo | `src/architect/tools/commands.py` |
+| CLI: ~50 help strings, ~80 echo msgs, docstrings, comments | `src/architect/cli.py` |
+| Docstrings + comments → English en ~50 archivos | Todo `src/architect/` |
+| 25 tests i18n + ~30 assertions actualizadas (ES→EN) | `tests/test_i18n/`, múltiples test files |
 
 ### Guardrails: `sensitive_files` — Protección de lectura y escritura
 
@@ -80,7 +136,7 @@ Las features de ejecución de alto nivel (pipelines, ralph loop, auto-review, pa
 | 14 case handlers en `HumanFormatter` + 11 métodos en `HumanLog` | `src/architect/logging/human.py` |
 | 56 tests nuevos (integration + formatter + HumanLog por feature) | `tests/test_pipelines/`, `test_ralph/`, `test_reviewer/`, `test_parallel/`, `test_competitive/` |
 
-**Tests**: 795 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+**Tests**: 834 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
 
 ---
 
@@ -183,7 +239,7 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | Métrica | Valor |
 |---------|-------|
 | **Versión** | 1.1.0 |
-| **Tests unitarios** | 739 passed, 9 skipped, 0 failures |
+| **Tests unitarios** | 834 passed, 9 skipped, 0 failures |
 | **E2E checks** | 31 |
 | **Comandos CLI** | 15 |
 | **Tools del agente** | 11+ (locales + MCP + dispatch) |
@@ -192,26 +248,28 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | **Presets** | 5 (python, node-react, ci, paranoid, yolo) |
 | **Exporters telemetría** | 3 (otlp, console, json-file) |
 | **Formatos de reporte** | 3 (json, markdown, github) |
+| **Idiomas soportados** | 2 (English default, Español) |
+| **Keys i18n** | 160 (14 namespaces, paridad EN/ES) |
 | **Bugs QA corregidos** | 12+ (QA1: 5, QA2: fixes, QA4: 3, QA-D: 7) |
 
 ### Comandos CLI disponibles
 
 ```
-architect run          Ejecutar tarea con agente
-architect loop         Iteración automática con checks (Ralph Loop)
-architect pipeline     Ejecutar workflow YAML multi-step
-architect parallel     Ejecución paralela en worktrees
-architect parallel-cleanup  Limpiar worktrees
-architect eval         Evaluación competitiva multi-modelo
-architect init         Inicializar proyecto con presets
-architect sessions     Listar sesiones guardadas
-architect resume       Reanudar sesión
-architect cleanup      Limpiar sesiones antiguas
-architect agents       Listar agentes disponibles
-architect validate-config  Validar configuración
-architect skill        Gestión de skills
-architect rollback     Rollback a checkpoint
-architect history      Listar checkpoints
+architect run              Run a task with an agent
+architect loop             Automatic iteration with checks (Ralph Loop)
+architect pipeline         Run multi-step YAML workflow
+architect parallel         Parallel execution in worktrees
+architect parallel-cleanup Clean up worktrees
+architect eval             Competitive multi-model evaluation
+architect init             Initialize project with presets
+architect sessions         List saved sessions
+architect resume           Resume session
+architect cleanup          Clean up old sessions
+architect agents           List available agents
+architect validate-config  Validate configuration
+architect skill            Skill management
+architect rollback         Rollback to checkpoint
+architect history          List checkpoints
 ```
 
 ### Estructura del proyecto
@@ -219,31 +277,36 @@ architect history      Listar checkpoints
 ```
 src/architect/
 ├── __init__.py            # __version__ = "1.1.0"
-├── cli.py                 # Entry point — 15 comandos Click
+├── cli.py                 # Entry point — 15 Click commands
+├── i18n/                  # NEW: Internationalization (EN/ES)
+│   ├── __init__.py        # API: t(), set_language(), get_prompt()
+│   ├── registry.py        # LanguageRegistry singleton (thread-safe)
+│   ├── en.py              # 160 English keys (canonical)
+│   └── es.py              # 160 Spanish keys
 ├── core/
-│   ├── loop.py            # AgentLoop — while True con safety nets
-│   ├── context.py         # ContextManager — pruning y compresión
-│   ├── evaluator.py       # SelfEvaluator — auto-evaluación
+│   ├── loop.py            # AgentLoop — while True with safety nets
+│   ├── context.py         # ContextManager — pruning and compression
+│   ├── evaluator.py       # SelfEvaluator — auto-evaluation
 │   ├── state.py           # AgentState
-│   ├── hooks.py           # HookExecutor — 10 eventos lifecycle
-│   ├── guardrails.py      # GuardrailsEngine — seguridad determinista
-│   └── health.py          # CodeHealthAnalyzer — métricas de calidad
+│   ├── hooks.py           # HookExecutor — 10 lifecycle events
+│   ├── guardrails.py      # GuardrailsEngine — deterministic security
+│   └── health.py          # CodeHealthAnalyzer — quality metrics
 ├── agents/
-│   ├── prompts.py         # System prompts por agente
-│   ├── registry.py        # AgentRegistry + custom agents
-│   └── reviewer.py        # AutoReviewer — review post-build
+│   ├── prompts.py         # System prompts per agent (lazy i18n)
+│   ├── registry.py        # AgentRegistry + custom agents (lazy i18n)
+│   └── reviewer.py        # AutoReviewer — post-build review (lazy i18n)
 ├── tools/
 │   ├── base.py            # BaseTool + ToolResult
 │   ├── filesystem.py      # read/write/delete/list
 │   ├── editing.py         # edit_file (str-replace)
 │   ├── patch.py           # apply_patch (unified diff)
 │   ├── search.py          # search_code, grep, find_files
-│   ├── commands.py        # run_command (4 capas seguridad)
+│   ├── commands.py        # run_command (4 security layers)
 │   ├── dispatch.py        # dispatch_subagent (explore/test/review)
 │   ├── registry.py        # ToolRegistry
 │   └── setup.py           # register_all_tools()
 ├── execution/
-│   ├── engine.py          # ExecutionEngine — pipeline completo
+│   ├── engine.py          # ExecutionEngine — full pipeline
 │   ├── policies.py        # ConfirmationPolicy
 │   └── validators.py      # validate_path()
 ├── features/
@@ -253,19 +316,19 @@ src/architect/
 │   ├── ralph.py           # RalphLoop
 │   ├── parallel.py        # ParallelRunner + worktrees
 │   ├── pipelines.py       # PipelineRunner + YAML
-│   └── checkpoints.py     # CheckpointManager
+│   ├── checkpoints.py     # CheckpointManager
 │   └── competitive.py     # CompetitiveEval
 ├── skills/
 │   ├── loader.py          # SkillsLoader
 │   ├── installer.py       # SkillInstaller
 │   └── memory.py          # ProceduralMemory
 ├── config/
-│   ├── schema.py          # AppConfig (Pydantic v2)
-│   ├── loader.py          # ConfigLoader
-│   └── presets.py          # PresetManager
+│   ├── schema.py          # AppConfig (Pydantic v2) + language field
+│   ├── loader.py          # ConfigLoader + ARCHITECT_LANGUAGE env
+│   └── presets.py         # PresetManager
 ├── telemetry/
 │   └── otel.py            # ArchitectTracer / NoopTracer
-├── costs/                 # CostTracker + precios
+├── costs/                 # CostTracker + prices
 ├── llm/                   # LLMAdapter + LocalLLMCache
 ├── mcp/                   # MCPClient JSON-RPC 2.0
 ├── indexer/               # RepoIndexer + IndexCache

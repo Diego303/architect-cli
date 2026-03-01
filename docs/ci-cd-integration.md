@@ -93,6 +93,10 @@ architect run "PROMPT" \
   --self-eval basic          # Auto-evaluación post-ejecución
 ```
 
+### Idioma de salida (v1.1.0)
+
+Los mensajes del sistema (logs HUMAN, reportes, guardrails) están en **inglés por defecto**. Si necesitas salida en español, configura la env var `ARCHITECT_LANGUAGE=es` o `language: es` en el YAML.
+
 ---
 
 ## GitHub Actions

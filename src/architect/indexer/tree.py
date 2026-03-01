@@ -1,17 +1,17 @@
 """
-Indexador de repositorio — construcción del árbol de archivos.
+Repository indexer -- file tree construction.
 
-Construye un índice ligero del workspace para que el agente pueda
-conocer la estructura del proyecto sin tener que leer cada archivo.
+Builds a lightweight index of the workspace so the agent can
+know the project structure without having to read each file.
 
-El índice incluye:
-- Árbol de directorios formateado
-- Conteo de archivos y líneas por directorio
-- Lenguaje detectado por extensión
-- Estadísticas globales (total archivos, líneas, lenguajes)
+The index includes:
+- Formatted directory tree
+- File and line count per directory
+- Language detected by extension
+- Global statistics (total files, lines, languages)
 
-Diseñado para ser rápido (~100ms en repos medianos) y respetar
-patrones de exclusión típicos (.git, node_modules, __pycache__, etc.).
+Designed to be fast (~100ms on medium repos) and respect
+typical exclusion patterns (.git, node_modules, __pycache__, etc.).
 """
 
 import fnmatch
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-# --- Mapeo de extensiones a lenguajes ---
+# --- Extension to language mapping ---
 
 EXT_MAP: dict[str, str] = {
     # Python
@@ -69,7 +69,7 @@ EXT_MAP: dict[str, str] = {
     ".dockerfile": "dockerfile",
 }
 
-# Nombres especiales (sin extensión)
+# Special names (no extension)
 SPECIAL_NAMES: dict[str, str] = {
     "dockerfile": "dockerfile",
     "makefile": "makefile",
@@ -83,7 +83,7 @@ SPECIAL_NAMES: dict[str, str] = {
     ".eslintrc": "config",
 }
 
-# Directorios ignorados por defecto
+# Default ignored directories
 DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset({
     ".git",
     "node_modules",
@@ -104,7 +104,7 @@ DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset({
     ".DS_Store",
 })
 
-# Patrones de archivos ignorados por defecto
+# Default ignored file patterns
 DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "*.min.js",
     "*.min.css",
@@ -114,56 +114,56 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "*.pyd",
     ".DS_Store",
     "Thumbs.db",
-    "*.lock",          # package-lock.json, yarn.lock (muy verbosos)
+    "*.lock",          # package-lock.json, yarn.lock (very verbose)
     "*.log",
 )
 
-# Límite por defecto del tamaño de archivo (1 MB)
+# Default maximum file size (1 MB)
 MAX_FILE_SIZE_DEFAULT = 1_000_000
 
-# Límite de archivos para árbol detallado vs compacto
+# File limit for detailed vs compact tree
 MAX_TREE_FILES_DETAILED = 300
 
 
-# --- Estructuras de datos ---
+# --- Data structures ---
 
 @dataclass
 class FileInfo:
-    """Información básica sobre un archivo del workspace."""
+    """Basic information about a workspace file."""
 
-    path: str           # Relativo al workspace
+    path: str           # Relative to workspace
     size_bytes: int
     lines: int
-    language: str       # Detectado por extensión
+    language: str       # Detected by extension
     last_modified: float
 
 
 @dataclass
 class RepoIndex:
-    """Índice completo del workspace."""
+    """Complete workspace index."""
 
-    files: dict[str, FileInfo]   # path relativo → FileInfo
-    tree_summary: str            # Árbol formateado (listo para insertar en prompt)
+    files: dict[str, FileInfo]   # relative path -> FileInfo
+    tree_summary: str            # Formatted tree (ready to insert in prompt)
     total_files: int
     total_lines: int
-    languages: dict[str, int]    # language → número de archivos, ordenado por frecuencia
-    build_time_ms: float         # Tiempo de construcción en ms
+    languages: dict[str, int]    # language -> number of files, ordered by frequency
+    build_time_ms: float         # Build time in ms
 
 
-# --- Indexador ---
+# --- Indexer ---
 
 class RepoIndexer:
-    """Construye un índice ligero del workspace.
+    """Builds a lightweight index of the workspace.
 
-    Recorre el workspace ignorando directorios y archivos comunes
-    (node_modules, .git, __pycache__, etc.) y construye un índice
-    con información básica de cada archivo.
+    Traverses the workspace ignoring common directories and files
+    (node_modules, .git, __pycache__, etc.) and builds an index
+    with basic information about each file.
 
-    El índice se puede usar para:
-    - Mostrar la estructura del proyecto en el system prompt
-    - Responder preguntas sobre qué archivos existen
-    - Guiar al agente para que use search_code / grep en vez de
-      listar directorios uno a uno
+    The index can be used to:
+    - Show the project structure in the system prompt
+    - Answer questions about which files exist
+    - Guide the agent to use search_code / grep instead of
+      listing directories one by one
     """
 
     def __init__(
@@ -173,13 +173,13 @@ class RepoIndexer:
         exclude_dirs: list[str] | None = None,
         exclude_patterns: list[str] | None = None,
     ) -> None:
-        """Inicializa el indexador.
+        """Initialize the indexer.
 
         Args:
-            workspace_root: Directorio raíz del workspace
-            max_file_size: Tamaño máximo de archivo a indexar (bytes)
-            exclude_dirs: Directorios adicionales a excluir
-            exclude_patterns: Patrones de archivos adicionales a excluir
+            workspace_root: Root directory of the workspace
+            max_file_size: Maximum file size to index (bytes)
+            exclude_dirs: Additional directories to exclude
+            exclude_patterns: Additional file patterns to exclude
         """
         self.root = workspace_root.resolve()
         self.max_file_size = max_file_size
@@ -187,18 +187,18 @@ class RepoIndexer:
         self.ignore_patterns = DEFAULT_IGNORE_PATTERNS + tuple(exclude_patterns or [])
 
     def build_index(self) -> RepoIndex:
-        """Construye el índice completo del workspace.
+        """Build the complete workspace index.
 
         Returns:
-            RepoIndex con todos los archivos indexados y árbol formateado.
-            Típicamente tarda <200ms en repos de 500 archivos.
+            RepoIndex with all indexed files and formatted tree.
+            Typically takes <200ms on repos with 500 files.
         """
         start_ms = time.monotonic() * 1000
 
         files: dict[str, FileInfo] = {}
         for file_path in self._walk():
             rel_path = str(file_path.relative_to(self.root))
-            # Normalizar separadores para compatibilidad cross-platform
+            # Normalize separators for cross-platform compatibility
             rel_path = rel_path.replace("\\", "/")
             info = self._analyze_file(file_path, rel_path)
             files[rel_path] = info
@@ -218,13 +218,13 @@ class RepoIndexer:
         )
 
     def _walk(self) -> Iterator[Path]:
-        """Recorre el workspace respetando exclusiones.
+        """Traverse the workspace respecting exclusions.
 
-        Modifica dirnames in-place para evitar descender en directorios
-        ignorados (mucho más eficiente que filtrar después).
+        Modifies dirnames in-place to avoid descending into ignored
+        directories (much more efficient than filtering afterwards).
         """
         for dirpath, dirnames, filenames in os.walk(self.root):
-            # Excluir directorios ignorados (in-place para cortar el árbol)
+            # Exclude ignored directories (in-place to prune the tree)
             dirnames[:] = sorted(
                 d for d in dirnames
                 if d not in self.ignore_dirs
@@ -233,13 +233,13 @@ class RepoIndexer:
             )
 
             for filename in filenames:
-                # Excluir archivos por patrón
+                # Exclude files by pattern
                 if any(fnmatch.fnmatch(filename, p) for p in self.ignore_patterns):
                     continue
 
                 file_path = Path(dirpath) / filename
 
-                # Excluir archivos demasiado grandes o inaccesibles
+                # Exclude files that are too large or inaccessible
                 try:
                     stat = file_path.stat()
                     if stat.st_size > self.max_file_size:
@@ -250,7 +250,7 @@ class RepoIndexer:
                 yield file_path
 
     def _analyze_file(self, path: Path, rel_path: str) -> FileInfo:
-        """Analiza un archivo y retorna su FileInfo."""
+        """Analyze a file and return its FileInfo."""
         try:
             stat = path.stat()
             size = stat.st_size
@@ -271,13 +271,13 @@ class RepoIndexer:
         )
 
     def _count_lines(self, path: Path, size: int) -> int:
-        """Cuenta líneas de un archivo de texto."""
+        """Count lines in a text file."""
         if size == 0:
             return 0
         try:
             content = path.read_bytes()
             count = content.count(b"\n")
-            # Si el archivo no termina en newline, la última línea no tiene \n
+            # If the file doesn't end with a newline, the last line has no \n
             if content and not content.endswith(b"\n"):
                 count += 1
             return count
@@ -285,33 +285,33 @@ class RepoIndexer:
             return 0
 
     def _detect_language(self, path: Path) -> str:
-        """Detecta el lenguaje del archivo por extensión o nombre especial."""
+        """Detect the file language by extension or special name."""
         name_lower = path.name.lower()
 
-        # Comprobar nombres especiales (sin extensión) primero
+        # Check special names (no extension) first
         if name_lower in SPECIAL_NAMES:
             return SPECIAL_NAMES[name_lower]
 
-        # Luego por extensión
+        # Then by extension
         return EXT_MAP.get(path.suffix.lower(), "unknown")
 
     def _count_languages(self, files: dict[str, FileInfo]) -> dict[str, int]:
-        """Agrupa y cuenta archivos por lenguaje, ordenado por frecuencia."""
+        """Group and count files by language, ordered by frequency."""
         counts: dict[str, int] = {}
         for info in files.values():
             if info.language != "unknown":
                 counts[info.language] = counts.get(info.language, 0) + 1
-        # Ordenar por frecuencia descendente
+        # Sort by descending frequency
         return dict(sorted(counts.items(), key=lambda x: x[1], reverse=True))
 
     def _format_tree(self, files: dict[str, FileInfo]) -> str:
-        """Genera representación en árbol del workspace.
+        """Generate tree representation of the workspace.
 
-        Para repos ≤ MAX_TREE_FILES_DETAILED archivos, muestra cada archivo.
-        Para repos más grandes, usa formato compacto por directorio.
+        For repos with <= MAX_TREE_FILES_DETAILED files, shows each file.
+        For larger repos, uses compact format by directory.
         """
         if not files:
-            return "(workspace vacío)"
+            return "(empty workspace)"
 
         if len(files) > MAX_TREE_FILES_DETAILED:
             return self._format_tree_compact(files)
@@ -319,9 +319,9 @@ class RepoIndexer:
             return self._format_tree_detailed(files)
 
     def _format_tree_detailed(self, files: dict[str, FileInfo]) -> str:
-        """Árbol detallado con todos los archivos visibles."""
-        # Construir estructura jerárquica: dict anidado donde
-        # las hojas son FileInfo y los nodos internos son dict
+        """Detailed tree with all files visible."""
+        # Build hierarchical structure: nested dict where
+        # leaves are FileInfo and internal nodes are dict
         tree: dict = {}
         for rel_path, info in files.items():
             parts = Path(rel_path).parts
@@ -340,8 +340,8 @@ class RepoIndexer:
         lines: list[str],
         prefix: str,
     ) -> None:
-        """Renderiza un nodo del árbol recursivamente con conectores Unicode."""
-        # Separar en directorios (dict) y archivos (FileInfo)
+        """Render a tree node recursively with Unicode connectors."""
+        # Separate into directories (dict) and files (FileInfo)
         dirs = sorted((k, v) for k, v in node.items() if isinstance(v, dict))
         file_items = sorted(
             (k, v) for k, v in node.items() if isinstance(v, FileInfo)
@@ -354,12 +354,12 @@ class RepoIndexer:
             child_prefix = prefix + ("    " if is_last else "│   ")
 
             if isinstance(value, dict):
-                # Directorio: mostrar conteo de archivos descendientes
+                # Directory: show descendant file count
                 n_files = self._count_files_in_node(value)
-                lines.append(f"{prefix}{connector}{name}/ ({n_files} archivos)")
+                lines.append(f"{prefix}{connector}{name}/ ({n_files} files)")
                 self._render_node(value, lines, child_prefix)
             else:
-                # Archivo: mostrar líneas
+                # File: show lines
                 info: FileInfo = value
                 lang_str = f", {info.language}" if info.language != "unknown" else ""
                 lines.append(
@@ -367,7 +367,7 @@ class RepoIndexer:
                 )
 
     def _count_files_in_node(self, node: dict) -> int:
-        """Cuenta archivos en un nodo del árbol recursivamente."""
+        """Count files in a tree node recursively."""
         count = 0
         for value in node.values():
             if isinstance(value, FileInfo):
@@ -377,12 +377,12 @@ class RepoIndexer:
         return count
 
     def _format_tree_compact(self, files: dict[str, FileInfo]) -> str:
-        """Árbol compacto para repos grandes (agrupa por directorio de primer nivel).
+        """Compact tree for large repos (groups by first-level directory).
 
-        Muestra cada directorio de primer nivel con estadísticas de sus archivos.
-        Los subdirectorios se agrupan sin listar archivos individuales.
+        Shows each first-level directory with statistics of its files.
+        Subdirectories are grouped without listing individual files.
         """
-        # Separar archivos en raíz vs archivos en subdirectorios
+        # Separate files at root vs files in subdirectories
         root_files: list[FileInfo] = []
         dirs: dict[str, list[FileInfo]] = {}
 
@@ -396,14 +396,14 @@ class RepoIndexer:
 
         lines: list[str] = []
 
-        # Archivos en la raíz (directamente)
+        # Files at root (directly)
         for i, info in enumerate(sorted(root_files, key=lambda f: f.path)):
             is_last_root = (i == len(root_files) - 1) and not dirs
             connector = "└── " if is_last_root else "├── "
             name = Path(info.path).name
             lines.append(f"{connector}{name} ({info.lines}L)")
 
-        # Directorios
+        # Directories
         sorted_dirs = sorted(dirs.items())
         for dir_idx, (dir_name, dir_files) in enumerate(sorted_dirs):
             is_last_dir = dir_idx == len(sorted_dirs) - 1
@@ -415,10 +415,10 @@ class RepoIndexer:
             lang_str = f", {', '.join(langs[:3])}" if langs else ""
             lines.append(
                 f"{connector}{dir_name}/ "
-                f"({len(dir_files)} archivos, {total_lines}L{lang_str})"
+                f"({len(dir_files)} files, {total_lines}L{lang_str})"
             )
 
-            # Agrupar en subdirectorios de segundo nivel
+            # Group by second-level subdirectories
             subdirs: dict[str, list[FileInfo]] = {}
             subroot: list[FileInfo] = []
 
@@ -435,7 +435,7 @@ class RepoIndexer:
                 for f in [Path(finfo.path).name]
             ]
 
-            # Mostrar subdirectorios
+            # Show subdirectories
             sorted_subdirs = sorted(subdirs.items())
             all_children = sorted_subdirs + [
                 (Path(f.path).name, [f]) for f in sorted(subroot, key=lambda x: x.path)
@@ -447,12 +447,12 @@ class RepoIndexer:
                 child_connector = "└── " if is_last_child else "├── "
 
                 if child_name in dict(sorted_subdirs):
-                    # Es un subdirectorio
+                    # It's a subdirectory
                     n = len(child_files)
                     nl = sum(f.lines for f in child_files)
-                    lines.append(f"{child_prefix}{child_connector}{child_name}/ ({n} archivos, {nl}L)")
+                    lines.append(f"{child_prefix}{child_connector}{child_name}/ ({n} files, {nl}L)")
                 else:
-                    # Es un archivo directo
+                    # It's a direct file
                     info = child_files[0]
                     lines.append(f"{child_prefix}{child_connector}{child_name} ({info.lines}L)")
 

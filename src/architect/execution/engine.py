@@ -1,11 +1,11 @@
 """
-Execution Engine - Orquestador central de ejecución de tools.
+Execution Engine - Central orchestrator for tool execution.
 
-El ExecutionEngine es el punto de paso obligatorio para toda ejecución
-de tools. Aplica validación, políticas de confirmación, dry-run y logging.
+The ExecutionEngine is the mandatory pass-through point for all tool
+execution. Applies validation, confirmation policies, dry-run and logging.
 
-v3-M4: Añadido soporte para PostEditHooks (auto-verificación post-edición).
-v4-A1: Integración con el sistema de hooks completo (pre/post tool hooks).
+v3-M4: Added support for PostEditHooks (post-edit auto-verification).
+v4-A1: Integration with the complete hook system (pre/post tool hooks).
 """
 
 from typing import TYPE_CHECKING, Any
@@ -25,23 +25,23 @@ logger = structlog.get_logger()
 
 
 class ExecutionEngine:
-    """Motor de ejecución de tools con validación y políticas.
+    """Tool execution engine with validation and policies.
 
-    El ExecutionEngine aplica un pipeline completo a cada tool call:
-    1. Buscar tool en registry
-    2. Validar argumentos (Pydantic)
-    3. Validar paths si aplica (ya dentro de cada tool)
-    4. Aplicar política de confirmación
-    5. Ejecutar (o simular en dry-run)
-    6. Loggear resultado
-    7. Retornar resultado (nunca excepción)
+    The ExecutionEngine applies a complete pipeline to each tool call:
+    1. Find tool in registry
+    2. Validate arguments (Pydantic)
+    3. Validate paths if applicable (already within each tool)
+    4. Apply confirmation policy
+    5. Execute (or simulate in dry-run)
+    6. Log result
+    7. Return result (never exception)
 
-    Características clave:
-    - NUNCA lanza excepciones al caller (siempre retorna ToolResult)
-    - Soporta dry-run (simulación sin efectos secundarios)
-    - Aplica políticas de confirmación configurables
-    - Logging estructurado de todas las operaciones
-    - Hooks pre/post tool integrados (v4-A1)
+    Key features:
+    - NEVER raises exceptions to the caller (always returns ToolResult)
+    - Supports dry-run (simulation without side effects)
+    - Applies configurable confirmation policies
+    - Structured logging of all operations
+    - Integrated pre/post tool hooks (v4-A1)
     """
 
     def __init__(
@@ -52,14 +52,14 @@ class ExecutionEngine:
         hook_executor: "HookExecutor | None" = None,
         guardrails: "GuardrailsEngine | None" = None,
     ):
-        """Inicializa el execution engine.
+        """Initialize the execution engine.
 
         Args:
-            registry: ToolRegistry con las tools disponibles
-            config: Configuración completa de la aplicación
-            confirm_mode: Override del modo de confirmación (opcional)
-            hook_executor: HookExecutor para pre/post hooks (v4-A1)
-            guardrails: GuardrailsEngine para seguridad determinista (v4-A2)
+            registry: ToolRegistry with available tools
+            config: Complete application configuration
+            confirm_mode: Confirmation mode override (optional)
+            hook_executor: HookExecutor for pre/post hooks (v4-A1)
+            guardrails: GuardrailsEngine for deterministic security (v4-A2)
         """
         self.registry = registry
         self.config = config
@@ -67,29 +67,29 @@ class ExecutionEngine:
         self.hook_executor = hook_executor
         self.guardrails = guardrails
 
-        # Determinar modo de confirmación
-        # Prioridad: argumento confirm_mode > config de agente > default
+        # Determine confirmation mode
+        # Priority: confirm_mode argument > agent config > default
         mode = confirm_mode or "confirm-sensitive"
         self.policy = ConfirmationPolicy(mode)
 
         self.log = logger.bind(component="execution_engine")
 
     def execute_tool_call(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
-        """Ejecuta una tool call con el pipeline completo.
+        """Execute a tool call with the complete pipeline.
 
-        Este es el método principal del ExecutionEngine. Aplica todas
-        las validaciones y políticas antes de ejecutar la tool.
+        This is the main method of the ExecutionEngine. It applies all
+        validations and policies before executing the tool.
 
         Args:
-            tool_name: Nombre de la tool a ejecutar
-            args: Diccionario con argumentos sin validar
+            tool_name: Name of the tool to execute
+            args: Dictionary with unvalidated arguments
 
         Returns:
-            ToolResult con el resultado de la ejecución o error
+            ToolResult with the execution result or error
 
         Note:
-            Este método NUNCA lanza excepciones. Todos los errores se
-            capturan y retornan como ToolResult con success=False.
+            This method NEVER raises exceptions. All errors are
+            caught and returned as ToolResult with success=False.
         """
         self.log.info(
             "tool.call.start",
@@ -99,7 +99,7 @@ class ExecutionEngine:
         )
 
         try:
-            # 1. Buscar tool en registry
+            # 1. Find tool in registry
             try:
                 tool = self.registry.get(tool_name)
             except ToolNotFoundError as e:
@@ -110,7 +110,7 @@ class ExecutionEngine:
                     error=str(e),
                 )
 
-            # 2. Validar argumentos con Pydantic
+            # 2. Validate arguments with Pydantic
             try:
                 validated_args = tool.validate_args(args)
             except Exception as e:
@@ -118,11 +118,11 @@ class ExecutionEngine:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Argumentos inválidos: {e}",
+                    error=f"Invalid arguments: {e}",
                 )
 
-            # 3. Aplicar política de confirmación
-            # run_command usa clasificación dinámica por comando (no solo tool.sensitive)
+            # 3. Apply confirmation policy
+            # run_command uses dynamic classification by command (not just tool.sensitive)
             if tool.name == "run_command":
                 command_str = validated_args.model_dump().get("command", "")
                 needs_confirm = self._should_confirm_command(command_str, tool)
@@ -142,7 +142,7 @@ class ExecutionEngine:
                         return ToolResult(
                             success=False,
                             output="",
-                            error="Operación cancelada por el usuario",
+                            error="Operation cancelled by the user",
                         )
 
                 except NoTTYError as e:
@@ -153,7 +153,7 @@ class ExecutionEngine:
                         error=str(e),
                     )
 
-            # 4. Ejecutar (o simular en dry-run)
+            # 4. Execute (or simulate in dry-run)
             if self.dry_run:
                 self.log.info(
                     "tool.dry_run",
@@ -162,15 +162,15 @@ class ExecutionEngine:
                 )
                 return ToolResult(
                     success=True,
-                    output=f"[DRY-RUN] Se ejecutaría {tool_name} con args: {validated_args.model_dump()}",
+                    output=f"[DRY-RUN] Would execute {tool_name} with args: {validated_args.model_dump()}",
                 )
 
-            # 5. Ejecución real
+            # 5. Actual execution
             try:
                 result = tool.execute(**validated_args.model_dump())
             except Exception as e:
-                # Las tools NO deberían lanzar excepciones, pero
-                # capturamos por si acaso (defensive programming)
+                # Tools should NOT raise exceptions, but
+                # we catch just in case (defensive programming)
                 self.log.error(
                     "tool.execution_error",
                     tool=tool_name,
@@ -180,14 +180,14 @@ class ExecutionEngine:
                 result = ToolResult(
                     success=False,
                     output="",
-                    error=f"Error interno de la tool: {e}",
+                    error=f"Internal tool error: {e}",
                 )
 
             # 6. Record edit for guardrails tracking
             if result.success and self.guardrails and tool_name in ("write_file", "edit_file"):
                 self.guardrails.record_edit()
 
-            # 7. Loggear resultado
+            # 7. Log result
             self.log.info(
                 "tool.call.complete",
                 tool=tool_name,
@@ -199,8 +199,8 @@ class ExecutionEngine:
             return result
 
         except Exception as e:
-            # Captura de último recurso para errores inesperados
-            # en el propio ExecutionEngine
+            # Last resort catch for unexpected errors
+            # in the ExecutionEngine itself
             self.log.error(
                 "engine.unexpected_error",
                 tool=tool_name,
@@ -210,35 +210,35 @@ class ExecutionEngine:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado en el execution engine: {e}",
+                error=f"Unexpected error in the execution engine: {e}",
             )
 
     def check_guardrails(
         self, tool_name: str, tool_input: dict[str, Any]
     ) -> ToolResult | None:
-        """Verifica guardrails ANTES de ejecutar un tool (v4-A2).
+        """Check guardrails BEFORE executing a tool (v4-A2).
 
-        Los guardrails se evalúan antes que los hooks de usuario.
-        Son la capa de seguridad determinista que el LLM no puede saltarse.
+        Guardrails are evaluated before user hooks.
+        They are the deterministic security layer that the LLM cannot bypass.
 
         Args:
-            tool_name: Nombre del tool a ejecutar.
-            tool_input: Argumentos del tool.
+            tool_name: Name of the tool to execute.
+            tool_input: Tool arguments.
 
         Returns:
-            ToolResult con error si un guardrail bloqueó, None si todo OK.
+            ToolResult with error if a guardrail blocked, None if all OK.
         """
         if not self.guardrails:
             return None
 
-        # Verificar archivos protegidos/sensibles
+        # Check protected/sensitive files
         if tool_name in ("read_file", "write_file", "edit_file", "delete_file", "apply_patch"):
             file_path = tool_input.get("path", "")
             allowed, reason = self.guardrails.check_file_access(file_path, tool_name)
             if not allowed:
                 return ToolResult(success=False, output=f"Guardrail: {reason}")
 
-        # Verificar comandos bloqueados
+        # Check blocked commands
         if tool_name == "run_command":
             command = tool_input.get("command", "")
             allowed, reason = self.guardrails.check_command(command)
@@ -246,7 +246,7 @@ class ExecutionEngine:
                 return ToolResult(success=False, output=f"Guardrail: {reason}")
             self.guardrails.record_command()
 
-        # Verificar límites de edición
+        # Check edit limits
         if tool_name in ("write_file", "edit_file", "apply_patch"):
             file_path = tool_input.get("path", "")
             content = tool_input.get("content", "")
@@ -260,14 +260,14 @@ class ExecutionEngine:
     def check_code_rules(
         self, tool_name: str, tool_input: dict[str, Any]
     ) -> list[str]:
-        """Escanea contenido contra code_rules ANTES de ejecutar (v4-A2).
+        """Scan content against code_rules BEFORE executing (v4-A2).
 
         Args:
-            tool_name: Nombre del tool ejecutado.
-            tool_input: Argumentos del tool.
+            tool_name: Name of the tool executed.
+            tool_input: Tool arguments.
 
         Returns:
-            Lista de mensajes de warning/block.
+            List of warning/block messages.
         """
         if not self.guardrails:
             return []
@@ -285,25 +285,25 @@ class ExecutionEngine:
         messages: list[str] = []
         for severity, msg in violations:
             if severity == "block":
-                messages.append(f"BLOQUEADO por code rule: {msg}")
+                messages.append(f"BLOCKED by code rule: {msg}")
             else:
-                messages.append(f"Aviso code rule: {msg}")
+                messages.append(f"Code rule warning: {msg}")
 
         return messages
 
     def run_pre_tool_hooks(
         self, tool_name: str, tool_input: dict[str, Any]
     ) -> ToolResult | dict[str, Any] | None:
-        """Ejecuta pre-tool hooks (v4-A1).
+        """Execute pre-tool hooks (v4-A1).
 
         Args:
-            tool_name: Nombre del tool a ejecutar.
-            tool_input: Argumentos originales del tool.
+            tool_name: Name of the tool to execute.
+            tool_input: Original tool arguments.
 
         Returns:
-            - ToolResult si un hook bloqueó la acción (con blocked_by_hook info)
-            - dict con input actualizado si un hook lo modificó
-            - None si todos permiten la acción sin modificación
+            - ToolResult if a hook blocked the action (with blocked_by_hook info)
+            - dict with updated input if a hook modified it
+            - None if all hooks allow the action without modification
         """
         if not self.hook_executor or self.dry_run:
             return None
@@ -330,8 +330,8 @@ class ExecutionEngine:
             if result.decision == HookDecision.BLOCK:
                 return ToolResult(
                     success=False,
-                    output=f"Bloqueado por hook: {result.reason}",
-                    error=f"Hook bloqueó la acción: {result.reason}",
+                    output=f"Blocked by hook: {result.reason}",
+                    error=f"Hook blocked the action: {result.reason}",
                 )
             if result.decision == HookDecision.MODIFY and result.updated_input:
                 updated_input = result.updated_input
@@ -346,16 +346,16 @@ class ExecutionEngine:
     def run_post_tool_hooks(
         self, tool_name: str, tool_input: dict[str, Any], tool_output: str, success: bool
     ) -> str | None:
-        """Ejecuta post-tool hooks (v4-A1).
+        """Execute post-tool hooks (v4-A1).
 
         Args:
-            tool_name: Nombre del tool ejecutado.
-            tool_input: Argumentos del tool.
-            tool_output: Output del tool (truncado).
-            success: Si el tool se ejecutó exitosamente.
+            tool_name: Name of the tool executed.
+            tool_input: Tool arguments.
+            tool_output: Tool output (truncated).
+            success: Whether the tool executed successfully.
 
         Returns:
-            Texto con contexto adicional de los hooks, o None.
+            Text with additional context from the hooks, or None.
         """
         if not self.hook_executor or self.dry_run:
             return None
@@ -388,16 +388,16 @@ class ExecutionEngine:
         return "\n".join(outputs) if outputs else None
 
     def _sanitize_args_for_log(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Sanitiza argumentos para logging seguro.
+        """Sanitize arguments for safe logging.
 
-        Trunca valores muy largos (como content) para evitar
-        logs masivos.
+        Truncates very long values (like content) to avoid
+        massive logs.
 
         Args:
-            args: Argumentos originales
+            args: Original arguments
 
         Returns:
-            Diccionario sanitizado para logging
+            Sanitized dictionary for logging
         """
         sanitized = {}
         for key, value in args.items():
@@ -409,28 +409,28 @@ class ExecutionEngine:
         return sanitized
 
     def _should_confirm_command(self, command: str, tool: Any) -> bool:
-        """Determina si un comando run_command requiere confirmación.
+        """Determine whether a run_command requires confirmation.
 
-        Implementa una tabla de sensibilidad dinámica para run_command (F13),
-        overridando la política estática basada en tool.sensitive:
+        Implements a dynamic sensitivity table for run_command (F13),
+        overriding the static policy based on tool.sensitive:
 
-        | Clasificación | yolo | confirm-sensitive | confirm-all |
-        |---------------|------|-------------------|-------------|
-        | safe          | No   | No                | Sí          |
-        | dev           | No   | Sí                | Sí          |
-        | dangerous     | No   | Sí                | Sí          |
+        | Classification | yolo | confirm-sensitive | confirm-all |
+        |----------------|------|-------------------|-------------|
+        | safe           | No   | No                | Yes         |
+        | dev            | No   | Yes               | Yes         |
+        | dangerous      | No   | Yes               | Yes         |
 
-        En modo yolo NUNCA se pide confirmación. La seguridad está garantizada
-        por la blocklist (Capa 1) que impide comandos realmente peligrosos.
-        Los comandos "dangerous" son simplemente comandos no reconocidos en
-        las listas safe/dev, no necesariamente peligrosos.
+        In yolo mode confirmation is NEVER requested. Security is guaranteed
+        by the blocklist (Layer 1) that prevents truly dangerous commands.
+        "dangerous" commands are simply unrecognized commands not found in
+        the safe/dev lists, not necessarily dangerous.
 
         Args:
-            command: El comando que se va a ejecutar
-            tool: La instancia de RunCommandTool (con classify_sensitivity())
+            command: The command to be executed
+            tool: The RunCommandTool instance (with classify_sensitivity())
 
         Returns:
-            True si se debe solicitar confirmación al usuario
+            True if user confirmation should be requested
         """
         classification = tool.classify_sensitivity(command)
         match self.policy.mode:
@@ -444,10 +444,10 @@ class ExecutionEngine:
                 return True
 
     def set_dry_run(self, enabled: bool) -> None:
-        """Habilita o deshabilita el modo dry-run.
+        """Enable or disable dry-run mode.
 
         Args:
-            enabled: True para habilitar dry-run, False para deshabilitar
+            enabled: True to enable dry-run, False to disable
         """
         self.dry_run = enabled
         self.log.info("engine.dry_run_mode", enabled=enabled)
