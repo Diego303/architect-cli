@@ -160,6 +160,30 @@ parallel_runs:
 
 ---
 
+## Salida visual (HUMAN logging)
+
+A partir de v1.1.0, la ejecución paralela emite eventos de nivel HUMAN que producen una salida visual clara en stderr. El usuario puede ver el resultado de cada worker sin necesidad de flags `-v`.
+
+```
+   ✓ Worker 1 (gpt-4.1) → success ($0.0456, 120.3s)
+   ✓ Worker 2 (claude-sonnet) → success ($0.0312, 98.7s)
+   ✗ Worker 3 (gpt-4.1-mini) → failed ($0.0089, 45.1s)
+
+⚡ Parallel complete — 3 workers: 2 success, 1 failed ($0.0857)
+```
+
+### Eventos emitidos
+
+| Evento | Cuándo | Datos |
+|--------|--------|-------|
+| `parallel.worker_done` | Al completar cada worker | worker, model, status, cost, duration |
+| `parallel.worker_error` | Si un worker falla con excepción | worker, error |
+| `parallel.complete` | Al finalizar todos los workers | total_workers, succeeded, failed, total_cost |
+
+Se desactiva con `--quiet` o `--json`. Ver [`logging.md`](logging.md) para detalles del sistema HUMAN.
+
+---
+
 ## Ejemplo CI/CD
 
 ```yaml

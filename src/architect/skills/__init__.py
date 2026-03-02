@@ -1,6 +1,6 @@
 """
-Skills ecosystem — carga de .architect.md, descubrimiento e instalación de skills (v4-A3).
-Procedural memory — detección y persistencia de correcciones (v4-A4).
+Skills ecosystem -- loading .architect.md, skill discovery and installation (v4-A3).
+Procedural memory -- correction detection and persistence (v4-A4).
 """
 
 from .installer import SkillInstaller

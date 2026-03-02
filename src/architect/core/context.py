@@ -1,11 +1,11 @@
 """
-Context Builder y Context Manager - Construcción y gestión del contexto LLM.
+Context Builder and Context Manager - LLM context construction and management.
 
-ContextBuilder: Construye la lista de mensajes OpenAI (system, user, tool results).
-ContextManager: Gestiona el context window para evitar que se llene en tareas largas.
+ContextBuilder: Builds the OpenAI message list (system, user, tool results).
+ContextManager: Manages the context window to prevent overflow in long tasks.
 
-F10: Inyección del índice del repositorio en el system prompt.
-F11: ContextManager con 3 niveles de pruning (truncado, resumen, ventana deslizante).
+F10: Repository index injection into the system prompt.
+F11: ContextManager with 3 pruning levels (truncation, summarization, sliding window).
 """
 
 from __future__ import annotations
@@ -24,35 +24,35 @@ logger = structlog.get_logger()
 
 
 class ContextManager:
-    """Gestor del context window para evitar que se llene en tareas largas.
+    """Context window manager to prevent overflow in long tasks.
 
-    Actúa en tres niveles progresivos (F11):
-    - Nivel 1: ``truncate_tool_result`` — trunca tool results individuales.
-    - Nivel 2: ``maybe_compress``       — resume pasos antiguos usando el LLM.
-    - Nivel 3: ``enforce_window``       — hard limit de tokens totales.
+    Operates at three progressive levels (F11):
+    - Level 1: ``truncate_tool_result`` — truncates individual tool results.
+    - Level 2: ``maybe_compress``       — summarizes old steps using the LLM.
+    - Level 3: ``enforce_window``       — hard limit on total tokens.
 
-    El nivel 1 se aplica en ``ContextBuilder._format_tool_result()``.
-    Los niveles 2 y 3 se aplican en el loop tras cada step.
+    Level 1 is applied in ``ContextBuilder._format_tool_result()``.
+    Levels 2 and 3 are applied in the loop after each step.
     """
 
     def __init__(self, config: ContextConfig) -> None:
         self.config = config
         self.log = logger.bind(component="context_manager")
 
-    # ── Nivel 1: Truncado de tool results ──────────────────────────────────
+    # ── Level 1: Tool result truncation ──────────────────────────────────
 
     def truncate_tool_result(self, content: str) -> str:
-        """Trunca el resultado de una tool si supera el límite configurado.
+        """Truncate a tool result if it exceeds the configured limit.
 
-        Preserva las primeras 40 líneas y las últimas 20 para mantener
-        el inicio (importante para estructuras) y el final (suele tener
-        resúmenes y errores).
+        Preserves the first 40 lines and the last 20 to keep
+        the beginning (important for structures) and the end (usually has
+        summaries and errors).
 
         Args:
-            content: Contenido del tool result
+            content: Tool result content
 
         Returns:
-            Contenido truncado con marcador de omisión, o el original si cabe
+            Truncated content with omission marker, or the original if it fits
         """
         if self.config.max_tool_result_tokens == 0:
             return content
@@ -66,38 +66,42 @@ class ContextManager:
         tail_lines = 20
 
         if len(lines) <= head_lines + tail_lines:
-            # El contenido es largo pero tiene pocas líneas (líneas muy largas)
-            # Truncar por caracteres manteniendo proporción
+            # Content is long but has few lines (very long lines)
+            # Truncate by characters preserving proportion
             head = content[:max_chars // 2]
             tail = content[-(max_chars // 4):]
             omitted_chars = len(content) - len(head) - len(tail)
-            return f"{head}\n\n[... {omitted_chars} caracteres omitidos ...]\n\n{tail}"
+            from ..i18n import t
+            marker = t("context.chars_omitted", n=omitted_chars)
+            return f"{head}\n\n{marker}\n\n{tail}"
 
         head = "\n".join(lines[:head_lines])
         tail = "\n".join(lines[-tail_lines:])
         omitted = len(lines) - head_lines - tail_lines
-        return f"{head}\n\n[... {omitted} líneas omitidas ...]\n\n{tail}"
+        from ..i18n import t
+        marker = t("context.lines_omitted", n=omitted)
+        return f"{head}\n\n{marker}\n\n{tail}"
 
-    # ── Nivel 2: Resumen de pasos antiguos ─────────────────────────────────
+    # ── Level 2: Old step summarization ─────────────────────────────────
 
     def maybe_compress(
         self, messages: list[dict[str, Any]], llm: LLMAdapter
     ) -> list[dict[str, Any]]:
-        """Comprime mensajes antiguos en un resumen si hay demasiados pasos.
+        """Compress old messages into a summary if there are too many steps.
 
-        Se activa cuando el número de intercambios (pasos con tool calls)
-        supera ``summarize_after_steps``. Los últimos ``keep_recent_steps``
-        intercambios se mantienen íntegros; el resto se resume con el LLM.
+        Activates when the number of exchanges (steps with tool calls)
+        exceeds ``summarize_after_steps``. The last ``keep_recent_steps``
+        exchanges are kept intact; the rest is summarized with the LLM.
 
-        Si la compresión falla (error LLM, red, etc.), devuelve los mensajes
-        originales sin modificar.
+        If compression fails (LLM error, network, etc.), returns the
+        original messages unmodified.
 
         Args:
-            messages: Lista de mensajes actual del agente
-            llm: LLMAdapter para generar el resumen
+            messages: Current agent message list
+            llm: LLMAdapter to generate the summary
 
         Returns:
-            Lista de mensajes (posiblemente comprimida)
+            Message list (possibly compressed)
         """
         if self.config.summarize_after_steps == 0:
             return messages
@@ -106,18 +110,18 @@ class ContextManager:
         if tool_exchanges <= self.config.summarize_after_steps:
             return messages
 
-        # Separar: system + user | mensajes de diálogo
-        if len(messages) < 4:  # system + user + al menos 1 intercambio
+        # Separate: system + user | dialog messages
+        if len(messages) < 4:  # system + user + at least 1 exchange
             return messages
 
         system_msg = messages[0]
         user_msg = messages[1]
         dialog_msgs = messages[2:]
 
-        # Mantener los últimos keep_recent_steps*3 mensajes intactos
+        # Keep the last keep_recent_steps*3 messages intact
         keep_count = self.config.keep_recent_steps * 3
         if len(dialog_msgs) <= keep_count:
-            return messages  # No hay suficiente para comprimir
+            return messages  # Not enough to compress
 
         old_msgs = dialog_msgs[:-keep_count]
         recent_msgs = dialog_msgs[-keep_count:]
@@ -129,16 +133,17 @@ class ContextManager:
             kept_messages=len(recent_msgs),
         )
 
-        # Resumir mensajes antiguos con el LLM
+        # Summarize old messages with the LLM
         try:
             summary = self._summarize_steps(old_msgs, llm)
         except Exception as e:
             self.log.warning("context.compress_failed", error=str(e))
-            return messages  # Graceful degradation: sin compresión
+            return messages  # Graceful degradation: no compression
 
+        from ..i18n import t
         summary_msg: dict[str, Any] = {
             "role": "assistant",
-            "content": f"[Resumen de pasos anteriores]\n{summary}",
+            "content": f"{t('context.summary_header')}\n{summary}",
         }
 
         compressed = [system_msg, user_msg, summary_msg, *recent_msgs]
@@ -152,42 +157,37 @@ class ContextManager:
     def _summarize_steps(
         self, messages: list[dict[str, Any]], llm: LLMAdapter
     ) -> str:
-        """Usa el LLM para resumir una secuencia de mensajes.
+        """Use the LLM to summarize a sequence of messages.
 
-        Si la llamada al LLM falla, genera un resumen mecánico como fallback
-        (lista de tools ejecutadas y archivos involucrados).
+        If the LLM call fails, generates a mechanical summary as fallback
+        (list of tools executed and files involved).
 
         Args:
-            messages: Mensajes del diálogo a resumir
-            llm: LLMAdapter para la llamada de resumen
+            messages: Dialog messages to summarize
+            llm: LLMAdapter for the summary call
 
         Returns:
-            Texto de resumen (~200 palabras)
+            Summary text (~200 words)
         """
         formatted = self._format_steps_for_summary(messages)
 
+        from ..i18n import t
         try:
             summary_prompt = [
                 {
                     "role": "system",
-                    "content": (
-                        "Resume las siguientes acciones del agente en un párrafo conciso. "
-                        "Incluye: qué archivos se leyeron o modificaron, qué se intentó, "
-                        "qué funcionó y qué falló. Máximo 200 palabras. "
-                        "Solo el párrafo de resumen, sin explicaciones adicionales."
-                    ),
+                    "content": t("context.summary_prompt", content=formatted),
                 },
-                {"role": "user", "content": formatted},
             ]
             response = llm.completion(summary_prompt, tools=None)
             return response.content or formatted
         except Exception as e:
             self.log.warning("context.summarize_llm_failed", error=str(e))
-            # Fallback mecánico: usar el texto formateado directamente
-            return f"[Resumen mecánico — LLM no disponible]\n{formatted}"
+            return t("context.mechanical_summary", content=formatted)
 
     def _format_steps_for_summary(self, messages: list[dict[str, Any]]) -> str:
-        """Convierte mensajes en texto legible para resumir."""
+        """Convert messages to readable text for summarization."""
+        from ..i18n import t
         parts: list[str] = []
         for msg in messages:
             role = msg.get("role", "")
@@ -198,46 +198,46 @@ class ContextManager:
                         for tc in msg["tool_calls"]
                         if isinstance(tc, dict) and "function" in tc
                     ]
-                    parts.append(f"Agente llamó tools: {', '.join(tool_names)}")
+                    parts.append(t("context.agent_called_tools", tools=", ".join(tool_names)))
                 elif msg.get("content"):
                     content = str(msg["content"])[:300]
-                    parts.append(f"Agente respondió: {content}")
+                    parts.append(t("context.agent_responded", content=content))
             elif role == "tool":
                 name = msg.get("name", "unknown")
                 content = str(msg.get("content") or "")[:300]
-                parts.append(f"Resultado de {name}: {content}")
-        return "\n".join(parts) or "(sin mensajes)"
+                parts.append(t("context.tool_result", name=name, content=content))
+        return "\n".join(parts) or t("context.no_messages")
 
     def _count_tool_exchanges(self, messages: list[dict[str, Any]]) -> int:
-        """Cuenta el número de pasos con tool calls."""
+        """Count the number of steps with tool calls."""
         return sum(
             1
             for m in messages
             if m.get("role") == "assistant" and m.get("tool_calls")
         )
 
-    # ── Pipeline unificado (v3-M2) ─────────────────────────────────────────
+    # ── Unified pipeline (v3-M2) ─────────────────────────────────────────
 
     def manage(
         self, messages: list[dict[str, Any]], llm: LLMAdapter | None = None
     ) -> list[dict[str, Any]]:
-        """Pipeline unificado de gestión de contexto.
+        """Unified context management pipeline.
 
-        Se llama antes de cada llamada al LLM. Aplica en orden:
-        1. Comprimir pasos antiguos (Nivel 2) si el contexto supera el 75%
-        2. Hard limit de tokens totales (Nivel 3)
+        Called before each LLM call. Applies in order:
+        1. Compress old steps (Level 2) if context exceeds 75%
+        2. Hard token limit (Level 3)
 
-        El Nivel 1 (truncado de tool results) se aplica en ContextBuilder
-        al añadir cada tool result, no en este pipeline.
+        Level 1 (tool result truncation) is applied in ContextBuilder
+        when adding each tool result, not in this pipeline.
 
         Args:
-            messages: Lista de mensajes actual
-            llm: LLMAdapter para generar resúmenes (puede ser None)
+            messages: Current message list
+            llm: LLMAdapter for generating summaries (can be None)
 
         Returns:
-            Lista de mensajes gestionada (posiblemente comprimida o truncada)
+            Managed message list (possibly compressed or truncated)
         """
-        # Solo comprimir si el contexto supera el 75% del máximo
+        # Only compress if context exceeds 75% of maximum
         if llm and self._is_above_threshold(messages, 0.75):
             messages = self.maybe_compress(messages, llm)
         messages = self.enforce_window(messages)
@@ -246,54 +246,54 @@ class ContextManager:
     def _is_above_threshold(
         self, messages: list[dict[str, Any]], threshold: float
     ) -> bool:
-        """True si el contexto estimado supera el porcentaje dado del máximo.
+        """True if the estimated context exceeds the given percentage of maximum.
 
         Args:
-            messages: Lista de mensajes
-            threshold: Fracción del máximo (ej: 0.75 = 75%)
+            messages: Message list
+            threshold: Fraction of maximum (e.g.: 0.75 = 75%)
 
         Returns:
-            True si supera el umbral, o True si max_context_tokens == 0
-            (sin límite configurado → confiar en summarize_after_steps)
+            True if exceeds threshold, or True if max_context_tokens == 0
+            (no limit configured -> rely on summarize_after_steps)
         """
         if self.config.max_context_tokens == 0:
-            return True  # Sin límite de tokens → confiar en summarize_after_steps
+            return True  # No token limit -> rely on summarize_after_steps
         limit = int(self.config.max_context_tokens * threshold)
         return self._estimate_tokens(messages) > limit
 
     def is_critically_full(self, messages: list[dict[str, Any]]) -> bool:
-        """True si el contexto está al 95%+ del máximo incluso después de comprimir.
+        """True if the context is at 95%+ of maximum even after compression.
 
-        Se usa como safety net en el loop: si retorna True, el agente
-        debe cerrar aunque no haya terminado.
+        Used as a safety net in the loop: if it returns True, the agent
+        must close even if it hasn't finished.
 
         Args:
-            messages: Lista de mensajes actual
+            messages: Current message list
 
         Returns:
-            True si el contexto está críticamente lleno
+            True if the context is critically full
         """
         if self.config.max_context_tokens == 0:
             return False
         limit_95 = int(self.config.max_context_tokens * 0.95)
         return self._estimate_tokens(messages) > limit_95
 
-    # ── Nivel 3: Ventana deslizante (hard limit) ───────────────────────────
+    # ── Level 3: Sliding window (hard limit) ───────────────────────────
 
     def enforce_window(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Aplica un límite hard de tokens al context window.
+        """Apply a hard token limit to the context window.
 
-        Si el total estimado supera ``max_context_tokens``, elimina pares de
-        mensajes antiguos del diálogo (de 2 en 2, empezando por los más viejos)
-        hasta que quepa, manteniendo siempre system y user.
+        If the estimated total exceeds ``max_context_tokens``, removes pairs of
+        old dialog messages (2 at a time, starting from the oldest)
+        until it fits, always keeping system and user messages.
 
         Args:
-            messages: Lista de mensajes
+            messages: Message list
 
         Returns:
-            Lista recortada si era necesario, o la original
+            Trimmed list if needed, or the original
         """
         if self.config.max_context_tokens == 0:
             return messages
@@ -311,7 +311,7 @@ class ContextManager:
             and self._estimate_tokens([system_msg, user_msg] + dialog)
             > self.config.max_context_tokens
         ):
-            # Eliminar los 2 mensajes más antiguos del diálogo
+            # Remove the 2 oldest dialog messages
             dialog = dialog[2:]
             removed += 2
 
@@ -324,49 +324,49 @@ class ContextManager:
 
         return [system_msg, user_msg] + dialog
 
-    # ── Utilidades ─────────────────────────────────────────────────────────
+    # ── Utilities ─────────────────────────────────────────────────────────
 
     def _estimate_tokens(self, messages: list[dict[str, Any]]) -> int:
-        """Estima el número de tokens en una lista de mensajes.
+        """Estimate the number of tokens in a message list.
 
-        Aproximación: ~4 caracteres por token (válida para inglés y código).
-        Extrae solo los campos de contenido relevantes en vez de serializar
-        el dict completo (que sobreestima por las claves JSON y metadatos).
+        Approximation: ~4 characters per token (valid for English and code).
+        Extracts only the relevant content fields instead of serializing
+        the full dict (which overestimates due to JSON keys and metadata).
 
         Args:
-            messages: Lista de mensajes
+            messages: Message list
 
         Returns:
-            Estimación de tokens
+            Token estimate
         """
         total_chars = 0
         for m in messages:
-            # Contenido principal del mensaje
+            # Main message content
             content = m.get("content")
             if content:
                 total_chars += len(str(content))
-            # Tool calls: contar nombre y argumentos
+            # Tool calls: count name and arguments
             for tc in m.get("tool_calls", []):
                 if isinstance(tc, dict):
                     func = tc.get("function", {})
                     total_chars += len(str(func.get("name", "")))
                     total_chars += len(str(func.get("arguments", "")))
-            # Overhead por mensaje (~4 tokens de metadatos por mensaje)
+            # Overhead per message (~4 metadata tokens per message)
             total_chars += 16
         return total_chars // 4
 
 
 class ContextBuilder:
-    """Constructor de contexto para el LLM.
+    """Context builder for the LLM.
 
-    Gestiona la construcción y actualización de la lista de mensajes
-    que se envía al LLM en cada step.
+    Manages the construction and updating of the message list
+    sent to the LLM at each step.
 
     Attributes:
-        repo_index: Índice del repositorio (F10). Si está presente,
-                    se inyecta como sección del system prompt en build_initial().
-        context_manager: ContextManager (F11). Si está presente,
-                         trunca los tool results largos automáticamente.
+        repo_index: Repository index (F10). If present,
+                    injected as a section of the system prompt in build_initial().
+        context_manager: ContextManager (F11). If present,
+                         truncates long tool results automatically.
     """
 
     def __init__(
@@ -374,13 +374,13 @@ class ContextBuilder:
         repo_index: RepoIndex | None = None,
         context_manager: ContextManager | None = None,
     ) -> None:
-        """Inicializa el ContextBuilder.
+        """Initialize the ContextBuilder.
 
         Args:
-            repo_index: Índice del repositorio para inyectar en el system prompt.
-                        Si es None, no se añade información del proyecto.
-            context_manager: ContextManager para truncar tool results largos.
-                             Si es None, los tool results no se truncan.
+            repo_index: Repository index to inject into the system prompt.
+                        If None, no project information is added.
+            context_manager: ContextManager for truncating long tool results.
+                             If None, tool results are not truncated.
         """
         self.repo_index = repo_index
         self.context_manager = context_manager
@@ -390,23 +390,23 @@ class ContextBuilder:
         agent_config: AgentConfig,
         prompt: str,
     ) -> list[dict[str, Any]]:
-        """Construye los mensajes iniciales para el LLM.
+        """Build the initial messages for the LLM.
 
-        Si hay un repo_index disponible, lo inyecta al final del system prompt
-        como una sección "Estructura del proyecto". Esto permite que el agente
-        sepa qué archivos existen sin necesidad de hacer list_files manualmente.
+        If a repo_index is available, injects it at the end of the system prompt
+        as a "Project Structure" section. This allows the agent to know which
+        files exist without needing to manually call list_files.
 
         Args:
-            agent_config: Configuración del agente (system_prompt, allowed_tools, etc.)
-            prompt: Prompt del usuario
+            agent_config: Agent configuration (system_prompt, allowed_tools, etc.)
+            prompt: User prompt
 
         Returns:
-            Lista de mensajes en formato OpenAI: [system, user]
+            Message list in OpenAI format: [system, user]
         """
-        # System prompt base del agente
+        # Base agent system prompt
         system_content = agent_config.system_prompt
 
-        # Inyectar índice del repositorio si está disponible
+        # Inject repository index if available
         if self.repo_index is not None:
             system_content = self._inject_repo_index(system_content, self.repo_index)
 
@@ -416,37 +416,37 @@ class ContextBuilder:
         ]
 
     def _inject_repo_index(self, system_prompt: str, index: RepoIndex) -> str:
-        """Añade la sección de estructura del proyecto al system prompt.
+        """Add the project structure section to the system prompt.
 
-        Formato compacto que muestra:
-        - Total de archivos y líneas
-        - Distribución de lenguajes
-        - Árbol de directorios (formateado para ser compacto)
-        - Guía para usar search_code y grep
+        Compact format showing:
+        - Total files and lines
+        - Language distribution
+        - Directory tree (formatted compactly)
+        - Guide for using search_code and grep
 
         Args:
-            system_prompt: Prompt base del agente
-            index: Índice del repositorio construido por RepoIndexer
+            system_prompt: Base agent prompt
+            index: Repository index built by RepoIndexer
 
         Returns:
-            system_prompt con la sección de estructura añadida al final
+            system_prompt with the structure section appended
         """
-        # Formatear resumen de lenguajes (top 5)
+        # Format language summary (top 5)
         lang_items = list(index.languages.items())[:5]
         lang_str = ", ".join(f"{lang} ({n})" for lang, n in lang_items)
         if not lang_str:
-            lang_str = "desconocido"
+            lang_str = "unknown"
 
         repo_section = (
-            f"\n\n## Estructura del Proyecto\n\n"
-            f"**Total**: {index.total_files} archivos, {index.total_lines:,} líneas  \n"
-            f"**Lenguajes**: {lang_str}\n\n"
+            f"\n\n## Project Structure\n\n"
+            f"**Total**: {index.total_files} files, {index.total_lines:,} lines  \n"
+            f"**Languages**: {lang_str}\n\n"
             f"```\n"
             f"{index.tree_summary}\n"
             f"```\n\n"
-            f"**Nota**: Usa `search_code` o `grep` para encontrar código específico, "
-            f"`find_files` para localizar archivos por nombre. "
-            f"Lee solo los archivos que realmente necesitas."
+            f"**Note**: Use `search_code` or `grep` to find specific code, "
+            f"`find_files` to locate files by name. "
+            f"Only read the files you actually need."
         )
 
         return system_prompt + repo_section
@@ -457,23 +457,23 @@ class ContextBuilder:
         tool_calls: list[ToolCall],
         results: list[ToolCallResult],
     ) -> list[dict[str, Any]]:
-        """Añade tool results a la lista de mensajes.
+        """Append tool results to the message list.
 
-        Formato OpenAI para tool calling:
-        1. Assistant message con tool_calls
-        2. Tool messages con los resultados
+        OpenAI format for tool calling:
+        1. Assistant message with tool_calls
+        2. Tool messages with the results
 
         Args:
-            messages: Lista de mensajes existente
-            tool_calls: Tool calls solicitadas por el LLM
-            results: Resultados de ejecutar las tool calls
+            messages: Existing message list
+            tool_calls: Tool calls requested by the LLM
+            results: Results from executing the tool calls
 
         Returns:
-            Nueva lista de mensajes con tool results añadidos
+            New message list with tool results appended
         """
         new_messages = messages.copy()
 
-        # 1. Añadir assistant message con tool_calls
+        # 1. Add assistant message with tool_calls
         assistant_message: dict[str, Any] = {
             "role": "assistant",
             "content": None,
@@ -491,7 +491,7 @@ class ContextBuilder:
         }
         new_messages.append(assistant_message)
 
-        # 2. Añadir tool messages con los resultados
+        # 2. Add tool messages with the results
         for tc, result in zip(tool_calls, results):
             tool_message = self._format_tool_result(tc, result)
             new_messages.append(tool_message)
@@ -503,9 +503,9 @@ class ContextBuilder:
         tool_call: ToolCall,
         result: ToolCallResult,
     ) -> dict[str, Any]:
-        """Formatea el resultado de una tool para el LLM.
+        """Format a tool result for the LLM.
 
-        Aplica truncado (Nivel 1 de F11) si hay un ContextManager configurado.
+        Applies truncation (Level 1 of F11) if a ContextManager is configured.
         """
         if result.was_dry_run:
             content = f"[DRY-RUN] {result.result.output}"
@@ -514,7 +514,7 @@ class ContextBuilder:
         else:
             content = f"Error: {result.result.error}"
 
-        # Nivel 1 (F11): Truncar si el resultado es muy largo
+        # Level 1 (F11): Truncate if the result is too long
         if self.context_manager and content:
             content = self.context_manager.truncate_tool_result(content)
 
@@ -526,7 +526,7 @@ class ContextBuilder:
         }
 
     def _serialize_arguments(self, arguments: dict[str, Any]) -> str:
-        """Serializa argumentos de tool call a JSON string."""
+        """Serialize tool call arguments to a JSON string."""
         import json
         return json.dumps(arguments)
 
@@ -535,7 +535,7 @@ class ContextBuilder:
         messages: list[dict[str, Any]],
         content: str,
     ) -> list[dict[str, Any]]:
-        """Añade un mensaje del assistant (respuesta final)."""
+        """Append an assistant message (final response)."""
         new_messages = messages.copy()
         new_messages.append({"role": "assistant", "content": content})
         return new_messages
@@ -545,7 +545,7 @@ class ContextBuilder:
         messages: list[dict[str, Any]],
         content: str,
     ) -> list[dict[str, Any]]:
-        """Añade un mensaje del usuario."""
+        """Append a user message."""
         new_messages = messages.copy()
         new_messages.append({"role": "user", "content": content})
         return new_messages

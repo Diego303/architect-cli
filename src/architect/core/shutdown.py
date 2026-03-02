@@ -1,13 +1,13 @@
 """
-GracefulShutdown - Manejo de señales SIGINT y SIGTERM para cierre limpio.
+GracefulShutdown - SIGINT and SIGTERM signal handling for clean shutdown.
 
-Gestiona la interrupción del agente de forma ordenada:
-- Primer SIGINT (Ctrl+C): avisa al usuario y marca el flag, deja terminar el step actual
-- Segundo SIGINT: salida inmediata con código 130
-- SIGTERM: mismo comportamiento que primer SIGINT (para entornos CI/Docker)
+Manages agent interruption in an orderly fashion:
+- First SIGINT (Ctrl+C): warns the user and sets the flag, lets the current step finish
+- Second SIGINT: immediate exit with code 130
+- SIGTERM: same behavior as first SIGINT (for CI/Docker environments)
 
-El agent loop consulta should_stop antes de cada iteración para terminar
-limpiamente sin cortar a mitad de una operación.
+The agent loop checks should_stop before each iteration to terminate
+cleanly without cutting in the middle of an operation.
 """
 
 import signal
@@ -17,76 +17,76 @@ import structlog
 
 logger = structlog.get_logger()
 
-EXIT_INTERRUPTED = 130  # Estándar POSIX: 128 + SIGINT(2)
+EXIT_INTERRUPTED = 130  # POSIX standard: 128 + SIGINT(2)
 
 
 class GracefulShutdown:
-    """Gestiona señales de shutdown para cierre limpio del agente.
+    """Manages shutdown signals for clean agent termination.
 
-    Instalar una vez al inicio de la ejecución del comando y pasar
-    al AgentLoop para que lo consulte antes de cada step.
+    Install once at the start of command execution and pass
+    to AgentLoop so it can check before each step.
 
     Attributes:
-        should_stop: True cuando se ha recibido una señal de interrupción.
+        should_stop: True when an interruption signal has been received.
 
-    Uso:
+    Usage:
         shutdown = GracefulShutdown()
         loop = AgentLoop(llm, engine, config, ctx, shutdown=shutdown)
         state = loop.run(prompt)
     """
 
     def __init__(self) -> None:
-        """Instala los handlers de señales."""
+        """Install signal handlers."""
         self._interrupted = False
 
-        # Instalar handlers para ambas señales
+        # Install handlers for both signals
         signal.signal(signal.SIGINT, self._handler)
         signal.signal(signal.SIGTERM, self._handler)
 
         logger.debug("graceful_shutdown.installed")
 
     def _handler(self, signum: int, frame) -> None:
-        """Handler compartido para SIGINT y SIGTERM.
+        """Shared handler for SIGINT and SIGTERM.
 
-        Primer disparo: avisa y marca el flag.
-        Segundo disparo (solo SIGINT): salida inmediata.
+        First trigger: warns and sets the flag.
+        Second trigger (SIGINT only): immediate exit.
         """
         signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
 
         if self._interrupted:
-            # Segunda señal → salir inmediatamente
+            # Second signal -> exit immediately
             logger.warning(
                 "graceful_shutdown.forced",
                 signal=signal_name,
             )
             sys.exit(EXIT_INTERRUPTED)
 
-        # Primera señal → marcar y avisar
+        # First signal -> mark and warn
         self._interrupted = True
         logger.warning(
             "graceful_shutdown.requested",
             signal=signal_name,
-            message="Finalizando al terminar el step actual. Ctrl+C otra vez para salir ya.",
+            message="Finishing after current step completes. Ctrl+C again to exit now.",
         )
 
-        # Escribir aviso visible al usuario (stderr)
+        # Write visible warning to the user (stderr)
         sys.stderr.write(
-            f"\n⚠️  {signal_name} recibido. Finalizando limpiamente...\n"
-            "   (Ctrl+C de nuevo para salida inmediata)\n"
+            f"\n⚠️  {signal_name} received. Shutting down cleanly...\n"
+            "   (Ctrl+C again for immediate exit)\n"
         )
         sys.stderr.flush()
 
     @property
     def should_stop(self) -> bool:
-        """True si se ha recibido una señal de interrupción."""
+        """True if an interruption signal has been received."""
         return self._interrupted
 
     def reset(self) -> None:
-        """Resetea el flag (útil para testing)."""
+        """Reset the flag (useful for testing)."""
         self._interrupted = False
 
     def restore_defaults(self) -> None:
-        """Restaura los handlers de señales por defecto."""
+        """Restore the default signal handlers."""
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         logger.debug("graceful_shutdown.restored_defaults")

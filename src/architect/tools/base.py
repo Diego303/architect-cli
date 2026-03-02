@@ -1,8 +1,8 @@
 """
-Base abstracta para todas las tools del sistema.
+Abstract base class for all system tools.
 
-Define la interfaz común que todas las tools deben implementar,
-incluyendo validación de argumentos y generación de schemas.
+Defines the common interface that all tools must implement,
+including argument validation and schema generation.
 """
 
 from abc import ABC, abstractmethod
@@ -12,12 +12,12 @@ from pydantic import BaseModel
 
 
 class ToolResult(BaseModel):
-    """Resultado de la ejecución de una tool.
+    """Result of a tool execution.
 
     Attributes:
-        success: True si la tool se ejecutó correctamente
-        output: Salida/resultado de la tool (siempre string)
-        error: Mensaje de error si success=False, None en caso contrario
+        success: True if the tool executed successfully
+        output: Output/result of the tool (always string)
+        error: Error message if success=False, None otherwise
     """
 
     success: bool
@@ -28,15 +28,15 @@ class ToolResult(BaseModel):
 
 
 class BaseTool(ABC):
-    """Clase base abstracta para todas las tools.
+    """Abstract base class for all tools.
 
-    Cada tool debe:
-    1. Definir name, description y args_model
-    2. Implementar execute()
-    3. Opcionalmente marcar sensitive=True
+    Each tool must:
+    1. Define name, description and args_model
+    2. Implement execute()
+    3. Optionally set sensitive=True
 
-    El método get_schema() genera automáticamente el JSON Schema
-    compatible con OpenAI function calling a partir del args_model.
+    The get_schema() method automatically generates the JSON Schema
+    compatible with OpenAI function calling from the args_model.
     """
 
     name: str
@@ -46,33 +46,33 @@ class BaseTool(ABC):
 
     @abstractmethod
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Ejecuta la tool con los argumentos proporcionados.
+        """Execute the tool with the provided arguments.
 
         Args:
-            **kwargs: Argumentos validados por args_model
+            **kwargs: Arguments validated by args_model
 
         Returns:
-            ToolResult con el resultado de la ejecución
+            ToolResult with the execution result
 
         Note:
-            Este método NUNCA debe lanzar excepciones al caller.
-            Todos los errores deben capturarse y retornarse en ToolResult.
+            This method must NEVER raise exceptions to the caller.
+            All errors must be caught and returned in ToolResult.
         """
         pass
 
     def get_schema(self) -> dict[str, Any]:
-        """Genera JSON Schema compatible con OpenAI function calling.
+        """Generate JSON Schema compatible with OpenAI function calling.
 
         Returns:
-            Dict con el schema en formato OpenAI tool/function calling
+            Dict with the schema in OpenAI tool/function calling format
 
         Example:
             {
                 "type": "function",
                 "function": {
                     "name": "read_file",
-                    "description": "Lee el contenido de un archivo",
-                    "parameters": {...schema de Pydantic...}
+                    "description": "Reads the contents of a file",
+                    "parameters": {...Pydantic schema...}
                 }
             }
         """
@@ -86,16 +86,16 @@ class BaseTool(ABC):
         }
 
     def validate_args(self, args: dict[str, Any]) -> BaseModel:
-        """Valida argumentos usando el modelo Pydantic.
+        """Validate arguments using the Pydantic model.
 
         Args:
-            args: Diccionario con argumentos sin validar
+            args: Dictionary with unvalidated arguments
 
         Returns:
-            Instancia del args_model validada
+            Validated args_model instance
 
         Raises:
-            ValidationError: Si los argumentos no son válidos
+            ValidationError: If the arguments are not valid
         """
         return self.args_model(**args)
 

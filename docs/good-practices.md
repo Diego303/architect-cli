@@ -389,15 +389,18 @@ Los guardrails son reglas **deterministas** de seguridad que se evalúan ANTES q
 
 ### Buenas prácticas con guardrails
 
-**Protege archivos sensibles.** Siempre añade `.env`, certificados y configuraciones de producción a `protected_files`.
+**Protege archivos sensibles.** Usa `sensitive_files` para secrets (bloquea lectura y escritura) y `protected_files` para archivos que se pueden leer pero no modificar.
 
 ```yaml
 guardrails:
   enabled: true
-  protected_files:
+  # Bloquea lectura Y escritura — secrets nunca llegan al LLM
+  sensitive_files:
     - ".env*"
     - "*.pem"
     - "*.key"
+  # Bloquea solo escritura — el agente puede leer pero no modificar
+  protected_files:
     - "deploy/**"
     - "Dockerfile"
 ```
@@ -1064,7 +1067,7 @@ indexer:
 | Skills | `.architect.md` en cada proyecto, skills con globs para contexto específico |
 | Memoria | Activar en proyectos recurrentes, revisar `.architect/memory.md` periódicamente |
 | Sessions | Activar `auto_save: true`, usar `resume` para tareas parciales, `cleanup` periódico |
-| Reports | `--report github` en PRs, `--report json` para CI, `--report-file` siempre en CI |
+| Reports | `--report github` en PRs, `--report json` para CI, `--report-file` siempre en CI (formato inferido de extensión si no se pasa `--report`) |
 | Dry run | `--dry-run` para previsualizar antes de ejecutar en producción |
 | Evaluación | `basic` para CI, `full` solo para tareas críticas |
 | Modo | `confirm-sensitive` en local, `yolo` en CI |

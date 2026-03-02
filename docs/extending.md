@@ -301,7 +301,21 @@ DEFAULT_AGENTS["security-audit"] = AgentConfig(
 )
 ```
 
-### 2.3. Escribir System Prompts Efectivos
+### 2.3. Nota sobre i18n (v1.1.0)
+
+Los system prompts de los agentes default (`build`, `plan`, `resume`, `review`) ahora se resuelven via el sistema i18n. Esto significa que cambian de idioma según la configuración `language`. Los agentes custom definidos via YAML mantienen sus prompts tal cual los escribes — no se traducen.
+
+Si quieres que un agente custom soporte múltiples idiomas, puedes usar la API de i18n directamente en código:
+
+```python
+from architect.i18n import t
+
+CUSTOM_PROMPT = t("mi_agente.system_prompt")
+```
+
+Ver [`i18n.md`](i18n.md) para detalles sobre el sistema de internacionalización.
+
+### 2.4. Escribir System Prompts Efectivos
 
 Un buen system prompt para architect sigue esta estructura:
 
@@ -320,7 +334,7 @@ Consejos:
 - **Limitar el scope**: un agente con un rol claro rinde mejor que uno generico.
 - **Usar tablas**: el LLM las parsea mejor que listas largas de prosa.
 
-### 2.4. Precedencia de Configuracion
+### 2.5. Precedencia de Configuracion
 
 Los agentes siguen este orden de merge (de menor a mayor prioridad):
 
@@ -731,14 +745,14 @@ Se puede editar manualmente para anadir reglas permanentes:
 
 Los guardrails son la capa de seguridad determinista de architect. Se evaluan **ANTES** que los hooks y no pueden ser desactivados por el LLM. Son reglas rigidas, no heuristicas.
 
-### 5.1. Archivos Protegidos
+### 5.1. Archivos Sensibles (v1.1.0) — Lectura + Escritura
 
-Patrones glob de archivos que el agente NO puede modificar ni eliminar:
+Patrones glob de archivos que el agente NO puede leer ni modificar. Usa esto para secrets que no deben llegar al LLM:
 
 ```yaml
 guardrails:
   enabled: true
-  protected_files:
+  sensitive_files:
     - ".env"
     - ".env.*"
     - "*.pem"
@@ -746,16 +760,27 @@ guardrails:
     - "*.p12"
     - "credentials.json"
     - "*.secret"
+```
+
+Cuando el agente intenta leer o escribir un archivo sensible, recibe un error claro: `"Archivo sensible bloqueado por guardrail: .env (patron: .env)"`. Tambien se detectan lecturas shell (`cat .env`, `head *.pem`, `tail .env`) y redirecciones (`echo "data" > .env`).
+
+### 5.2. Archivos Protegidos — Solo Escritura
+
+Patrones glob de archivos que el agente NO puede modificar ni eliminar, pero SI puede leer:
+
+```yaml
+guardrails:
+  enabled: true
+  protected_files:
     - "docker-compose.prod.yaml"
     - "Makefile"
     - "*.lock"           # No tocar lockfiles
+    - "deploy/**"
 ```
 
-Cuando el agente intenta escribir/editar/eliminar un archivo protegido, recibe un error claro: `"Archivo protegido por guardrail: .env (patron: .env)"`. El agente puede leer archivos protegidos; solo la escritura esta bloqueada.
+Cuando el agente intenta escribir/editar/eliminar un archivo protegido, recibe un error: `"Archivo protegido por guardrail: Makefile (patron: Makefile)"`. El agente puede leer archivos protegidos; solo la escritura esta bloqueada. Tambien se detectan redirecciones shell.
 
-Tambien se detectan redirecciones shell: si el agente ejecuta `echo "data" > .env`, el guardrail lo bloquea.
-
-### 5.2. Comandos Bloqueados
+### 5.3. Comandos Bloqueados
 
 Patrones regex de comandos que el agente NO puede ejecutar:
 
@@ -777,7 +802,7 @@ guardrails:
 
 Los patrones se evaluan con `re.search()` case-insensitive.
 
-### 5.3. Limites de Edicion
+### 5.4. Limites de Edicion
 
 ```yaml
 guardrails:
@@ -789,7 +814,7 @@ guardrails:
 
 Estos limites se acumulan durante toda la sesion. Cuando se alcanza un limite, el agente recibe un error y no puede hacer mas cambios de ese tipo. Esto previene que el agente "se desboque" modificando archivos indiscriminadamente.
 
-### 5.4. Code Rules
+### 5.5. Code Rules
 
 Patrones regex que se escanean en todo contenido que el agente escribe. Utiles para forzar convenciones o prevenir patrones peligrosos:
 
@@ -826,7 +851,7 @@ Severity:
 - `"warn"`: El write se permite, pero se adjunta el mensaje al LLM como advertencia.
 - `"block"`: El write se bloquea y el LLM recibe el mensaje de error para corregir.
 
-### 5.5. Quality Gates
+### 5.6. Quality Gates
 
 Comandos que se ejecutan cuando el agente declara que ha terminado. Si un gate requerido falla, el resultado se pasa al agente para que corrija:
 
@@ -861,7 +886,7 @@ Cada gate tiene:
 - `required`: Si `true`, un fallo impide que el agente termine sin corregir.
 - `timeout`: Segundos maximos de ejecucion.
 
-### 5.6. require_test_after_edit
+### 5.7. require_test_after_edit
 
 ```yaml
 guardrails:
@@ -871,7 +896,7 @@ guardrails:
 
 Cuando esta activo, el agente es forzado a ejecutar tests despues de hacer ediciones. El contador interno se resetea cada vez que el agente ejecuta un comando de test.
 
-### 5.7. Ejemplo Completo: Configuracion Enterprise
+### 5.8. Ejemplo Completo: Configuracion Enterprise
 
 ```yaml
 guardrails:
@@ -1026,19 +1051,28 @@ from architect.core.guardrails import GuardrailsEngine
 
 config = GuardrailsConfig(
     enabled=True,
-    protected_files=[".env", "*.pem"],
+    sensitive_files=[".env", "*.pem"],    # blocks read + write
+    protected_files=["*.lock"],           # blocks write only
     blocked_commands=[r"rm\s+-rf"],
 )
 engine = GuardrailsEngine(config, workspace_root="/tmp/test")
 
-allowed, reason = engine.check_file_access(".env", "write_file")
-assert allowed is False
+# sensitive_files: blocks both read and write
+allowed, reason = engine.check_file_access(".env", "read_file")
+assert allowed is False  # cannot read secrets
 
-allowed, reason = engine.check_command("rm -rf /")
-assert allowed is False
+allowed, reason = engine.check_file_access(".env", "write_file")
+assert allowed is False  # cannot write secrets
+
+# protected_files: blocks write only, allows read
+allowed, reason = engine.check_file_access("package.lock", "read_file")
+assert allowed is True   # can read protected files
+
+allowed, reason = engine.check_file_access("package.lock", "write_file")
+assert allowed is False  # cannot write protected files
 
 allowed, reason = engine.check_file_access("src/main.py", "write_file")
-assert allowed is True
+assert allowed is True   # normal files: full access
 ```
 
 ### 6.3. Versionado de Configuraciones

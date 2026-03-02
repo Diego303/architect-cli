@@ -181,7 +181,7 @@ class TestDispatchSubagentTool:
         result = tool.execute(task="Test", agent_type="invalid_type")
 
         assert result.success is False
-        assert "inválido" in result.error
+        assert "Invalid sub-agent type" in result.error
         assert "explore" in result.error
         mock_agent_factory.assert_not_called()
 
@@ -206,7 +206,7 @@ class TestDispatchSubagentTool:
 
         assert result.success is True
         assert len(result.output) < 2000
-        assert "truncado" in result.output
+        assert "summary truncated" in result.output
 
     def test_execute_no_response(self, tool, mock_agent_result):
         mock_agent_result.final_response = None
@@ -214,7 +214,7 @@ class TestDispatchSubagentTool:
         result = tool.execute(task="Investiga")
 
         assert result.success is True
-        assert "Sin resultado" in result.output
+        assert "No result from sub-agent" in result.output
 
     def test_execute_empty_response(self, tool, mock_agent_result):
         mock_agent_result.final_response = ""
@@ -223,7 +223,7 @@ class TestDispatchSubagentTool:
 
         assert result.success is True
         # Empty string is falsy, so should get fallback
-        assert "Sin resultado" in result.output
+        assert "No result from sub-agent" in result.output
 
     def test_execute_agent_factory_error(self, tool, mock_agent_factory):
         mock_agent_factory.side_effect = RuntimeError("Factory failed")
@@ -231,7 +231,7 @@ class TestDispatchSubagentTool:
         result = tool.execute(task="Investiga")
 
         assert result.success is False
-        assert "Error ejecutando sub-agente" in result.error
+        assert "Error executing sub-agent" in result.error
 
     def test_execute_agent_run_error(self, tool, mock_agent_factory):
         agent = mock_agent_factory.return_value
@@ -240,7 +240,7 @@ class TestDispatchSubagentTool:
         result = tool.execute(task="Investiga")
 
         assert result.success is False
-        assert "Error ejecutando sub-agente" in result.error
+        assert "Error executing sub-agent" in result.error
 
     def test_execute_relevant_files_none(self, tool):
         result = tool.execute(task="Investiga", relevant_files=None)
@@ -269,8 +269,8 @@ class TestPromptBuilding:
         prompt = agent.run.call_args[0][0]
 
         assert "explore" in prompt
-        assert "Investiga" in prompt or "lectura" in prompt
-        assert "NO modifiques" in prompt
+        assert "Investigate" in prompt or "read" in prompt
+        assert "Do NOT modify" in prompt
 
     def test_test_prompt_has_instructions(self, tool, mock_agent_factory):
         tool.execute(task="Ejecuta pytest tests/", agent_type="test")
@@ -279,7 +279,7 @@ class TestPromptBuilding:
         prompt = agent.run.call_args[0][0]
 
         assert "test" in prompt.lower()
-        assert "NO modifiques" in prompt
+        assert "Do NOT modify" in prompt
 
     def test_review_prompt_has_instructions(self, tool, mock_agent_factory):
         tool.execute(task="Revisa seguridad", agent_type="review")
@@ -287,8 +287,8 @@ class TestPromptBuilding:
         agent = mock_agent_factory.return_value
         prompt = agent.run.call_args[0][0]
 
-        assert "Revisa" in prompt
-        assert "bugs" in prompt or "problemas" in prompt
+        assert "Review" in prompt
+        assert "bugs" in prompt or "problems" in prompt
 
     def test_prompt_includes_relevant_files(self, tool, mock_agent_factory):
         files = ["src/auth.py", "src/db.py", "tests/test_auth.py"]
@@ -320,7 +320,7 @@ class TestPromptBuilding:
         agent = mock_agent_factory.return_value
         prompt = agent.run.call_args[0][0]
 
-        assert "Archivos Relevantes" not in prompt
+        assert "Relevant Files" not in prompt
 
 
 # -- Tests: Edge Cases -------------------------------------------------------
@@ -335,7 +335,7 @@ class TestEdgeCases:
         result = tool.execute(task="Test")
 
         assert result.success is True
-        assert "truncado" not in result.output
+        assert "summary truncated" not in result.output
 
     def test_one_over_max_chars_triggers_truncation(self, tool, mock_agent_result):
         mock_agent_result.final_response = "X" * (SUBAGENT_SUMMARY_MAX_CHARS + 1)
@@ -343,7 +343,7 @@ class TestEdgeCases:
         result = tool.execute(task="Test")
 
         assert result.success is True
-        assert "truncado" in result.output
+        assert "summary truncated" in result.output
 
     def test_result_without_attributes(self, tool, mock_agent_factory):
         # Resultado sin atributos esperados (solo final_response)

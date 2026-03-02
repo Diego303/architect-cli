@@ -2,8 +2,8 @@
 Tests para el sistema de guardrails v4-A2.
 
 Cubre:
-- check_file_access: archivos protegidos
-- check_command: comandos bloqueados y límite de comandos
+- check_file_access: archivos protegidos (solo escritura) y sensibles (lectura + escritura)
+- check_command: comandos bloqueados, límite de comandos y lecturas shell de archivos sensibles
 - check_edit_limits: límite de archivos y líneas
 - check_code_rules: regex en contenido escrito
 - run_quality_gates: ejecución de gates con timeout
@@ -98,7 +98,7 @@ class TestCheckCommand:
     def test_rm_rf_blocked(self, engine: GuardrailsEngine):
         allowed, reason = engine.check_command("rm -rf /")
         assert not allowed
-        assert "rm" in reason.lower() or "bloqueado" in reason.lower()
+        assert "rm" in reason.lower() or "blocked" in reason.lower()
 
     def test_force_push_main_blocked(self, engine: GuardrailsEngine):
         allowed, reason = engine.check_command("git push --force origin main")
@@ -124,7 +124,7 @@ class TestCheckCommand:
         eng.record_command()
         allowed, reason = eng.check_command("echo ok")
         assert not allowed
-        assert "Límite" in reason
+        assert "limit" in reason.lower()
 
     def test_redirect_to_env_blocked(self, engine: GuardrailsEngine):
         """Redirección shell a .env debe ser bloqueada."""
@@ -214,7 +214,7 @@ class TestCheckEditLimits:
         eng.check_edit_limits("b.py", 1, 0)
         allowed, reason = eng.check_edit_limits("c.py", 1, 0)
         assert not allowed
-        assert "archivos" in reason.lower()
+        assert "file" in reason.lower()
 
     def test_lines_limit_exceeded(self, workspace: Path):
         config = GuardrailsConfig(enabled=True, max_lines_changed=10)
@@ -223,7 +223,7 @@ class TestCheckEditLimits:
         eng.check_edit_limits("a.py", 5, 0)
         allowed, reason = eng.check_edit_limits("a.py", 6, 0)
         assert not allowed
-        assert "líneas" in reason.lower()
+        assert "line" in reason.lower()
 
     def test_same_file_counted_once(self, engine: GuardrailsEngine):
         engine.check_edit_limits("src/main.py", 5, 0)
@@ -439,3 +439,186 @@ class TestGuardrailsConfigSchema:
         config = AppConfig()
         assert hasattr(config, "guardrails")
         assert config.guardrails.enabled is False
+
+    def test_defaults_includes_sensitive_files(self):
+        config = GuardrailsConfig()
+        assert config.sensitive_files == []
+
+    def test_auto_enable_with_sensitive_files_only(self):
+        config = GuardrailsConfig(sensitive_files=[".env"])
+        assert config.enabled is True
+
+    def test_from_dict_with_sensitive_files(self):
+        data = {
+            "sensitive_files": [".env", "*.key"],
+            "protected_files": ["*.lock"],
+        }
+        config = GuardrailsConfig(**data)
+        assert len(config.sensitive_files) == 2
+        assert len(config.protected_files) == 1
+        assert config.enabled is True
+
+
+# ── Tests: sensitive_files ─────────────────────────────────────────
+
+
+@pytest.fixture
+def sensitive_config() -> GuardrailsConfig:
+    return GuardrailsConfig(
+        enabled=True,
+        sensitive_files=[".env", ".env.*", "*.pem", "secrets/*"],
+        protected_files=["*.lock", "config/production.yaml"],
+    )
+
+
+@pytest.fixture
+def sensitive_engine(sensitive_config: GuardrailsConfig, workspace: Path) -> GuardrailsEngine:
+    return GuardrailsEngine(sensitive_config, str(workspace))
+
+
+class TestSensitiveFiles:
+    """Tests para sensitive_files — bloquea lectura Y escritura."""
+
+    # -- Lectura bloqueada para sensitive_files --
+
+    def test_read_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access(".env", "read_file")
+        assert not allowed
+        assert "sensitive" in reason.lower()
+
+    def test_read_env_variant_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access(".env.production", "read_file")
+        assert not allowed
+
+    def test_read_pem_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access("server.pem", "read_file")
+        assert not allowed
+
+    def test_read_secrets_subdir_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access("secrets/api_key.txt", "read_file")
+        assert not allowed
+
+    def test_read_normal_file_allowed(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access("src/main.py", "read_file")
+        assert allowed
+
+    def test_read_nested_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        """Basename matching: config/.env coincide con patrón .env."""
+        allowed, reason = sensitive_engine.check_file_access("config/.env", "read_file")
+        assert not allowed
+
+    # -- Escritura también bloqueada para sensitive_files --
+
+    def test_write_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access(".env", "write_file")
+        assert not allowed
+        assert "sensitive" in reason.lower()
+
+    def test_edit_pem_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access("server.pem", "edit_file")
+        assert not allowed
+
+    def test_delete_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access(".env", "delete_file")
+        assert not allowed
+
+    def test_apply_patch_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_file_access(".env", "apply_patch")
+        assert not allowed
+
+    # -- protected_files solo bloquea escritura, NO lectura --
+
+    def test_read_lockfile_allowed(self, sensitive_engine: GuardrailsEngine):
+        """protected_files (*.lock) NO debe bloquear lectura."""
+        allowed, reason = sensitive_engine.check_file_access("package.lock", "read_file")
+        assert allowed
+
+    def test_read_production_yaml_allowed(self, sensitive_engine: GuardrailsEngine):
+        """protected_files (config/production.yaml) NO bloquea lectura."""
+        allowed, reason = sensitive_engine.check_file_access(
+            "config/production.yaml", "read_file"
+        )
+        assert allowed
+
+    def test_write_lockfile_blocked(self, sensitive_engine: GuardrailsEngine):
+        """protected_files (*.lock) debe seguir bloqueando escritura."""
+        allowed, reason = sensitive_engine.check_file_access("package.lock", "write_file")
+        assert not allowed
+        assert "protected" in reason.lower()
+
+    def test_edit_production_yaml_blocked(self, sensitive_engine: GuardrailsEngine):
+        """protected_files debe seguir bloqueando edición."""
+        allowed, reason = sensitive_engine.check_file_access(
+            "config/production.yaml", "edit_file"
+        )
+        assert not allowed
+
+    # -- Shell: comandos de lectura bloqueados para sensitive_files --
+
+    def test_cat_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("cat .env")
+        assert not allowed
+        assert ".env" in reason
+
+    def test_head_pem_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("head -n 5 server.pem")
+        assert not allowed
+
+    def test_tail_env_variant_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("tail .env.production")
+        assert not allowed
+
+    def test_cat_normal_file_allowed(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("cat README.md")
+        assert allowed
+
+    def test_cat_nested_env_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("cat config/.env")
+        assert not allowed
+
+    # -- Shell: redirecciones a sensitive_files también bloqueadas --
+
+    def test_redirect_to_sensitive_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("echo 'x' > .env")
+        assert not allowed
+
+    def test_tee_to_sensitive_blocked(self, sensitive_engine: GuardrailsEngine):
+        allowed, reason = sensitive_engine.check_command("echo 'x' | tee server.pem")
+        assert not allowed
+
+
+# ── Tests: _extract_read_targets ─────────────────────────────────
+
+
+class TestExtractReadTargets:
+    """Tests para la función _extract_read_targets."""
+
+    def test_cat_file(self):
+        from architect.core.guardrails import _extract_read_targets
+        targets = _extract_read_targets("cat .env")
+        assert ".env" in targets
+
+    def test_head_with_flags(self):
+        from architect.core.guardrails import _extract_read_targets
+        targets = _extract_read_targets("head -n 10 .env")
+        assert ".env" in targets
+
+    def test_tail_file(self):
+        from architect.core.guardrails import _extract_read_targets
+        targets = _extract_read_targets("tail server.pem")
+        assert "server.pem" in targets
+
+    def test_less_file(self):
+        from architect.core.guardrails import _extract_read_targets
+        targets = _extract_read_targets("less secrets.yaml")
+        assert "secrets.yaml" in targets
+
+    def test_no_read_command(self):
+        from architect.core.guardrails import _extract_read_targets
+        targets = _extract_read_targets("echo hello")
+        assert targets == []
+
+    def test_cat_with_path(self):
+        from architect.core.guardrails import _extract_read_targets
+        targets = _extract_read_targets("cat config/.env")
+        assert "config/.env" in targets

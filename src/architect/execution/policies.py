@@ -1,8 +1,8 @@
 """
-Políticas de confirmación para ejecución de tools.
+Confirmation policies for tool execution.
 
-Define cuándo y cómo solicitar confirmación al usuario antes de
-ejecutar tools, con soporte especial para entornos headless/CI.
+Defines when and how to request user confirmation before
+executing tools, with special support for headless/CI environments.
 """
 
 import sys
@@ -12,53 +12,52 @@ from ..tools.base import BaseTool
 
 
 class NoTTYError(Exception):
-    """Error lanzado cuando se requiere confirmación pero no hay TTY disponible.
+    """Error raised when confirmation is required but no TTY is available.
 
-    Esto ocurre en entornos headless (CI, cron, pipelines) cuando
-    la política requiere confirmación pero no es posible interactuar
-    con el usuario.
+    This occurs in headless environments (CI, cron, pipelines) when
+    the policy requires confirmation but user interaction is not possible.
     """
 
     pass
 
 
 class ConfirmationPolicy:
-    """Política de confirmación para ejecución de tools.
+    """Confirmation policy for tool execution.
 
-    Determina si una tool requiere confirmación del usuario antes
-    de ejecutarse, basándose en el modo configurado.
+    Determines whether a tool requires user confirmation before
+    executing, based on the configured mode.
 
-    Modos:
-        - "yolo": Sin confirmación, ejecución automática total
-        - "confirm-all": Confirmar todas las tools
-        - "confirm-sensitive": Solo confirmar tools marcadas como sensitive
+    Modes:
+        - "yolo": No confirmation, fully automatic execution
+        - "confirm-all": Confirm all tools
+        - "confirm-sensitive": Only confirm tools marked as sensitive
     """
 
     def __init__(self, mode: str):
-        """Inicializa la política con un modo específico.
+        """Initialize the policy with a specific mode.
 
         Args:
-            mode: Uno de "yolo", "confirm-all", "confirm-sensitive"
+            mode: One of "yolo", "confirm-all", "confirm-sensitive"
 
         Raises:
-            ValueError: Si el mode no es válido
+            ValueError: If the mode is not valid
         """
         valid_modes = {"yolo", "confirm-all", "confirm-sensitive"}
         if mode not in valid_modes:
             raise ValueError(
-                f"Modo inválido '{mode}'. " f"Modos válidos: {', '.join(valid_modes)}"
+                f"Invalid mode '{mode}'. " f"Valid modes: {', '.join(valid_modes)}"
             )
 
         self.mode = mode
 
     def should_confirm(self, tool: BaseTool) -> bool:
-        """Determina si una tool requiere confirmación.
+        """Determine whether a tool requires confirmation.
 
         Args:
-            tool: Tool a evaluar
+            tool: Tool to evaluate
 
         Returns:
-            True si se debe pedir confirmación, False en caso contrario
+            True if confirmation should be requested, False otherwise
         """
         match self.mode:
             case "yolo":
@@ -68,7 +67,7 @@ class ConfirmationPolicy:
             case "confirm-sensitive":
                 return tool.sensitive
             case _:
-                # No debería llegar aquí por validación en __init__
+                # Should not reach here due to validation in __init__
                 return True
 
     def request_confirmation(
@@ -77,75 +76,75 @@ class ConfirmationPolicy:
         args: dict[str, Any],
         dry_run: bool = False,
     ) -> bool:
-        """Solicita confirmación al usuario para ejecutar una tool.
+        """Request user confirmation to execute a tool.
 
         Args:
-            tool_name: Nombre de la tool
-            args: Argumentos con los que se ejecutará
-            dry_run: Si True, indica que es una simulación
+            tool_name: Name of the tool
+            args: Arguments it will be executed with
+            dry_run: If True, indicates this is a simulation
 
         Returns:
-            True si el usuario confirma, False si rechaza
+            True if the user confirms, False if they reject
 
         Raises:
-            NoTTYError: Si no hay TTY disponible para pedir confirmación
+            NoTTYError: If no TTY is available for confirmation
 
         Note:
-            En entornos headless (CI, cron), si se llega aquí es un error
-            de configuración. El usuario debe usar --mode yolo o --dry-run.
+            In headless environments (CI, cron), reaching this point is a
+            configuration error. The user should use --mode yolo or --dry-run.
         """
-        # Verificar que haya un TTY disponible
+        # Check that a TTY is available
         if not sys.stdin.isatty():
             raise NoTTYError(
-                f"Se requiere confirmación para ejecutar '{tool_name}' "
-                f"pero no hay TTY disponible (entorno headless/CI). "
-                f"Soluciones: "
-                f"1) Usa --mode yolo para ejecución automática, "
-                f"2) Usa --dry-run para simular sin ejecutar, "
-                f"3) Cambia la configuración del agente a confirm_mode: yolo"
+                f"Confirmation required to execute '{tool_name}' "
+                f"but no TTY is available (headless/CI environment). "
+                f"Solutions: "
+                f"1) Use --mode yolo for automatic execution, "
+                f"2) Use --dry-run to simulate without executing, "
+                f"3) Change the agent configuration to confirm_mode: yolo"
             )
 
-        # Formatear argumentos para mostrar al usuario
+        # Format arguments for display
         args_str = self._format_args(args)
 
-        # Mensaje de confirmación
+        # Confirmation message
         if dry_run:
-            print(f"\n[DRY-RUN] Se ejecutaría: {tool_name}({args_str})")
-            return True  # En dry-run siempre "confirmar" para que continúe
+            print(f"\n[DRY-RUN] Would execute: {tool_name}({args_str})")
+            return True  # In dry-run always "confirm" so it continues
 
-        print(f"\n¿Ejecutar {tool_name}({args_str})?")
-        print("  [y] Sí, ejecutar")
-        print("  [n] No, cancelar")
-        print("  [a] Abortar toda la ejecución")
+        print(f"\nExecute {tool_name}({args_str})?")
+        print("  [y] Yes, execute")
+        print("  [n] No, cancel")
+        print("  [a] Abort entire execution")
 
         while True:
             try:
-                response = input("\nRespuesta: ").strip().lower()
+                response = input("\nResponse: ").strip().lower()
 
-                if response in ("y", "yes", "sí", "si", "s"):
+                if response in ("y", "yes"):
                     return True
                 elif response in ("n", "no"):
-                    print("❌ Operación cancelada por el usuario")
+                    print("Operation cancelled by the user")
                     return False
-                elif response in ("a", "abort", "abortar"):
-                    print("🛑 Ejecución abortada por el usuario")
-                    sys.exit(130)  # Código similar a SIGINT
+                elif response in ("a", "abort"):
+                    print("Execution aborted by the user")
+                    sys.exit(130)  # Exit code similar to SIGINT
                 else:
-                    print("Respuesta no válida. Usa 'y' (sí), 'n' (no) o 'a' (abortar)")
+                    print("Invalid response. Use 'y' (yes), 'n' (no) or 'a' (abort)")
 
             except (KeyboardInterrupt, EOFError):
-                print("\n🛑 Ejecución interrumpida")
+                print("\nExecution interrupted")
                 sys.exit(130)
 
     def _format_args(self, args: dict[str, Any], max_length: int = 100) -> str:
-        """Formatea argumentos para mostrar al usuario.
+        """Format arguments for user display.
 
         Args:
-            args: Diccionario de argumentos
-            max_length: Longitud máxima de valores antes de truncar
+            args: Dictionary of arguments
+            max_length: Maximum value length before truncating
 
         Returns:
-            String formateado con los argumentos
+            Formatted string with the arguments
         """
         if not args:
             return ""
@@ -154,11 +153,11 @@ class ConfirmationPolicy:
         for key, value in args.items():
             value_str = str(value)
 
-            # Truncar valores muy largos
+            # Truncate very long values
             if len(value_str) > max_length:
                 value_str = value_str[:max_length] + "..."
 
-            # Escapar saltos de línea para mostrar en una línea
+            # Escape newlines for single-line display
             value_str = value_str.replace("\n", "\\n")
 
             formatted.append(f"{key}={repr(value_str)}")

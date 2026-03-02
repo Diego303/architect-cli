@@ -1,9 +1,9 @@
 """
-Features avanzadas de architect — módulos post-core.
+Advanced architect features — post-core modules.
 
-Fase B: Sessions, Reports, CI/CD flags, Dry Run.
-Fase C: Ralph Loop, Parallel Runs, Pipelines, Checkpoints.
-Fase D: Competitive Eval.
+Phase B: Sessions, Reports, CI/CD flags, Dry Run.
+Phase C: Ralph Loop, Parallel Runs, Pipelines, Checkpoints.
+Phase D: Competitive Eval.
 """
 
 from .checkpoints import Checkpoint, CheckpointManager

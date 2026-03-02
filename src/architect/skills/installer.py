@@ -1,10 +1,10 @@
 """
-Skills Installer — Instala, crea y gestiona skills (v4-A3).
+Skills Installer -- Installs, creates and manages skills (v4-A3).
 
-Soporta:
-- Instalación desde repos GitHub (sparse checkout)
-- Creación de skills locales con template
-- Listado y desinstalación
+Supports:
+- Installation from GitHub repos (sparse checkout)
+- Creation of local skills with template
+- Listing and uninstallation
 """
 
 import shutil
@@ -17,7 +17,7 @@ logger = structlog.get_logger()
 
 
 class SkillInstaller:
-    """Instala skills desde repos GitHub o URLs."""
+    """Installs skills from GitHub repos or URLs."""
 
     INSTALL_DIR = ".architect/installed-skills"
 
@@ -26,13 +26,13 @@ class SkillInstaller:
         self.install_dir = self.root / self.INSTALL_DIR
 
     def install_from_github(self, repo_spec: str) -> bool:
-        """Instala skill desde GitHub. Formato: user/repo o user/repo/path/to/skill.
+        """Install skill from GitHub. Format: user/repo or user/repo/path/to/skill.
 
         Args:
-            repo_spec: Especificación del repositorio (ej: 'vercel/architect-skills/python-lint')
+            repo_spec: Repository specification (e.g.: 'vercel/architect-skills/python-lint')
 
         Returns:
-            True si la instalación fue exitosa.
+            True if the installation was successful.
         """
         parts = repo_spec.split("/")
         if len(parts) < 2:
@@ -43,7 +43,7 @@ class SkillInstaller:
         skill_path = "/".join(parts[2:]) if len(parts) > 2 else ""
         skill_name = parts[-1] if len(parts) > 2 else parts[1]
 
-        # Clonar sparse checkout
+        # Sparse checkout clone
         temp_dir = self.root / ".architect" / "tmp" / skill_name
         temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -77,18 +77,18 @@ class SkillInstaller:
                     timeout=10,
                 )
 
-            # Copiar skill al directorio de instalación
+            # Copy skill to installation directory
             source = temp_dir / skill_path if skill_path else temp_dir
             dest = self.install_dir / skill_name
             if dest.exists():
                 shutil.rmtree(dest)
             dest.mkdir(parents=True, exist_ok=True)
 
-            # Copiar SKILL.md y archivos relevantes
+            # Copy SKILL.md and relevant files
             skill_md = source / "SKILL.md"
             if skill_md.exists():
                 shutil.copy2(skill_md, dest / "SKILL.md")
-                # Copiar scripts/ si existe
+                # Copy scripts/ if it exists
                 scripts_dir = source / "scripts"
                 if scripts_dir.exists():
                     shutil.copytree(scripts_dir, dest / "scripts")
@@ -108,13 +108,13 @@ class SkillInstaller:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def create_local(self, name: str) -> Path:
-        """Crea una skill local con template.
+        """Create a local skill with template.
 
         Args:
-            name: Nombre de la skill a crear.
+            name: Name of the skill to create.
 
         Returns:
-            Path al directorio de la skill creada.
+            Path to the created skill directory.
         """
         skill_dir = self.root / ".architect" / "skills" / name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -123,20 +123,20 @@ class SkillInstaller:
             skill_md.write_text(
                 f"---\n"
                 f"name: {name}\n"
-                f'description: "TODO: Describe esta skill"\n'
+                f'description: "TODO: Describe this skill"\n'
                 f"globs: []\n"
                 f"---\n\n"
                 f"# {name}\n\n"
-                f"Instrucciones para el agente aqui.\n",
+                f"Instructions for the agent here.\n",
                 encoding="utf-8",
             )
         return skill_dir
 
     def list_installed(self) -> list[dict[str, str]]:
-        """Lista skills instaladas (locales e instaladas).
+        """List installed skills (local and installed).
 
         Returns:
-            Lista de dicts con name, source, path.
+            List of dicts with name, source, path.
         """
         skills: list[dict[str, str]] = []
         for skills_base in [
@@ -156,13 +156,13 @@ class SkillInstaller:
         return skills
 
     def uninstall(self, name: str) -> bool:
-        """Desinstala una skill.
+        """Uninstall a skill.
 
         Args:
-            name: Nombre de la skill a desinstalar.
+            name: Name of the skill to uninstall.
 
         Returns:
-            True si la skill fue encontrada y eliminada.
+            True if the skill was found and removed.
         """
         path = self.install_dir / name
         if path.exists():

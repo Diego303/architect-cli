@@ -1,10 +1,10 @@
 """
-Estado del agente - Estructuras de datos inmutables para tracking.
+Agent State - Immutable data structures for tracking.
 
-Define las estructuras de datos que representan el estado de ejecución
-del agente a lo largo de su ciclo de vida.
+Defines the data structures representing the agent's execution state
+throughout its lifecycle.
 
-v3: Añadido StopReason enum y campo stop_reason en AgentState.
+v3: Added StopReason enum and stop_reason field in AgentState.
 """
 
 import time
@@ -20,26 +20,26 @@ if TYPE_CHECKING:
 
 
 class StopReason(Enum):
-    """Razón por la que se detuvo el agente.
+    """Reason why the agent stopped.
 
-    Distingue entre terminación natural (el LLM decidió acabar)
-    y terminación forzada por safety nets (watchdogs).
+    Distinguishes between natural termination (the LLM decided to finish)
+    and forced termination by safety nets (watchdogs).
     """
 
-    LLM_DONE = "llm_done"              # Natural: el LLM no pidió más tools
-    MAX_STEPS = "max_steps"            # Watchdog: límite de pasos alcanzado
-    BUDGET_EXCEEDED = "budget_exceeded"  # Watchdog: límite de coste superado
-    CONTEXT_FULL = "context_full"      # Watchdog: context window lleno
-    TIMEOUT = "timeout"                # Watchdog: tiempo total excedido
-    USER_INTERRUPT = "user_interrupt"  # El usuario hizo Ctrl+C / SIGTERM
-    LLM_ERROR = "llm_error"           # Error irrecuperable del LLM
+    LLM_DONE = "llm_done"              # Natural: the LLM requested no more tools
+    MAX_STEPS = "max_steps"            # Watchdog: step limit reached
+    BUDGET_EXCEEDED = "budget_exceeded"  # Watchdog: cost limit exceeded
+    CONTEXT_FULL = "context_full"      # Watchdog: context window full
+    TIMEOUT = "timeout"                # Watchdog: total time exceeded
+    USER_INTERRUPT = "user_interrupt"  # User pressed Ctrl+C / SIGTERM
+    LLM_ERROR = "llm_error"           # Unrecoverable LLM error
 
 
 @dataclass(frozen=True)
 class ToolCallResult:
-    """Resultado de la ejecución de un tool call.
+    """Result of a tool call execution.
 
-    Inmutable para facilitar debugging y logging.
+    Immutable to facilitate debugging and logging.
     """
 
     tool_name: str
@@ -60,14 +60,14 @@ class ToolCallResult:
 
 @dataclass(frozen=True)
 class StepResult:
-    """Resultado de un step completo del agente.
+    """Result of a complete agent step.
 
-    Un step incluye:
-    - Llamada al LLM
-    - Tool calls ejecutadas (si las hay)
-    - Timestamp del step
+    A step includes:
+    - LLM call
+    - Executed tool calls (if any)
+    - Step timestamp
 
-    Inmutable para facilitar debugging y eventual persistencia.
+    Immutable to facilitate debugging and eventual persistence.
     """
 
     step_number: int
@@ -86,18 +86,18 @@ class StepResult:
 
 @dataclass
 class AgentState:
-    """Estado mutable del agente durante la ejecución.
+    """Mutable agent state during execution.
 
-    Mantiene el estado completo del agente:
-    - Mensajes intercambiados con el LLM
-    - Steps ejecutados
-    - Estado actual
-    - Output final
+    Maintains the complete agent state:
+    - Messages exchanged with the LLM
+    - Executed steps
+    - Current status
+    - Final output
 
     Note:
-        Aunque AgentState es mutable, los StepResult son inmutables.
-        Esto facilita el tracking sin perder la flexibilidad de
-        ir construyendo el estado paso a paso.
+        Although AgentState is mutable, StepResults are immutable.
+        This facilitates tracking without losing the flexibility of
+        building the state step by step.
     """
 
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -111,29 +111,29 @@ class AgentState:
 
     @property
     def current_step(self) -> int:
-        """Retorna el número del step actual (0-indexed)."""
+        """Return the current step number (0-indexed)."""
         return len(self.steps)
 
     @property
     def total_tool_calls(self) -> int:
-        """Retorna el total de tool calls ejecutadas."""
+        """Return the total number of executed tool calls."""
         return sum(len(step.tool_calls_made) for step in self.steps)
 
     @property
     def is_finished(self) -> bool:
-        """Retorna True si el agente ha terminado."""
+        """Return True if the agent has finished."""
         return self.status != "running"
 
     def to_output_dict(self) -> dict[str, Any]:
-        """Convierte el estado a un dict para output JSON.
+        """Convert the state to a dict for JSON output.
 
         Returns:
-            Dict con información completa del estado para output --json
+            Dict with complete state information for --json output
         """
-        # Calcular duración
+        # Calculate duration
         duration_seconds = round(time.time() - self.start_time, 2)
 
-        # Recopilar resumen de tools usadas
+        # Collect summary of tools used
         tools_used: list[dict[str, Any]] = []
         for step in self.steps:
             for tc in step.tool_calls_made:
@@ -141,14 +141,14 @@ class AgentState:
                     "name": tc.tool_name,
                     "success": tc.result.success,
                 }
-                # Añadir información relevante de args (sin contenido largo)
+                # Add relevant args info (without long content)
                 if "path" in tc.args:
                     tool_info["path"] = tc.args["path"]
                 if tc.result.error:
                     tool_info["error"] = tc.result.error
                 tools_used.append(tool_info)
 
-        # Construir output dict
+        # Build output dict
         output_dict: dict[str, Any] = {
             "status": self.status,
             "stop_reason": self.stop_reason.value if self.stop_reason else None,
@@ -158,11 +158,11 @@ class AgentState:
             "duration_seconds": duration_seconds,
         }
 
-        # Añadir modelo si está disponible
+        # Add model if available
         if self.model:
             output_dict["model"] = self.model
 
-        # Añadir resumen de costes si está disponible
+        # Add cost summary if available
         if self.cost_tracker is not None and self.cost_tracker.has_data():
             output_dict["costs"] = self.cost_tracker.summary()
             # Top-level convenience key for parallel workers and scripts

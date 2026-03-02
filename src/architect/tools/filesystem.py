@@ -1,8 +1,8 @@
 """
-Tools para operaciones sobre el filesystem local.
+Tools for local filesystem operations.
 
-Incluye tools para leer, escribir, editar, eliminar y listar archivos,
-todas con validación de paths y confinamiento al workspace.
+Includes tools for reading, writing, editing, deleting, and listing files,
+all with path validation and workspace confinement.
 """
 
 import difflib
@@ -23,51 +23,51 @@ from .schemas import DeleteFileArgs, EditFileArgs, ListFilesArgs, ReadFileArgs, 
 
 
 class ReadFileTool(BaseTool):
-    """Lee el contenido de un archivo dentro del workspace."""
+    """Reads the contents of a file within the workspace."""
 
     def __init__(self, workspace_root: Path):
         self.name = "read_file"
         self.description = (
-            "Lee el contenido completo de un archivo. "
-            "Usa este tool cuando necesites examinar código, "
-            "configuración o cualquier archivo de texto."
+            "Read the full contents of a file. "
+            "Use this tool when you need to examine code, "
+            "configuration, or any text file."
         )
         self.sensitive = False
         self.args_model = ReadFileArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Lee un archivo del workspace.
+        """Read a file from the workspace.
 
         Args:
-            path: Path relativo al workspace
+            path: Path relative to the workspace
 
         Returns:
-            ToolResult con el contenido del archivo o error
+            ToolResult with the file contents or error
         """
         try:
-            # Validar argumentos
+            # Validate arguments
             args = self.validate_args(kwargs)
 
-            # Validar y resolver path
+            # Validate and resolve path
             file_path = validate_path(args.path, self.workspace_root)
 
-            # Verificar que el archivo exista
+            # Verify that the file exists
             validate_file_exists(file_path)
 
-            # Leer contenido
+            # Read contents
             content = file_path.read_text(encoding="utf-8")
 
             return ToolResult(
                 success=True,
-                output=f"Contenido de {args.path}:\n\n{content}",
+                output=f"Contents of {args.path}:\n\n{content}",
             )
 
         except PathTraversalError as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error de seguridad: {e}",
+                error=f"Security error: {e}",
             )
         except ValidationError as e:
             return ToolResult(
@@ -79,72 +79,72 @@ class ReadFileTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"El archivo {args.path} no es un archivo de texto válido (UTF-8)",
+                error=f"File {args.path} is not a valid text file (UTF-8)",
             )
         except Exception as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado al leer {args.path}: {e}",
+                error=f"Unexpected error reading {args.path}: {e}",
             )
 
 
 class WriteFileTool(BaseTool):
-    """Escribe contenido en un archivo dentro del workspace."""
+    """Writes content to a file within the workspace."""
 
     def __init__(self, workspace_root: Path):
         self.name = "write_file"
         self.description = (
-            "Escribe o reemplaza completamente un archivo. "
-            "Úsalo solo para archivos NUEVOS o cuando necesitas reescribir el archivo entero. "
-            "Para modificaciones parciales usa edit_file (un bloque) o apply_patch (multi-hunk). "
-            "Puede sobrescribir (mode='overwrite') o añadir al final (mode='append'). "
-            "Crea directorios padres si no existen."
+            "Write or completely replace a file. "
+            "Use only for NEW files or when you need to rewrite the entire file. "
+            "For partial modifications use edit_file (single block) or apply_patch (multi-hunk). "
+            "Can overwrite (mode='overwrite') or append (mode='append'). "
+            "Creates parent directories if they don't exist."
         )
-        self.sensitive = True  # Operación sensible
+        self.sensitive = True  # Sensitive operation
         self.args_model = WriteFileArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Escribe contenido en un archivo.
+        """Write content to a file.
 
         Args:
-            path: Path relativo al workspace
-            content: Contenido a escribir
-            mode: 'overwrite' o 'append'
+            path: Path relative to the workspace
+            content: Content to write
+            mode: 'overwrite' or 'append'
 
         Returns:
-            ToolResult indicando éxito o error
+            ToolResult indicating success or error
         """
         try:
-            # Validar argumentos
+            # Validate arguments
             args = self.validate_args(kwargs)
 
-            # Validar y resolver path
+            # Validate and resolve path
             file_path = validate_path(args.path, self.workspace_root)
 
-            # Asegurar que el directorio padre exista
+            # Ensure parent directory exists
             ensure_parent_directory(file_path)
 
-            # Escribir según el modo
+            # Write according to mode
             if args.mode == "overwrite":
                 file_path.write_text(args.content, encoding="utf-8")
-                action = "sobrescrito"
+                action = "overwritten"
             else:  # append
                 with open(file_path, "a", encoding="utf-8") as f:
                     f.write(args.content)
-                action = "añadido contenido a"
+                action = "appended content to"
 
             return ToolResult(
                 success=True,
-                output=f"Archivo {args.path} {action} correctamente ({len(args.content)} caracteres)",
+                output=f"File {args.path} {action} successfully ({len(args.content)} characters)",
             )
 
         except PathTraversalError as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error de seguridad: {e}",
+                error=f"Security error: {e}",
             )
         except ValidationError as e:
             return ToolResult(
@@ -156,36 +156,36 @@ class WriteFileTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado al escribir {args.path}: {e}",
+                error=f"Unexpected error writing {args.path}: {e}",
             )
 
 
 class EditFileTool(BaseTool):
-    """Edita un archivo reemplazando un bloque de texto exacto (str_replace)."""
+    """Edits a file by replacing an exact text block (str_replace)."""
 
     def __init__(self, workspace_root: Path):
         self.name = "edit_file"
         self.description = (
-            "Reemplaza un bloque exacto de texto en un archivo (str_replace). "
-            "PREFERIR sobre write_file para modificaciones parciales en archivos existentes. "
-            "old_str debe ser único en el archivo; incluye líneas de contexto vecinas si hay ambigüedad. "
-            "Para cambios en múltiples secciones no contiguas, usa apply_patch. "
-            "Para archivos nuevos o reescritura total, usa write_file."
+            "Replace an exact block of text in a file (str_replace). "
+            "PREFER over write_file for partial modifications in existing files. "
+            "old_str must be unique in the file; include neighboring context lines if ambiguous. "
+            "For changes in multiple non-contiguous sections, use apply_patch. "
+            "For new files or complete rewrites, use write_file."
         )
         self.sensitive = True
         self.args_model = EditFileArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Reemplaza un bloque exacto de texto en un archivo.
+        """Replace an exact block of text in a file.
 
         Args:
-            path: Path relativo al workspace
-            old_str: Texto exacto a reemplazar (debe ser único en el archivo)
-            new_str: Texto de reemplazo (puede ser vacío para eliminar el bloque)
+            path: Path relative to the workspace
+            old_str: Exact text to replace (must be unique in the file)
+            new_str: Replacement text (can be empty to delete the block)
 
         Returns:
-            ToolResult con el diff generado o error descriptivo
+            ToolResult with the generated diff or descriptive error
         """
         try:
             args = self.validate_args(kwargs)
@@ -195,9 +195,9 @@ class EditFileTool(BaseTool):
                     success=False,
                     output="",
                     error=(
-                        "old_str no puede estar vacío. "
-                        "Para insertar al final usa write_file con mode='append', "
-                        "o usa apply_patch con un hunk de inserción."
+                        "old_str cannot be empty. "
+                        "To insert at the end use write_file with mode='append', "
+                        "or use apply_patch with an insertion hunk."
                     ),
                 )
 
@@ -206,15 +206,15 @@ class EditFileTool(BaseTool):
 
             original = file_path.read_text(encoding="utf-8")
 
-            # Contar ocurrencias exactas
+            # Count exact occurrences
             count = original.count(args.old_str)
             if count == 0:
                 return ToolResult(
                     success=False,
                     output="",
                     error=(
-                        f"old_str no encontrado en {args.path}. "
-                        "Verifica espacios, indentación y saltos de línea."
+                        f"old_str not found in {args.path}. "
+                        "Check spaces, indentation, and line breaks."
                     ),
                 )
             if count > 1:
@@ -222,16 +222,16 @@ class EditFileTool(BaseTool):
                     success=False,
                     output="",
                     error=(
-                        f"old_str aparece {count} veces en {args.path}. "
-                        "Añade más líneas de contexto para hacerlo único."
+                        f"old_str appears {count} times in {args.path}. "
+                        "Add more context lines to make it unique."
                     ),
                 )
 
-            # Reemplazar la única ocurrencia
+            # Replace the single occurrence
             modified = original.replace(args.old_str, args.new_str, 1)
             file_path.write_text(modified, encoding="utf-8")
 
-            # Generar diff para el output
+            # Generate diff for output
             diff_lines = list(
                 difflib.unified_diff(
                     original.splitlines(keepends=True),
@@ -241,15 +241,15 @@ class EditFileTool(BaseTool):
                     lineterm="",
                 )
             )
-            diff_str = "\n".join(diff_lines) if diff_lines else "(sin cambios visibles)"
+            diff_str = "\n".join(diff_lines) if diff_lines else "(no visible changes)"
 
             return ToolResult(
                 success=True,
-                output=f"Archivo {args.path} editado correctamente.\n\nDiff:\n{diff_str}",
+                output=f"File {args.path} edited successfully.\n\nDiff:\n{diff_str}",
             )
 
         except PathTraversalError as e:
-            return ToolResult(success=False, output="", error=f"Error de seguridad: {e}")
+            return ToolResult(success=False, output="", error=f"Security error: {e}")
         except ValidationError as e:
             return ToolResult(success=False, output="", error=str(e))
         except UnicodeDecodeError:
@@ -257,73 +257,73 @@ class EditFileTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"El archivo {path_str} no es un archivo de texto válido (UTF-8)",
+                error=f"File {path_str} is not a valid text file (UTF-8)",
             )
         except Exception as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado al editar {kwargs.get('path', '?')}: {e}",
+                error=f"Unexpected error editing {kwargs.get('path', '?')}: {e}",
             )
 
 
 class DeleteFileTool(BaseTool):
-    """Elimina un archivo dentro del workspace."""
+    """Deletes a file within the workspace."""
 
     def __init__(self, workspace_root: Path, allow_delete: bool):
         self.name = "delete_file"
         self.description = (
-            "Elimina un archivo del workspace. "
-            "Requiere que allow_delete=true en la configuración."
+            "Delete a file from the workspace. "
+            "Requires allow_delete=true in the configuration."
         )
-        self.sensitive = True  # Operación MUY sensible
+        self.sensitive = True  # VERY sensitive operation
         self.args_model = DeleteFileArgs
         self.workspace_root = workspace_root
         self.allow_delete = allow_delete
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Elimina un archivo del workspace.
+        """Delete a file from the workspace.
 
         Args:
-            path: Path relativo al workspace
+            path: Path relative to the workspace
 
         Returns:
-            ToolResult indicando éxito o error
+            ToolResult indicating success or error
         """
         try:
-            # Verificar que delete esté permitido
+            # Check that delete is allowed
             if not self.allow_delete:
                 return ToolResult(
                     success=False,
                     output="",
                     error=(
-                        "Las operaciones de borrado están deshabilitadas. "
-                        "Configura workspace.allow_delete=true para permitirlas."
+                        "Delete operations are disabled. "
+                        "Set workspace.allow_delete=true to allow them."
                     ),
                 )
 
-            # Validar argumentos
+            # Validate arguments
             args = self.validate_args(kwargs)
 
-            # Validar y resolver path
+            # Validate and resolve path
             file_path = validate_path(args.path, self.workspace_root)
 
-            # Verificar que el archivo exista
+            # Verify that the file exists
             validate_file_exists(file_path)
 
-            # Eliminar archivo
+            # Delete file
             file_path.unlink()
 
             return ToolResult(
                 success=True,
-                output=f"Archivo {args.path} eliminado correctamente",
+                output=f"File {args.path} deleted successfully",
             )
 
         except PathTraversalError as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error de seguridad: {e}",
+                error=f"Security error: {e}",
             )
         except ValidationError as e:
             return ToolResult(
@@ -335,77 +335,77 @@ class DeleteFileTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado al eliminar {args.path}: {e}",
+                error=f"Unexpected error deleting {args.path}: {e}",
             )
 
 
 class ListFilesTool(BaseTool):
-    """Lista archivos y directorios dentro del workspace."""
+    """Lists files and directories within the workspace."""
 
     def __init__(self, workspace_root: Path):
         self.name = "list_files"
         self.description = (
-            "Lista archivos y directorios en un path. "
-            "Soporta patrones glob (*.py) y listado recursivo. "
-            "Útil para explorar la estructura del proyecto."
+            "List files and directories at a path. "
+            "Supports glob patterns (*.py) and recursive listing. "
+            "Useful for exploring the project structure."
         )
         self.sensitive = False
         self.args_model = ListFilesArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Lista archivos en un directorio.
+        """List files in a directory.
 
         Args:
-            path: Path relativo al workspace (default: ".")
-            pattern: Patrón glob opcional (ej: "*.py")
-            recursive: Si True, lista recursivamente
+            path: Path relative to the workspace (default: ".")
+            pattern: Optional glob pattern (e.g.: "*.py")
+            recursive: If True, list recursively
 
         Returns:
-            ToolResult con la lista de archivos o error
+            ToolResult with the file list or error
         """
         try:
-            # Validar argumentos
+            # Validate arguments
             args = self.validate_args(kwargs)
 
-            # Validar y resolver path
+            # Validate and resolve path
             dir_path = validate_path(args.path, self.workspace_root)
 
-            # Verificar que sea un directorio
+            # Verify that it is a directory
             validate_directory_exists(dir_path)
 
-            # Listar archivos
+            # List files
             if args.recursive:
-                # Listar recursivamente
+                # List recursively
                 if args.pattern:
                     files = list(dir_path.rglob(args.pattern))
                 else:
                     files = list(dir_path.rglob("*"))
             else:
-                # Listar solo este nivel
+                # List only this level
                 files = list(dir_path.iterdir())
-                # Aplicar patrón si está especificado
+                # Apply pattern if specified
                 if args.pattern:
                     files = [f for f in files if fnmatch.fnmatch(f.name, args.pattern)]
 
-            # Ordenar y formatear
+            # Sort and format
             files.sort()
 
-            # Generar output formateado
-            output_lines = [f"Contenido de {args.path}:"]
+            # Generate formatted output
+            output_lines = [f"Contents of {args.path}:"]
             output_lines.append("")
 
             if not files:
-                output_lines.append("(directorio vacío)")
+                output_lines.append("(empty directory)")
             else:
                 for file_path in files:
-                    # Path relativo al workspace para output
+                    # Path relative to workspace for output
                     try:
                         rel_path = file_path.relative_to(self.workspace_root)
                     except ValueError:
                         rel_path = file_path
 
-                    # Indicador de tipo
+                    # Type indicator
                     if file_path.is_dir():
                         indicator = "📁"
                         type_str = "DIR"
@@ -427,7 +427,7 @@ class ListFilesTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error de seguridad: {e}",
+                error=f"Security error: {e}",
             )
         except ValidationError as e:
             return ToolResult(
@@ -439,5 +439,5 @@ class ListFilesTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado al listar {args.path}: {e}",
+                error=f"Unexpected error listing {args.path}: {e}",
             )

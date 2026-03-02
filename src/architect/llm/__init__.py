@@ -1,7 +1,7 @@
 """
-Módulo LLM - Adapter para LiteLLM y gestión de llamadas a LLMs.
+LLM module - Adapter for LiteLLM and LLM call management.
 
-Exporta el LLMAdapter, modelos de respuesta y cache local.
+Exports the LLMAdapter, response models, and local cache.
 """
 
 from .adapter import LLMAdapter, LLMResponse, StreamChunk, ToolCall

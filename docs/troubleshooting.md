@@ -1,6 +1,6 @@
 # Troubleshooting y Diagnostico
 
-Guia de resolucion de problemas para architect-cli v1.0.0. Organizada por sintomas: identifica el problema, diagnostica la causa y aplica la solucion concreta.
+Guia de resolucion de problemas para architect-cli v1.1.0. Organizada por sintomas: identifica el problema, diagnostica la causa y aplica la solucion concreta.
 
 ---
 
@@ -52,7 +52,9 @@ Si usas un proxy o servidor local, verifica tambien `--api-base`.
 
 ### 1.2 Timeout en llamada al LLM
 
-**Sintoma**: output HUMAN muestra `Error del LLM: timeout` (icono `---`) o el log JSON tiene `event: "agent.llm_error"` con error conteniendo "timeout" o "timed out".
+**Sintoma**: output HUMAN muestra `LLM error: timeout` (icono ❌) o el log JSON tiene `event: "agent.llm_error"` con error conteniendo "timeout" o "timed out".
+
+> **Nota v1.1.0**: Los mensajes HUMAN ahora están en inglés por defecto. Con `language: es`, se muestran en español. Ver [`i18n.md`](i18n.md).
 
 **Causa**: el timeout por defecto de LLM es 60 segundos (`llm.timeout: 60`). Modelos grandes o prompts muy largos pueden tardar mas. Conexion lenta al proveedor.
 
@@ -552,27 +554,37 @@ cat debug.jsonl | jq 'select(.event == "hook.error" or .event == "agent.hook.com
 
 ### 5.3 Guardrail bloquea acceso a archivos
 
-**Sintoma**: tool result contiene `Archivo protegido por guardrail: X (patron: Y)`.
+**Sintoma**: tool result contiene `Sensitive file blocked by guardrail: X (pattern: Y)` o `Protected file blocked by guardrail: X (pattern: Y)` (con `language: es`: `Archivo sensible bloqueado por guardrail: X (patrón: Y)`).
 
-**Causa**: el archivo coincide con un patron en `guardrails.protected_files`.
+**Causa**: el archivo coincide con un patron en `guardrails.sensitive_files` (bloquea lectura y escritura) o `guardrails.protected_files` (bloquea solo escritura).
 
 **Solucion**:
 
 ```yaml
 guardrails:
   enabled: true
-  protected_files:
-    - ".env"
+
+  # sensitive_files: bloquea LECTURA y ESCRITURA (v1.1.0)
+  # Usar para archivos con secrets que el LLM no deberia ni leer
+  sensitive_files:
+    - ".env*"
     - "*.pem"
     - "*.key"
     - "secrets.*"
+
+  # protected_files: bloquea solo ESCRITURA
+  # Usar para archivos que el LLM puede leer pero no modificar
+  protected_files:
+    - "Dockerfile"
+    - "docker-compose*.yml"
+    - "deploy/**"
     # Verificar que no hay patrones demasiado amplios
     # Por ejemplo "*.json" bloquearia TODOS los JSON
 ```
 
 ```bash
-# Ver que archivos estan protegidos
-cat debug.jsonl | jq 'select(.event == "guardrail.file_blocked")'
+# Ver que archivos estan bloqueados (sensibles y protegidos)
+cat debug.jsonl | jq 'select(.event == "guardrail.sensitive_file_blocked" or .event == "guardrail.file_blocked")'
 ```
 
 ### 5.4 Code rules bloquean ediciones
@@ -673,7 +685,7 @@ architect loop "tarea" \
 
 ### 6.3 Parallel: conflictos de worktree
 
-**Sintoma**: error `Error creando worktree` al iniciar ejecucion paralela. O los worktrees quedan huerfanos despues de una ejecucion interrumpida.
+**Sintoma**: error `Error creating worktree` al iniciar ejecucion paralela. O los worktrees quedan huerfanos despues de una ejecucion interrumpida.
 
 **Causa**: worktrees de ejecuciones anteriores no se limpiaron. Git no permite crear un worktree si la branch ya existe o el directorio esta ocupado.
 
@@ -692,7 +704,29 @@ git branch -D architect/parallel-1           # eliminar branches
 git branch -D architect/parallel-2
 ```
 
-### 6.4 Pipeline: variables no se resuelven
+### 6.4 Pipeline: YAML con campos incorrectos (v1.1.0)
+
+**Sintoma**: al ejecutar `architect pipeline`, se muestra `Error de validación: Pipeline 'file.yaml' tiene errores de validación:` seguido de una lista de errores, y el proceso sale con exit code 3.
+
+**Causa**: el YAML del pipeline tiene campos incorrectos, prompts vacíos, o campos desconocidos. Desde v1.1.0, el pipeline valida el YAML antes de ejecutar.
+
+**Solucion**:
+
+```bash
+# Revisar el mensaje de error — lista TODOS los problemas de una vez
+architect pipeline pipeline.yaml
+# Validation error: Pipeline 'pipeline.yaml' has validation errors:
+#   analyze: unknown field 'task' (did you mean 'prompt'?)
+#   analyze: missing 'prompt' or empty
+```
+
+**Errores comunes**:
+- `task:` en vez de `prompt:` — usar `prompt:` (el hint lo indica)
+- Prompt vacío `prompt: ""` — cada step necesita un prompt con contenido
+- Campos inventados (`priority:`, `description:`) — solo los 9 campos válidos: `name`, `agent`, `prompt`, `model`, `checkpoint`, `condition`, `output_var`, `checks`, `timeout`
+- Steps como strings en vez de objetos YAML
+
+### 6.5 Pipeline: variables no se resuelven
 
 **Sintoma**: el prompt del pipeline contiene literalmente `{{variable}}` en lugar del valor esperado. El agente recibe el template sin resolver.
 
@@ -720,7 +754,7 @@ architect pipeline pipeline.yaml --var target_dir=lib/ --var test_command="npm t
 architect pipeline pipeline.yaml --dry-run
 ```
 
-### 6.5 Checkpoints: no se crean
+### 6.6 Checkpoints: no se crean
 
 **Sintoma**: `architect history` no muestra checkpoints. El log no tiene eventos `checkpoint.created`.
 
@@ -748,7 +782,7 @@ git log --oneline --grep="architect:checkpoint"
 
 **Nota**: los checkpoints son git commits con prefijo `architect:checkpoint`. Si el workspace no tiene cambios staged, no se crea commit. Si `git add -A` no captura nada nuevo, el checkpoint se salta silenciosamente.
 
-### 6.6 Auto-review: no detecta issues
+### 6.7 Auto-review: no detecta issues
 
 **Sintoma**: el auto-review siempre reporta "Sin issues encontrados" aunque hay problemas evidentes.
 
@@ -960,16 +994,16 @@ El output HUMAN usa iconos para indicar el tipo de evento:
 
 | Icono | Significado |
 |-------|-------------|
-| 🔄 | Paso N del agente: llamada al LLM / cerrando |
-| ✓ | Respuesta exitosa del LLM o tool OK |
-| 🔧 | Ejecucion de tool local |
-| 🌐 | Ejecucion de tool MCP (remota) |
-| 🔍 | Resultado de hook |
-| ✅ | Agente completado exitosamente |
-| ⚡ | Agente detenido (parcial o fallo) |
-| ⚠️ | Safety net activado o advertencia |
-| ❌ | Error del LLM |
-| 📦 | Compresion/gestion de contexto |
+| 🔄 | Step N: LLM call / closing |
+| ✓ | Successful LLM response or tool OK |
+| 🔧 | Local tool execution |
+| 🌐 | MCP tool execution (remote) |
+| 🔍 | Hook result |
+| ✅ | Agent complete (success) |
+| ⚡ | Agent stopped (partial or failed) |
+| ⚠️ | Safety net triggered or warning |
+| ❌ | LLM error |
+| 📦 | Context compression/management |
 
 ### 8.4 Niveles de verbose (-v/-vv/-vvv)
 

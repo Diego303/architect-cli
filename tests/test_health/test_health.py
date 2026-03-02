@@ -197,9 +197,9 @@ class TestHealthDelta:
         )
         report = delta.to_report()
         assert "Code Health Delta" in report
-        assert "Complejidad promedio" in report
-        assert "Antes" in report
-        assert "Después" in report
+        assert "Avg complexity" in report
+        assert "Before" in report
+        assert "After" in report
         assert "Delta" in report
 
     def test_to_report_radon_not_available(self):
@@ -207,7 +207,7 @@ class TestHealthDelta:
         after = HealthSnapshot(radon_available=False)
         delta = HealthDelta(before=before, after=after)
         report = delta.to_report()
-        assert "radon no disponible" in report
+        assert "radon not available" in report
 
     def test_format_delta_zero(self):
         assert HealthDelta._format_delta(0) == "="

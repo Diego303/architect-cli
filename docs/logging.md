@@ -2,6 +2,8 @@
 
 Describe la arquitectura completa de logging del proyecto: tres pipelines independientes, el nivel HUMAN personalizado, el formato visual con iconos y la integración con el loop del agente.
 
+> **v1.1.0**: Los mensajes del pipeline HUMAN ahora soportan i18n (inglés por defecto, español configurable). Los ejemplos en esta página muestran el formato inglés (default). Ver [`i18n.md`](i18n.md).
+
 ---
 
 ## Arquitectura: tres pipelines
@@ -34,20 +36,33 @@ cat logs/session.jsonl | jq 'select(.event == "agent.tool_call.execute")'
 
 Activo por defecto. Solo procesa eventos de nivel `HUMAN` (25). Produce output legible con iconos en stderr.
 
+> **v1.1.0**: El idioma del output HUMAN depende de la configuración `language` (default: `en`). Ver [`i18n.md`](i18n.md).
+
 ```
-🔄 Paso 1 → Llamada al LLM (5 mensajes)
-   ✓ LLM respondió con 2 tool calls
+🔄 Step 1 → LLM call (5 messages)
+   ✓ LLM responded with 2 tool calls
 
    🔧 read_file → src/main.py
       ✓ OK
 
-   🔧 edit_file → src/main.py (3→5 líneas)
+   🔧 edit_file → src/main.py (3→5 lines)
       ✓ OK
       🔍 Hook python-lint: ✓
 
-🔄 Paso 2 → Llamada al LLM (9 mensajes)
-   ✓ LLM respondió con texto final
+🔄 Step 2 → LLM call (9 messages)
+   ✓ LLM responded with final text
 
+✅ Agent complete (2 steps)
+   Reason: LLM decided it was done
+   Cost: $0.0042
+```
+
+Con `language: es` en la configuración:
+
+```
+🔄 Paso 1 → Llamada al LLM (5 mensajes)
+   ✓ LLM respondió con 2 tool calls
+   ...
 ✅ Agente completado (2 pasos)
    Razón: LLM decidió que terminó
    Coste: $0.0042
@@ -88,12 +103,14 @@ Cada tipo de evento tiene su formato con iconos:
 
 ### Eventos del loop
 
-| Evento | Formato | Icono |
+> Los ejemplos muestran el formato en inglés (default). Con `language: es`, los mensajes se muestran en español.
+
+| Evento | Formato (EN) | Icono |
 |--------|---------|-------|
-| `agent.llm.call` | `🔄 Paso N → Llamada al LLM (M mensajes)` | 🔄 |
-| `agent.llm.response` (tools) | `✓ LLM respondió con N tool calls` | ✓ |
-| `agent.llm.response` (texto) | `✓ LLM respondió con texto final` | ✓ |
-| `agent.complete` | `✅ Agente completado (N pasos)` + razón + coste | ✅ |
+| `agent.llm.call` | `🔄 Step N → LLM call (M messages)` | 🔄 |
+| `agent.llm.response` (tools) | `✓ LLM responded with N tool calls` | ✓ |
+| `agent.llm.response` (texto) | `✓ LLM responded with final text` | ✓ |
+| `agent.complete` | `✅ Agent complete (N steps)` + reason + cost | ✅ |
 
 ### Eventos de tools
 
@@ -107,30 +124,69 @@ Cada tipo de evento tiene su formato con iconos:
 
 ### Safety nets
 
-| Evento | Formato | Icono |
+| Evento | Formato (EN) | Icono |
 |--------|---------|-------|
-| `safety.user_interrupt` | `⚠️ Interrumpido por el usuario` | ⚠️ |
-| `safety.max_steps` | `⚠️ Límite de pasos alcanzado (N/M)` | ⚠️ |
-| `safety.budget_exceeded` | `⚠️ Presupuesto excedido ($X/$Y)` | ⚠️ |
-| `safety.timeout` | `⚠️ Timeout alcanzado` | ⚠️ |
-| `safety.context_full` | `⚠️ Contexto lleno` | ⚠️ |
+| `safety.user_interrupt` | `⚠️ Interrupted by user` | ⚠️ |
+| `safety.max_steps` | `⚠️ Step limit reached (N/M)` | ⚠️ |
+| `safety.budget_exceeded` | `⚠️ Budget exceeded ($X/$Y)` | ⚠️ |
+| `safety.timeout` | `⚠️ Timeout reached` | ⚠️ |
+| `safety.context_full` | `⚠️ Context full` | ⚠️ |
 
 ### Errores y lifecycle
 
+| Evento | Formato (EN) | Icono |
+|--------|---------|-------|
+| `agent.llm_error` | `❌ LLM error: message` | ❌ |
+| `agent.step_timeout` | `⚠️ Step timeout (Ns)` | ⚠️ |
+| `agent.closing` | `🔄 Closing (reason, N steps)` | 🔄 |
+| `agent.loop.complete` (success) | `(N steps, M tool calls)` + cost | — |
+| `agent.loop.complete` (partial) | `⚡ Stopped (status — reason, N steps)` | ⚡ |
+
+### Pipeline (v1.1.0)
+
 | Evento | Formato | Icono |
 |--------|---------|-------|
-| `agent.llm_error` | `❌ Error del LLM: mensaje` | ❌ |
-| `agent.step_timeout` | `⚠️ Step timeout (Ns)` | ⚠️ |
-| `agent.closing` | `🔄 Cerrando (razón, N pasos)` | 🔄 |
-| `agent.loop.complete` (success) | `(N pasos, M tool calls)` + coste | — |
-| `agent.loop.complete` (partial) | `⚡ Detenido (status — razón, N pasos)` | ⚡ |
+| `pipeline.step_start` | `━ Pipeline step 1/3: analyze (agent: plan) ━━━━━` | ━ |
+| `pipeline.step_skipped` | `⏭️  Step 'deploy' skipped (condition not met)` | ⏭️ |
+| `pipeline.step_done` | `✓ Step 'analyze' → success ($0.0234, 12.5s)` | ✓/✗ |
+
+### Ralph Loop (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `ralph.iteration_start` | `━ Ralph iteration 1/5 (check: pytest tests/) ━━━` | ━ |
+| `ralph.checks_result` | `🧪 Checks: 3/5 passed` (o `5/5 passed ✓`) | 🧪 |
+| `ralph.iteration_done` | `✓ Iteration 1 → success ($0.0234, 45.2s)` | ✓/✗ |
+| `ralph.complete` | `✅ Ralph complete — 2 iterations, success ($0.0423)` | ✅/⚠️ |
+
+### Auto-Reviewer (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `reviewer.start` | `━ Auto-Review (142 diff lines) ━━━━━━━━━━━━━` | ━ |
+| `reviewer.complete` | `✓ Review complete: approved, 2 issues, score 8/10` | ✓/✗ |
+
+### Parallel Runs (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `parallel.worker_done` | `✓ Worker 1 (gpt-4.1) → success ($0.0456, 120.3s)` | ✓/✗ |
+| `parallel.worker_error` | `✗ Worker 3 → error: timeout` | ✗ |
+| `parallel.complete` | `⚡ Parallel complete — 3 workers: 2 success, 1 failed ($0.0857)` | ⚡ |
+
+### Competitive Eval (v1.1.0)
+
+| Evento | Formato | Icono |
+|--------|---------|-------|
+| `competitive.model_done` | `🏆 gpt-4.1: #1 (score: 85, 5/5 checks, $0.0456)` | 🏆/🥈/🥉 |
+| `competitive.ranking` | `🏁 Ranking final: gpt-4.1 > claude-sonnet > gpt-4.1-mini` | 🏁 |
 
 ### Contexto
 
 | Evento | Formato | Icono |
 |--------|---------|-------|
-| `context.compressing` | `📦 Comprimiendo contexto — N intercambios` | 📦 |
-| `context.window_enforced` | `📦 Ventana de contexto: eliminados N mensajes` | 📦 |
+| `context.compressing` | `📦 Compressing context — N exchanges` | 📦 |
+| `context.window_enforced` | `📦 Context window: removed N messages` | 📦 |
 
 ---
 
@@ -141,14 +197,14 @@ Cada tool tiene un resumen optimizado para que el usuario entienda de un vistazo
 | Tool | Ejemplo de resumen |
 |------|-------------------|
 | `read_file` | `src/main.py` |
-| `write_file` | `src/main.py (42 líneas)` |
-| `edit_file` | `src/main.py (3→5 líneas)` |
+| `write_file` | `src/main.py (42 lines)` |
+| `edit_file` | `src/main.py (3→5 lines)` |
 | `apply_patch` | `src/main.py (+5 -3)` |
-| `search_code` | `"validate_path" en src/` |
-| `grep` | `"import jwt" en src/` |
+| `search_code` | `"validate_path" in src/` |
+| `grep` | `"import jwt" in src/` |
 | `run_command` | `pytest tests/ -x` |
 | MCP tools | primer argumento truncado a 60 chars |
-| Tool desconocida sin args | `(sin args)` |
+| Unknown tool without args | `(no args)` |
 
 ---
 
@@ -159,21 +215,48 @@ El `AgentLoop` emite eventos HUMAN a través de `HumanLog`, que provee métodos 
 ```python
 hlog = HumanLog(structlog.get_logger())
 
-hlog.llm_call(step=0, messages_count=5)          # 🔄 Paso 1 → LLM (5 mensajes)
-hlog.llm_response(tool_calls=2)                   # ✓ LLM respondió con 2 tool calls
+hlog.llm_call(step=0, messages_count=5)          # 🔄 Step 1 → LLM call (5 messages)
+hlog.llm_response(tool_calls=2)                   # ✓ LLM responded with 2 tool calls
 hlog.tool_call("read_file", {"path": "main.py"})  # 🔧 read_file → main.py
 hlog.tool_call("mcp_docs_search", {"q": "..."}, is_mcp=True, mcp_server="docs")
                                                     # 🌐 mcp_docs_search → ... (MCP: docs)
 hlog.tool_result("read_file", success=True)        # ✓ OK
 hlog.hook_complete("edit_file", hook="ruff", success=True)
                                                     # 🔍 Hook ruff: ✓
-hlog.agent_done(step=3, cost="$0.0042")            # ✅ Agente completado (3 pasos)
+hlog.agent_done(step=3, cost="$0.0042")            # ✅ Agent complete (3 steps)
 hlog.safety_net("max_steps", step=50, max_steps=50)
-                                                    # ⚠️ Límite de pasos alcanzado
-hlog.closing("max_steps", steps=50)                # 🔄 Cerrando (max_steps, 50 pasos)
-hlog.llm_error("timeout")                          # ❌ Error del LLM: timeout
+                                                    # ⚠️ Step limit reached
+hlog.closing("max_steps", steps=50)                # 🔄 Closing (max_steps, 50 steps)
+hlog.llm_error("timeout")                          # ❌ LLM error: timeout
 hlog.step_timeout(seconds=60)                      # ⚠️ Step timeout (60s)
-hlog.loop_complete("success", None, 3, 5)          # (3 pasos, 5 tool calls)
+hlog.loop_complete("success", None, 3, 5)          # (3 steps, 5 tool calls)
+
+# Pipeline (v1.1.0)
+hlog.pipeline_step_start("analyze", "plan", 1, 3)  # ━ Pipeline step 1/3: analyze ━━━
+hlog.pipeline_step_skipped("deploy")                # ⏭️ Step 'deploy' skipped
+hlog.pipeline_step_done("analyze", "success", 0.02, 12.5)  # ✓ Step 'analyze' → success
+
+# Ralph Loop (v1.1.0)
+hlog.ralph_iteration_start(1, 5, "pytest tests/")   # ━ Ralph iteration 1/5 ━━━
+hlog.ralph_checks_result(1, 3, 5, False)             # 🧪 Checks: 3/5 passed
+hlog.ralph_iteration_done(1, "partial", 0.02, 45.2)  # ✗ Iteration 1 → partial
+hlog.ralph_complete(2, "success", 0.04)              # ✅ Ralph complete — 2 iterations
+
+# Auto-Reviewer (v1.1.0)
+hlog.reviewer_start(142)                             # ━ Auto-Review (142 diff lines) ━━━
+hlog.reviewer_complete(True, 2, "8/10")              # ✓ Review complete: approved
+
+# Parallel Runs (v1.1.0)
+hlog.parallel_worker_done(1, "gpt-4.1", "success", 0.04, 120.3)
+                                                      # ✓ Worker 1 (gpt-4.1) → success
+hlog.parallel_worker_error(3, "timeout")              # ✗ Worker 3 → error: timeout
+hlog.parallel_complete(3, 2, 1, 0.08)                 # ⚡ Parallel complete — 3 workers
+
+# Competitive Eval (v1.1.0)
+hlog.competitive_model_done("gpt-4.1", 1, 85, 0.04, 5, 5)
+                                                      # 🏆 gpt-4.1: #1 (score: 85)
+hlog.competitive_ranking([{"model": "gpt-4.1"}, {"model": "claude-sonnet"}])
+                                                      # 🏁 Ranking final: gpt-4.1 > claude-sonnet
 ```
 
 ---

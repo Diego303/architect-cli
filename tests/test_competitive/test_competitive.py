@@ -342,7 +342,7 @@ class TestReportGeneration:
         ]
         report = ev.generate_report(results)
 
-        assert "Detalle de Checks" in report
+        assert "Check Details" in report
         assert "FAIL" in report
         assert "3 errors found" in report
 
@@ -444,3 +444,165 @@ class TestRanking:
         assert CompetitiveEval._status_icon("failed") == "FAIL"
         assert CompetitiveEval._status_icon("timeout") == "TIME"
         assert CompetitiveEval._status_icon("unknown") == "?"
+
+
+# -- Test HUMAN Logging ------------------------------------------------------
+
+
+class TestCompetitiveHumanLogging:
+    """Tests para HUMAN-level logging en CompetitiveEval."""
+
+    @staticmethod
+    def _extract_human_calls(mock_hlog: MagicMock, event_name: str) -> list[dict]:
+        from architect.logging.levels import HUMAN as LVL
+        results = []
+        for c in mock_hlog.log.call_args_list:
+            args = c[0]
+            if len(args) >= 2 and args[0] == LVL and isinstance(args[1], dict):
+                if args[1].get("event") == event_name:
+                    results.append(args[1])
+        return results
+
+    @patch("architect.features.competitive.ParallelRunner")
+    def test_model_done_emitted(self, MockRunner, basic_config, workspace) -> None:
+        """competitive.model_done se emite para cada modelo."""
+        mock_runner = MockRunner.return_value
+        mock_runner.run.return_value = [
+            WorkerResult(
+                worker_id=1, branch="b1", model="gpt-4o",
+                status="success", steps=5, cost=0.10,
+                duration=20, files_modified=[], worktree_path="",
+            ),
+            WorkerResult(
+                worker_id=2, branch="b2", model="claude-sonnet-4-20250514",
+                status="success", steps=8, cost=0.15,
+                duration=30, files_modified=[], worktree_path="",
+            ),
+        ]
+
+        ev = CompetitiveEval(basic_config, str(workspace))
+
+        with patch("architect.features.competitive._hlog") as mock_hlog:
+            ev.run()
+
+        dones = self._extract_human_calls(mock_hlog, "competitive.model_done")
+        assert len(dones) == 2
+        models_logged = {d["model"] for d in dones}
+        assert "gpt-4o" in models_logged
+        assert "claude-sonnet-4-20250514" in models_logged
+        for d in dones:
+            assert "rank" in d
+            assert "score" in d
+            assert "cost" in d
+
+    @patch("architect.features.competitive.ParallelRunner")
+    def test_ranking_emitted(self, MockRunner, basic_config, workspace) -> None:
+        """competitive.ranking se emite con el ranking final."""
+        mock_runner = MockRunner.return_value
+        mock_runner.run.return_value = [
+            WorkerResult(
+                worker_id=1, branch="b1", model="gpt-4o",
+                status="success", steps=5, cost=0.10,
+                duration=20, files_modified=[], worktree_path="",
+            ),
+        ]
+
+        ev = CompetitiveEval(
+            CompetitiveConfig(task="test", models=["gpt-4o"]),
+            str(workspace),
+        )
+
+        with patch("architect.features.competitive._hlog") as mock_hlog:
+            ev.run()
+
+        rankings = self._extract_human_calls(mock_hlog, "competitive.ranking")
+        assert len(rankings) == 1
+        assert "ranking" in rankings[0]
+        assert isinstance(rankings[0]["ranking"], list)
+
+
+class TestHumanFormatterCompetitive:
+    """Tests para HumanFormatter con eventos competitive.*."""
+
+    def test_model_done_first_place(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "competitive.model_done", model="gpt-4o", rank=1, score=85.0,
+            cost=0.0456, checks_passed=5, checks_total=5,
+        )
+        assert result is not None
+        assert "gpt-4o" in result
+        assert "#1" in result
+        assert "score: 85" in result
+
+    def test_model_done_second_place(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "competitive.model_done", model="claude", rank=2, score=72.0,
+            cost=0.03, checks_passed=4, checks_total=5,
+        )
+        assert result is not None
+        assert "claude" in result
+        assert "#2" in result
+
+    def test_model_done_third_place(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "competitive.model_done", model="gemini", rank=3, score=41.0,
+            cost=0.01, checks_passed=2, checks_total=5,
+        )
+        assert result is not None
+        assert "gemini" in result
+        assert "#3" in result
+
+    def test_ranking_with_models(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "competitive.ranking",
+            ranking=[
+                {"model": "gpt-4o", "score": 85, "rank": 1},
+                {"model": "claude", "score": 72, "rank": 2},
+            ],
+        )
+        assert result is not None
+        assert "gpt-4o" in result
+        assert "claude" in result
+        assert ">" in result
+
+    def test_ranking_empty(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event("competitive.ranking", ranking=[])
+        assert result is not None
+        assert "no results" in result
+
+
+class TestHumanLogCompetitive:
+    """Tests para HumanLog helpers de Competitive."""
+
+    def test_competitive_model_done(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.competitive_model_done("gpt-4o", 1, 85.0, 0.05, 5, 5)
+        mock_logger.log.assert_called_once_with(
+            LVL, "competitive.model_done",
+            model="gpt-4o", rank=1, score=85.0, cost=0.05,
+            checks_passed=5, checks_total=5,
+        )
+
+    def test_competitive_ranking(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        ranking = [{"model": "gpt-4o", "score": 85, "rank": 1}]
+        hlog.competitive_ranking(ranking)
+        mock_logger.log.assert_called_once_with(
+            LVL, "competitive.ranking", ranking=ranking,
+        )

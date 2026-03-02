@@ -29,6 +29,7 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `ARCHITECT_API_BASE` | `llm.api_base` | `http://localhost:8000` |
 | `ARCHITECT_LOG_LEVEL` | `logging.level` | `debug` |
 | `ARCHITECT_WORKSPACE` | `workspace.root` | `/home/user/project` |
+| `ARCHITECT_LANGUAGE` | `language` | `es` |
 
 `LITELLM_API_KEY` es la API key por defecto. Si necesitas una variable diferente, configura `llm.api_key_env` en el YAML.
 
@@ -58,7 +59,7 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 | `--json` | Salida JSON a stdout (desactiva streaming) |
 | `--dry-run` | Modo dry-run: simula sin ejecutar tools de escritura |
 | `--report FORMAT` | Formato reporte: `json`, `markdown`, `github` |
-| `--report-file PATH` | Escribir reporte a archivo (si no, stdout) |
+| `--report-file PATH` | Escribir reporte a archivo (formato inferido de extensión si no se pasa `--report`) |
 | `--session ID` | Reanudar sesión existente por ID |
 | `--confirm-mode MODE` | Override confirm mode (yolo/confirm-all/confirm-sensitive) |
 | `--context-git-diff REF` | Inyectar diff `git diff REF` como contexto adicional |
@@ -81,6 +82,15 @@ El `deep_merge()` de `config/loader.py` combina las capas de forma recursiva: lo
 ## Schema YAML completo
 
 ```yaml
+# ==============================================================================
+# Language — idioma de mensajes del sistema (v1.1.0)
+# ==============================================================================
+language: en               # "en" (default) | "es"
+                           # Afecta: logs humanos, prompts de agentes, reportes,
+                           # guardrails, evaluaciones. NO afecta CLI help ni user prompts.
+                           # Override: ARCHITECT_LANGUAGE env var
+                           # Ver docs/i18n.md para detalles completos.
+
 # ==============================================================================
 # LLM
 # ==============================================================================
@@ -285,7 +295,8 @@ hooks:
 # ==============================================================================
 guardrails:
   enabled: false              # true = activar guardrails
-  protected_files: []         # globs: [".env", "*.pem", "secrets/**"]
+  protected_files: []         # globs — solo escritura: ["*.lock", "Makefile"]
+  sensitive_files: []         # globs — lectura + escritura: [".env", "*.pem", "*.key"]
   blocked_commands: []        # regexes: ["git push --force", "docker rm"]
   max_files_modified: null    # límite de archivos distintos por sesión (null = sin límite)
   max_lines_changed: null     # límite de líneas cambiadas acumuladas
@@ -581,7 +592,8 @@ architect run "refactoriza utils.py" -a build --mode yolo -c config.yaml
 ```yaml
 guardrails:
   enabled: true
-  protected_files: [".env", "*.pem", "deploy/**"]
+  sensitive_files: [".env", "*.pem", "*.key"]
+  protected_files: ["deploy/**"]
   blocked_commands: ["git push", "docker rm"]
   max_files_modified: 10
   max_lines_changed: 500

@@ -1,27 +1,26 @@
 """
-Registry de agentes - Configuraciones por defecto y gestión.
+Agent registry — Default configurations and resolution.
 
-Define los agentes por defecto del sistema y proporciona funciones
-para resolver agentes desde configuración YAML.
+Defines the system's default agents and provides functions
+to resolve agents from YAML configuration.
+
+Prompts are resolved lazily via i18n so they respect the current language.
 """
 
 from typing import Any
 
 from ..config.schema import AgentConfig
-from .prompts import DEFAULT_PROMPTS
+from .prompts import get_default_prompt
 
 
-# Configuraciones de agentes por defecto
-DEFAULT_AGENTS: dict[str, AgentConfig] = {
-    "plan": AgentConfig(
-        system_prompt=DEFAULT_PROMPTS["plan"],
+# Agent definitions WITHOUT system_prompt (resolved lazily)
+_AGENT_DEFS: dict[str, dict[str, Any]] = {
+    "plan": dict(
         allowed_tools=["read_file", "list_files", "search_code", "grep", "find_files"],
-        # v3: yolo porque plan no modifica archivos, no necesita confirmación
         confirm_mode="yolo",
         max_steps=20,
     ),
-    "build": AgentConfig(
-        system_prompt=DEFAULT_PROMPTS["build"],
+    "build": dict(
         allowed_tools=[
             "read_file",
             "write_file",
@@ -35,18 +34,14 @@ DEFAULT_AGENTS: dict[str, AgentConfig] = {
             "run_command",
         ],
         confirm_mode="confirm-sensitive",
-        # v3: 50 porque ahora es un watchdog, no el driver del loop.
-        # El LLM para cuando quiere; 50 es un safety net generoso.
         max_steps=50,
     ),
-    "resume": AgentConfig(
-        system_prompt=DEFAULT_PROMPTS["resume"],
+    "resume": dict(
         allowed_tools=["read_file", "list_files", "search_code", "grep", "find_files"],
         confirm_mode="yolo",
         max_steps=15,
     ),
-    "review": AgentConfig(
-        system_prompt=DEFAULT_PROMPTS["review"],
+    "review": dict(
         allowed_tools=["read_file", "list_files", "search_code", "grep", "find_files"],
         confirm_mode="yolo",
         max_steps=20,
@@ -54,8 +49,54 @@ DEFAULT_AGENTS: dict[str, AgentConfig] = {
 }
 
 
+def _build_agent(name: str) -> AgentConfig:
+    """Build an AgentConfig with the current-language prompt."""
+    return AgentConfig(
+        system_prompt=get_default_prompt(name),
+        **_AGENT_DEFS[name],
+    )
+
+
+class _LazyAgentDict(dict):
+    """Lazy dict that builds AgentConfig on each access.
+
+    Ensures system_prompt always reflects the current i18n language.
+    """
+
+    def __getitem__(self, key: str) -> AgentConfig:
+        if key not in _AGENT_DEFS:
+            raise KeyError(key)
+        return _build_agent(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in _AGENT_DEFS:
+            return _build_agent(key)
+        return default
+
+    def __contains__(self, key: object) -> bool:
+        return key in _AGENT_DEFS
+
+    def keys(self):
+        return _AGENT_DEFS.keys()
+
+    def values(self):
+        return [_build_agent(k) for k in _AGENT_DEFS]
+
+    def items(self):
+        return [(k, _build_agent(k)) for k in _AGENT_DEFS]
+
+    def __iter__(self):
+        return iter(_AGENT_DEFS)
+
+    def __len__(self):
+        return len(_AGENT_DEFS)
+
+
+DEFAULT_AGENTS: dict[str, AgentConfig] = _LazyAgentDict()
+
+
 class AgentNotFoundError(Exception):
-    """Error lanzado cuando un agente solicitado no existe."""
+    """Error raised when a requested agent does not exist."""
 
     pass
 
@@ -65,34 +106,34 @@ def get_agent(
     yaml_agents: dict[str, AgentConfig],
     cli_overrides: dict[str, Any] | None = None,
 ) -> AgentConfig:
-    """Obtiene la configuración de un agente, con merge de fuentes.
+    """Get the configuration of an agent, merging from multiple sources.
 
-    Orden de precedencia (de menor a mayor):
+    Precedence order (lowest to highest):
     1. Defaults (DEFAULT_AGENTS)
     2. YAML config
     3. CLI overrides
 
     Args:
-        agent_name: Nombre del agente a obtener
-        yaml_agents: Agentes definidos en YAML
-        cli_overrides: Overrides desde CLI (mode, max_steps, etc.)
+        agent_name: Name of the agent to retrieve
+        yaml_agents: Agents defined in YAML
+        cli_overrides: Overrides from CLI (mode, max_steps, etc.)
 
     Returns:
-        AgentConfig completa con todos los merges aplicados
+        Complete AgentConfig with all merges applied
 
     Raises:
-        AgentNotFoundError: Si el agente no existe en defaults ni YAML
+        AgentNotFoundError: If the agent does not exist in defaults or YAML
     """
     cli_overrides = cli_overrides or {}
 
-    # Si no se especifica agente, retornar None (indica modo mixto)
+    # If no agent specified, return None (indicates mixed mode)
     if agent_name is None:
         return None  # type: ignore
 
-    # Merge de configuraciones
+    # Merge configurations
     merged = _merge_agent_config(agent_name, yaml_agents)
 
-    # Aplicar CLI overrides
+    # Apply CLI overrides
     if cli_overrides:
         merged = _apply_cli_overrides(merged, cli_overrides)
 
@@ -103,39 +144,39 @@ def _merge_agent_config(
     agent_name: str,
     yaml_agents: dict[str, AgentConfig],
 ) -> AgentConfig:
-    """Merge de configuración de agente desde defaults y YAML.
+    """Merge agent configuration from defaults and YAML.
 
     Args:
-        agent_name: Nombre del agente
-        yaml_agents: Agentes desde YAML
+        agent_name: Name of the agent
+        yaml_agents: Agents from YAML
 
     Returns:
-        AgentConfig merged
+        Merged AgentConfig
 
     Raises:
-        AgentNotFoundError: Si el agente no existe
+        AgentNotFoundError: If the agent does not exist
     """
-    # Verificar si existe en defaults
+    # Check if it exists in defaults
     if agent_name in DEFAULT_AGENTS:
         base = DEFAULT_AGENTS[agent_name]
 
-        # Si también está en YAML, hacer merge
+        # If also in YAML, merge
         if agent_name in yaml_agents:
             yaml_config = yaml_agents[agent_name]
-            # Pydantic model_copy con update hace el merge
+            # Pydantic model_copy with update performs the merge
             return base.model_copy(update=yaml_config.model_dump(exclude_unset=True))
 
         return base
 
-    # Si no está en defaults, verificar en YAML
+    # If not in defaults, check YAML
     if agent_name in yaml_agents:
         return yaml_agents[agent_name]
 
-    # No existe en ningún lado
+    # Does not exist anywhere
     available = set(DEFAULT_AGENTS.keys()) | set(yaml_agents.keys())
     raise AgentNotFoundError(
-        f"Agente '{agent_name}' no encontrado. "
-        f"Agentes disponibles: {', '.join(sorted(available))}"
+        f"Agent '{agent_name}' not found. "
+        f"Available agents: {', '.join(sorted(available))}"
     )
 
 
@@ -143,25 +184,25 @@ def _apply_cli_overrides(
     agent: AgentConfig,
     overrides: dict[str, Any],
 ) -> AgentConfig:
-    """Aplica overrides desde CLI a un AgentConfig.
+    """Apply overrides from CLI to an AgentConfig.
 
     Args:
-        agent: Configuración base del agente
-        overrides: Dict con overrides (mode, max_steps, etc.)
+        agent: Base agent configuration
+        overrides: Dict with overrides (mode, max_steps, etc.)
 
     Returns:
-        Nuevo AgentConfig con overrides aplicados
+        New AgentConfig with overrides applied
     """
     update_dict = {}
 
-    # Mapear CLI args a campos de AgentConfig
+    # Map CLI args to AgentConfig fields
     if "mode" in overrides and overrides["mode"]:
         update_dict["confirm_mode"] = overrides["mode"]
 
     if "max_steps" in overrides and overrides["max_steps"]:
         update_dict["max_steps"] = overrides["max_steps"]
 
-    # Si hay overrides, aplicarlos
+    # If there are overrides, apply them
     if update_dict:
         return agent.model_copy(update=update_dict)
 
@@ -169,44 +210,44 @@ def _apply_cli_overrides(
 
 
 def list_available_agents(yaml_agents: dict[str, AgentConfig]) -> list[str]:
-    """Lista todos los agentes disponibles (defaults + YAML).
+    """List all available agents (defaults + YAML).
 
     Args:
-        yaml_agents: Agentes desde YAML
+        yaml_agents: Agents from YAML
 
     Returns:
-        Lista de nombres de agentes disponibles (ordenada)
+        Sorted list of available agent names
     """
     available = set(DEFAULT_AGENTS.keys()) | set(yaml_agents.keys())
     return sorted(available)
 
 
 def resolve_agents_from_yaml(yaml_agents: dict[str, Any]) -> dict[str, AgentConfig]:
-    """Resuelve y valida agentes desde configuración YAML.
+    """Resolve and validate agents from YAML configuration.
 
     Args:
-        yaml_agents: Dict raw desde YAML
+        yaml_agents: Raw dict from YAML
 
     Returns:
-        Dict de AgentConfig validados
+        Dict of validated AgentConfig instances
 
     Note:
-        Esta función convierte el dict YAML en AgentConfig instances,
-        validando con Pydantic.
+        This function converts the YAML dict into AgentConfig instances,
+        validating with Pydantic.
     """
     resolved = {}
 
     for name, config in yaml_agents.items():
         if isinstance(config, AgentConfig):
-            # Ya es un AgentConfig (desde load_config)
+            # Already an AgentConfig (from load_config)
             resolved[name] = config
         elif isinstance(config, dict):
-            # Convertir dict a AgentConfig
+            # Convert dict to AgentConfig
             resolved[name] = AgentConfig(**config)
         else:
             raise ValueError(
-                f"Configuración de agente '{name}' inválida. "
-                f"Debe ser un dict con las claves apropiadas."
+                f"Invalid agent configuration for '{name}'. "
+                f"Must be a dict with the appropriate keys."
             )
 
     return resolved

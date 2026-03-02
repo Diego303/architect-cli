@@ -1,9 +1,9 @@
 """
-Checkpoints & Rollback — Puntos de restauración basados en git commits.
+Checkpoints & Rollback — Restore points based on git commits.
 
-v4-C4: Los checkpoints son git commits con prefijo especial que permiten
-restaurar el estado del workspace a un punto anterior. Se integran con
-el AgentLoop (checkpoint cada N steps) y con pipelines (checkpoint por step).
+v4-C4: Checkpoints are git commits with a special prefix that allow
+restoring the workspace state to a previous point. They integrate with
+the AgentLoop (checkpoint every N steps) and with pipelines (checkpoint per step).
 """
 
 import re
@@ -27,7 +27,7 @@ CHECKPOINT_PREFIX = "architect:checkpoint"
 
 @dataclass(frozen=True)
 class Checkpoint:
-    """Representa un checkpoint (git commit con prefijo especial)."""
+    """Represents a checkpoint (git commit with a special prefix)."""
 
     step: int
     commit_hash: str
@@ -36,38 +36,38 @@ class Checkpoint:
     files_changed: list[str]
 
     def short_hash(self) -> str:
-        """Retorna los primeros 7 caracteres del hash."""
+        """Return the first 7 characters of the hash."""
         return self.commit_hash[:7]
 
 
 class CheckpointManager:
-    """Gestiona checkpoints basados en git commits.
+    """Manages checkpoints based on git commits.
 
-    Los checkpoints se crean como git commits con el prefijo
-    'architect:checkpoint' en el mensaje. Esto permite listarlos
-    y hacer rollback usando git log/reset.
+    Checkpoints are created as git commits with the prefix
+    'architect:checkpoint' in the message. This allows listing them
+    and performing rollback using git log/reset.
     """
 
     def __init__(self, workspace_root: str):
-        """Inicializa el manager de checkpoints.
+        """Initialize the checkpoint manager.
 
         Args:
-            workspace_root: Directorio raíz del repositorio git.
+            workspace_root: Root directory of the git repository.
         """
         self.root = workspace_root
         self.log = logger.bind(component="checkpoint_manager")
 
     def create(self, step: int, message: str = "") -> Checkpoint | None:
-        """Crea un checkpoint (git commit con tag especial).
+        """Create a checkpoint (git commit with a special tag).
 
-        Stage all changes, commit con prefijo, y retorna el Checkpoint.
+        Stage all changes, commit with prefix, and return the Checkpoint.
 
         Args:
-            step: Número de step del agente.
-            message: Mensaje descriptivo adicional.
+            step: Agent step number.
+            message: Additional descriptive message.
 
         Returns:
-            Checkpoint creado, o None si no hay cambios para commitear.
+            Created Checkpoint, or None if there are no changes to commit.
         """
         # Stage all changes
         subprocess.run(
@@ -87,7 +87,7 @@ class CheckpointManager:
             self.log.debug("checkpoint.nothing_to_commit", step=step)
             return None
 
-        # Crear commit
+        # Create commit
         commit_msg = f"{CHECKPOINT_PREFIX}:step-{step}"
         if message:
             commit_msg += f" -- {message}"
@@ -106,7 +106,7 @@ class CheckpointManager:
             )
             return None
 
-        # Obtener hash del commit
+        # Get commit hash
         hash_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             capture_output=True,
@@ -115,7 +115,7 @@ class CheckpointManager:
         )
         commit_hash = hash_result.stdout.strip()
 
-        # Obtener archivos cambiados
+        # Get changed files
         diff_result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
             capture_output=True,
@@ -143,10 +143,10 @@ class CheckpointManager:
         return checkpoint
 
     def list_checkpoints(self) -> list[Checkpoint]:
-        """Lista todos los checkpoints de architect.
+        """List all architect checkpoints.
 
         Returns:
-            Lista de Checkpoints ordenada del más reciente al más antiguo.
+            List of Checkpoints sorted from most recent to oldest.
         """
         result = subprocess.run(
             [
@@ -167,11 +167,11 @@ class CheckpointManager:
             if len(parts) < 3:
                 continue
 
-            # Extraer step number del mensaje
+            # Extract step number from the message
             step_match = re.search(r"step-(\d+)", parts[1])
             step = int(step_match.group(1)) if step_match else 0
 
-            # Extraer mensaje descriptivo (después de " -- ")
+            # Extract descriptive message (after " -- ")
             msg_parts = parts[1].split(" -- ", 1)
             message = msg_parts[1] if len(msg_parts) > 1 else ""
 
@@ -185,7 +185,7 @@ class CheckpointManager:
                 commit_hash=parts[0],
                 message=message,
                 timestamp=ts,
-                files_changed=[],  # No listamos files en el list
+                files_changed=[],  # We don't list files in the list operation
             ))
 
         return checkpoints
@@ -195,16 +195,16 @@ class CheckpointManager:
         step: int | None = None,
         commit: str | None = None,
     ) -> bool:
-        """Rollback a un checkpoint específico.
+        """Rollback to a specific checkpoint.
 
-        Usa git reset --hard para volver al estado del checkpoint.
+        Uses git reset --hard to revert to the checkpoint state.
 
         Args:
-            step: Número de step al que volver. Busca el checkpoint correspondiente.
-            commit: Hash del commit al que volver (tiene prioridad sobre step).
+            step: Step number to revert to. Searches for the corresponding checkpoint.
+            commit: Commit hash to revert to (takes priority over step).
 
         Returns:
-            True si el rollback fue exitoso.
+            True if the rollback was successful.
         """
         if commit:
             target = commit
@@ -238,22 +238,22 @@ class CheckpointManager:
             return False
 
     def get_latest(self) -> Checkpoint | None:
-        """Obtiene el checkpoint más reciente.
+        """Get the most recent checkpoint.
 
         Returns:
-            Último Checkpoint, o None si no hay ninguno.
+            Latest Checkpoint, or None if there are none.
         """
         checkpoints = self.list_checkpoints()
         return checkpoints[0] if checkpoints else None
 
     def has_changes_since(self, commit_hash: str) -> bool:
-        """Verifica si hay cambios desde un commit.
+        """Check if there are changes since a commit.
 
         Args:
-            commit_hash: Hash del commit de referencia.
+            commit_hash: Reference commit hash.
 
         Returns:
-            True si hay archivos modificados desde ese commit.
+            True if there are modified files since that commit.
         """
         result = subprocess.run(
             ["git", "diff", "--name-only", commit_hash],

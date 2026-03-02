@@ -43,8 +43,9 @@ class TestReviewSystemPrompt:
     """Tests for the REVIEW_SYSTEM_PROMPT constant."""
 
     def test_is_non_empty_string(self):
-        assert isinstance(REVIEW_SYSTEM_PROMPT, str)
+        # REVIEW_SYSTEM_PROMPT is a lazy descriptor; str() resolves it
         assert len(REVIEW_SYSTEM_PROMPT) > 0
+        assert isinstance(str(REVIEW_SYSTEM_PROMPT), str)
 
     def test_contains_bug_criteria(self):
         assert "Bugs" in REVIEW_SYSTEM_PROMPT or "bugs" in REVIEW_SYSTEM_PROMPT.lower()
@@ -52,15 +53,15 @@ class TestReviewSystemPrompt:
     def test_contains_security_criteria(self):
         assert "seguridad" in REVIEW_SYSTEM_PROMPT.lower() or "security" in REVIEW_SYSTEM_PROMPT.lower()
 
-    def test_contains_sin_issues_instruction(self):
+    def test_contains_no_issues_instruction(self):
         """The prompt must tell the reviewer what to say when there are no issues."""
-        assert "Sin issues encontrados" in REVIEW_SYSTEM_PROMPT
+        assert "No issues found" in REVIEW_SYSTEM_PROMPT
 
     def test_contains_tests_criteria(self):
         assert "Tests" in REVIEW_SYSTEM_PROMPT or "tests" in REVIEW_SYSTEM_PROMPT.lower()
 
     def test_contains_simplification_criteria(self):
-        assert "simplificaci" in REVIEW_SYSTEM_PROMPT.lower()
+        assert "simplificati" in REVIEW_SYSTEM_PROMPT.lower()
 
 
 # ===================================================================
@@ -130,7 +131,7 @@ class TestReviewChanges:
         reviewer = AutoReviewer(agent_factory=factory)
         result = reviewer.review_changes("tarea", "")
         assert result.has_issues is False
-        assert "Sin cambios" in result.review_text
+        assert "No changes" in result.review_text
 
     def test_whitespace_only_diff_returns_no_issues(self):
         factory = _make_factory()
@@ -202,7 +203,7 @@ class TestReviewChanges:
         prompt_arg = agent_mock.run.call_args[0][0]
         # The truncated diff should contain the first 8000 chars + truncation notice
         assert "x" * 8000 in prompt_arg
-        assert "diff truncado" in prompt_arg
+        assert "diff truncated" in prompt_arg
 
     def test_short_diff_not_truncated(self):
         short_diff = "x" * 100
@@ -212,7 +213,7 @@ class TestReviewChanges:
 
         agent_mock = factory.return_value
         prompt_arg = agent_mock.run.call_args[0][0]
-        assert "diff truncado" not in prompt_arg
+        assert "diff truncated" not in prompt_arg
 
     # -- prompt format ------------------------------------------------
 
@@ -233,21 +234,21 @@ class TestReviewChanges:
         assert "diff --git a/login.py" in prompt_arg
         assert "+new line" in prompt_arg
 
-    def test_prompt_has_tarea_original_section(self):
+    def test_prompt_has_original_task_section(self):
         factory = _make_factory(_make_agent_result("ok"))
         reviewer = AutoReviewer(agent_factory=factory)
         reviewer.review_changes("the task", "some diff")
 
         prompt_arg = factory.return_value.run.call_args[0][0]
-        assert "## Tarea Original" in prompt_arg
+        assert "## Original Task" in prompt_arg
 
-    def test_prompt_has_cambios_section(self):
+    def test_prompt_has_changes_section(self):
         factory = _make_factory(_make_agent_result("ok"))
         reviewer = AutoReviewer(agent_factory=factory)
         reviewer.review_changes("the task", "some diff")
 
         prompt_arg = factory.return_value.run.call_args[0][0]
-        assert "## Cambios a Revisar" in prompt_arg
+        assert "## Changes to Review" in prompt_arg
 
     # -- cost extraction -----------------------------------------------
 
@@ -365,11 +366,11 @@ class TestBuildFixPrompt:
 
     def test_includes_fix_instruction(self):
         prompt = AutoReviewer.build_fix_prompt("some issue")
-        assert "Corrige" in prompt or "corrige" in prompt.lower()
+        assert "Fix" in prompt or "fix" in prompt.lower()
 
     def test_format_starts_with_reviewer_intro(self):
         prompt = AutoReviewer.build_fix_prompt("issue")
-        assert prompt.startswith("Un reviewer encontr")
+        assert prompt.startswith("A reviewer found")
 
     def test_mentions_each_issue(self):
         prompt = AutoReviewer.build_fix_prompt("issue X\nissue Y")
@@ -381,3 +382,135 @@ class TestBuildFixPrompt:
         # Should still return a valid prompt even with empty review
         assert isinstance(prompt, str)
         assert len(prompt) > 0
+
+
+# ===================================================================
+# HUMAN Logging
+# ===================================================================
+
+
+class TestReviewerHumanLogging:
+    """Tests para HUMAN-level logging en AutoReviewer."""
+
+    @staticmethod
+    def _extract_human_calls(mock_hlog: MagicMock, event_name: str) -> list[dict]:
+        from architect.logging.levels import HUMAN as LVL
+        results = []
+        for c in mock_hlog.log.call_args_list:
+            args = c[0]
+            if len(args) >= 2 and args[0] == LVL and isinstance(args[1], dict):
+                if args[1].get("event") == event_name:
+                    results.append(args[1])
+        return results
+
+    def test_reviewer_start_emitted(self) -> None:
+        """reviewer.start se emite al iniciar review."""
+        factory = _make_factory(_make_agent_result("Sin issues encontrados.", 0.01))
+        reviewer = AutoReviewer(factory, review_model="gpt-4o")
+        diff = "--- a/main.py\n+++ b/main.py\n@@ -1,3 +1,4 @@\n+import os\n"
+
+        with patch("architect.agents.reviewer._hlog") as mock_hlog:
+            reviewer.review_changes("Fix login", diff)
+
+        starts = self._extract_human_calls(mock_hlog, "reviewer.start")
+        assert len(starts) == 1
+        assert "diff_lines" in starts[0]
+
+    def test_reviewer_complete_emitted_approved(self) -> None:
+        """reviewer.complete se emite cuando se aprueba."""
+        factory = _make_factory(_make_agent_result("Sin issues encontrados.", 0.02))
+        reviewer = AutoReviewer(factory)
+        diff = "--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-old\n+new\n"
+
+        with patch("architect.agents.reviewer._hlog") as mock_hlog:
+            reviewer.review_changes("Fix it", diff)
+
+        completes = self._extract_human_calls(mock_hlog, "reviewer.complete")
+        assert len(completes) == 1
+        assert completes[0]["approved"] is True
+        assert completes[0]["issues"] == 0
+
+    def test_reviewer_complete_emitted_with_issues(self) -> None:
+        """reviewer.complete se emite cuando hay issues."""
+        review_text = "- **[main.py:1]** Bug found\n- **[utils.py:5]** Security issue"
+        factory = _make_factory(_make_agent_result(review_text, 0.03))
+        reviewer = AutoReviewer(factory)
+        diff = "--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-old\n+new\n"
+
+        with patch("architect.agents.reviewer._hlog") as mock_hlog:
+            reviewer.review_changes("Fix it", diff)
+
+        completes = self._extract_human_calls(mock_hlog, "reviewer.complete")
+        assert len(completes) == 1
+        assert completes[0]["approved"] is False
+        assert completes[0]["issues"] == 2
+
+    def test_no_human_log_on_empty_diff(self) -> None:
+        """No se emiten HUMAN events si el diff esta vacio."""
+        factory = _make_factory()
+        reviewer = AutoReviewer(factory)
+
+        with patch("architect.agents.reviewer._hlog") as mock_hlog:
+            reviewer.review_changes("Fix it", "")
+
+        starts = self._extract_human_calls(mock_hlog, "reviewer.start")
+        assert len(starts) == 0
+
+
+class TestHumanFormatterReviewer:
+    """Tests para HumanFormatter con eventos reviewer.*."""
+
+    def test_reviewer_start_banner(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event("reviewer.start", diff_lines=142)
+        assert result is not None
+        assert "142" in result
+        assert "━" in result
+
+    def test_reviewer_complete_approved(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "reviewer.complete", approved=True, issues=0, score="8/10",
+        )
+        assert result is not None
+        assert "✓" in result
+        assert "approved" in result
+        assert "8/10" in result
+
+    def test_reviewer_complete_not_approved(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "reviewer.complete", approved=False, issues=5, score="4/10",
+        )
+        assert result is not None
+        assert "✗" in result
+        assert "not approved" in result
+        assert "5 issues" in result
+
+
+class TestHumanLogReviewer:
+    """Tests para HumanLog helpers de Reviewer."""
+
+    def test_reviewer_start(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.reviewer_start(142)
+        mock_logger.log.assert_called_once_with(
+            LVL, "reviewer.start", diff_lines=142,
+        )
+
+    def test_reviewer_complete(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.reviewer_complete(True, 2, "8/10")
+        mock_logger.log.assert_called_once_with(
+            LVL, "reviewer.complete",
+            approved=True, issues=2, score="8/10",
+        )

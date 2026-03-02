@@ -186,7 +186,7 @@ class TestBuildSystemContext:
         loader = SkillsLoader(str(workspace))
         loader.load_project_context()
         ctx = loader.build_system_context()
-        assert "Instrucciones del Proyecto" in ctx
+        assert "Project Instructions" in ctx
         assert "Project rules here." in ctx
 
     def test_project_context_plus_skills(self, workspace: Path):

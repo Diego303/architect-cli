@@ -1,9 +1,9 @@
 """
-Tool para aplicar parches en formato unified diff.
+Tool for applying patches in unified diff format.
 
-Implementa un parser puro-Python de unified diff y aplica los hunks
-al archivo objetivo. Usa el comando `patch` del sistema como fallback
-si el parser puro falla.
+Implements a pure-Python unified diff parser and applies the hunks
+to the target file. Falls back to the system `patch` command
+if the pure parser fails.
 """
 
 import re
@@ -24,47 +24,47 @@ from .base import BaseTool, ToolResult
 from .schemas import ApplyPatchArgs
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Internals: parser y aplicador de unified diff
+# Internals: unified diff parser and applier
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 class PatchError(Exception):
-    """Error al parsear o aplicar un parche unified diff."""
+    """Error parsing or applying a unified diff patch."""
 
 
 @dataclass
 class _Hunk:
-    """Representa un hunk (@@ ... @@) de un unified diff."""
+    """Represents a hunk (@@ ... @@) from a unified diff."""
 
-    orig_start: int  # Número de línea 1-based en el original donde empieza el hunk
-    orig_count: int  # Número de líneas del original consumidas por el hunk
-    new_start: int   # Número de línea 1-based en el resultado
-    new_count: int   # Número de líneas en el resultado
-    lines: list[str] = field(default_factory=list)  # Líneas del hunk (sin \n final de línea de diff)
+    orig_start: int  # 1-based line number in the original where the hunk starts
+    orig_count: int  # Number of original lines consumed by the hunk
+    new_start: int   # 1-based line number in the result
+    new_count: int   # Number of lines in the result
+    lines: list[str] = field(default_factory=list)  # Hunk lines (without trailing newline from diff)
 
 
 def _parse_hunks(patch_text: str) -> list[_Hunk]:
-    """Parsea un texto de unified diff y devuelve una lista de hunks.
+    """Parse a unified diff text and return a list of hunks.
 
-    Ignora las cabeceras --- / +++ si están presentes.
-    Acepta patches con o sin cabeceras de archivo.
+    Ignores --- / +++ headers if present.
+    Accepts patches with or without file headers.
 
     Args:
-        patch_text: Contenido del parche en formato unified diff
+        patch_text: Patch content in unified diff format
 
     Returns:
-        Lista de _Hunk en orden de aparición
+        List of _Hunk in order of appearance
 
     Raises:
-        PatchError: Si el formato es inválido
+        PatchError: If the format is invalid
     """
     hunks: list[_Hunk] = []
     current: _Hunk | None = None
 
     for line in patch_text.split("\n"):
-        # Ignorar cabeceras de archivo (--- / +++)
+        # Ignore file headers (--- / +++)
         if line.startswith("--- ") or line.startswith("+++ "):
             continue
 
@@ -78,10 +78,10 @@ def _parse_hunks(patch_text: str) -> list[_Hunk]:
             new_count = int(m.group(4)) if m.group(4) is not None else 1
             current = _Hunk(orig_start, orig_count, new_start, new_count)
         elif current is not None:
-            # Acumular líneas del hunk actual
+            # Accumulate lines for the current hunk
             if line.startswith(("-", "+", " ")):
                 current.lines.append(line)
-            # Ignorar "\ No newline at end of file" y otras anotaciones
+            # Ignore "\ No newline at end of file" and other annotations
 
     if current is not None:
         hunks.append(current)
@@ -94,27 +94,27 @@ def _apply_hunks_to_lines(
     hunks: list[_Hunk],
     path: str,
 ) -> list[str]:
-    """Aplica una lista de hunks a una lista de líneas de archivo.
+    """Apply a list of hunks to a list of file lines.
 
-    Cada línea de `lines` debe terminar en '\\n' (excepto posiblemente la última).
-    Las líneas del hunk son strings sin '\\n' al final (solo el prefijo +/-/ ).
+    Each line in `lines` should end with '\\n' (except possibly the last).
+    Hunk lines are strings without '\\n' at the end (only the +/-/ prefix).
 
     Args:
-        lines: Contenido del archivo como lista de líneas (con endings)
-        hunks: Hunks a aplicar en orden
-        path: Path del archivo (solo para mensajes de error)
+        lines: File content as list of lines (with endings)
+        hunks: Hunks to apply in order
+        path: File path (only for error messages)
 
     Returns:
-        Contenido modificado como lista de líneas
+        Modified content as list of lines
 
     Raises:
-        PatchError: Si un hunk no coincide con el contenido actual
+        PatchError: If a hunk does not match the current content
     """
     result = list(lines)
-    offset = 0  # Delta acumulado de líneas añadidas/eliminadas
+    offset = 0  # Accumulated delta of added/removed lines
 
     for hunk in hunks:
-        # Separar orig_content (lo que debe estar) y new_content (lo que irá)
+        # Separate orig_content (what should be there) and new_content (what will go)
         orig_content: list[str] = []
         new_content: list[str] = []
 
@@ -124,20 +124,20 @@ def _apply_hunks_to_lines(
             elif hunk_line.startswith("+"):
                 new_content.append(hunk_line[1:])
             else:
-                # Línea de contexto (empieza con " " o es vacía)
+                # Context line (starts with " " or is empty)
                 content = hunk_line[1:] if hunk_line.startswith(" ") else hunk_line
                 orig_content.append(content)
                 new_content.append(content)
 
-        # Calcular posición de inserción en el resultado (con offset acumulado)
+        # Calculate insertion position in the result (with accumulated offset)
         if hunk.orig_count == 0:
-            # Inserción pura: se inserta DESPUÉS de la línea orig_start
+            # Pure insertion: insert AFTER the orig_start line
             insert_at = hunk.orig_start + offset
         else:
-            # Reemplazo: comienza en orig_start (1-based → 0-based)
+            # Replacement: starts at orig_start (1-based -> 0-based)
             insert_at = hunk.orig_start - 1 + offset
 
-        # Validar que orig_content coincida con el contenido actual del archivo
+        # Validate that orig_content matches the current file content
         if hunk.orig_count > 0:
             actual_slice = result[insert_at : insert_at + hunk.orig_count]
             actual_stripped = [ln.rstrip("\n\r") for ln in actual_slice]
@@ -145,13 +145,13 @@ def _apply_hunks_to_lines(
 
             if actual_stripped != expected_stripped:
                 raise PatchError(
-                    f"El hunk @@ -{hunk.orig_start},{hunk.orig_count} no coincide con el "
-                    f"contenido actual de {path}. "
-                    f"¿El parche corresponde a una versión diferente del archivo?"
+                    f"Hunk @@ -{hunk.orig_start},{hunk.orig_count} does not match the "
+                    f"current content of {path}. "
+                    f"Does the patch correspond to a different version of the file?"
                 )
 
-        # Construir las líneas nuevas con endings correctos
-        # Si el contenido del parche no tiene \n, añadirlo (para que coincida con el formato del archivo)
+        # Build the new lines with correct endings
+        # If patch content has no \n, add it (to match the file format)
         new_file_lines: list[str] = []
         for content in new_content:
             if content.endswith("\n"):
@@ -159,7 +159,7 @@ def _apply_hunks_to_lines(
             else:
                 new_file_lines.append(content + "\n")
 
-        # Aplicar el hunk
+        # Apply the hunk
         result[insert_at : insert_at + hunk.orig_count] = new_file_lines
         offset += len(new_file_lines) - hunk.orig_count
 
@@ -167,27 +167,27 @@ def _apply_hunks_to_lines(
 
 
 def _apply_patch_pure(file_content: str, patch_text: str, path: str) -> str:
-    """Aplica un unified diff a un contenido de archivo usando Python puro.
+    """Apply a unified diff to file content using pure Python.
 
     Args:
-        file_content: Contenido actual del archivo
-        patch_text: Parche en formato unified diff
-        path: Path del archivo (para mensajes de error)
+        file_content: Current file content
+        patch_text: Patch in unified diff format
+        path: File path (for error messages)
 
     Returns:
-        Contenido modificado
+        Modified content
 
     Raises:
-        PatchError: Si el parche no puede aplicarse
+        PatchError: If the patch cannot be applied
     """
     if not patch_text.strip():
-        raise PatchError("El parche está vacío.")
+        raise PatchError("The patch is empty.")
 
     hunks = _parse_hunks(patch_text)
     if not hunks:
         raise PatchError(
-            "No se encontraron hunks válidos en el parche. "
-            "El formato esperado es: @@ -a,b +c,d @@ (una o más secciones)."
+            "No valid hunks found in the patch. "
+            "Expected format: @@ -a,b +c,d @@ (one or more sections)."
         )
 
     lines = file_content.splitlines(keepends=True)
@@ -196,25 +196,25 @@ def _apply_patch_pure(file_content: str, patch_text: str, path: str) -> str:
 
 
 def _apply_patch_system(file_path: Path, patch_text: str) -> str:
-    """Aplica un parche usando el comando `patch` del sistema como fallback.
+    """Apply a patch using the system `patch` command as fallback.
 
-    Hace un --dry-run primero para validar, luego aplica.
+    Runs a --dry-run first to validate, then applies.
 
     Args:
-        file_path: Path al archivo a parchear
-        patch_text: Parche en formato unified diff
+        file_path: Path to the file to patch
+        patch_text: Patch in unified diff format
 
     Returns:
-        Contenido del archivo modificado
+        Modified file content
 
     Raises:
-        PatchError: Si `patch` no está disponible o el parche falla
+        PatchError: If `patch` is not available or the patch fails
     """
     patch_exe = shutil.which("patch")
     if patch_exe is None:
         raise PatchError(
-            "El comando `patch` no está disponible en el sistema. "
-            "Instálalo con: apt install patch / brew install gpatch"
+            "The `patch` command is not available on the system. "
+            "Install with: apt install patch / brew install gpatch"
         )
 
     with tempfile.NamedTemporaryFile(
@@ -224,7 +224,7 @@ def _apply_patch_system(file_path: Path, patch_text: str) -> str:
         patch_file = Path(tmp.name)
 
     try:
-        # Dry-run primero para validar sin modificar el archivo
+        # Dry-run first to validate without modifying the file
         dry = subprocess.run(
             [patch_exe, "--dry-run", "-f", "-i", str(patch_file), str(file_path)],
             capture_output=True,
@@ -233,10 +233,10 @@ def _apply_patch_system(file_path: Path, patch_text: str) -> str:
         )
         if dry.returncode != 0:
             raise PatchError(
-                f"El parche no puede aplicarse (dry-run): {dry.stderr.strip() or dry.stdout.strip()}"
+                f"Patch cannot be applied (dry-run): {dry.stderr.strip() or dry.stdout.strip()}"
             )
 
-        # Aplicar de verdad
+        # Apply for real
         apply = subprocess.run(
             [patch_exe, "-f", "-i", str(patch_file), str(file_path)],
             capture_output=True,
@@ -245,7 +245,7 @@ def _apply_patch_system(file_path: Path, patch_text: str) -> str:
         )
         if apply.returncode != 0:
             raise PatchError(
-                f"Error al aplicar el parche: {apply.stderr.strip() or apply.stdout.strip()}"
+                f"Error applying patch: {apply.stderr.strip() or apply.stdout.strip()}"
             )
 
         return file_path.read_text(encoding="utf-8")
@@ -255,34 +255,34 @@ def _apply_patch_system(file_path: Path, patch_text: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tool pública
+# Public tool
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class ApplyPatchTool(BaseTool):
-    """Aplica un parche en formato unified diff a un archivo del workspace."""
+    """Applies a unified diff patch to a file in the workspace."""
 
     def __init__(self, workspace_root: Path):
         self.name = "apply_patch"
         self.description = (
-            "Aplica un parche en formato unified diff a un archivo existente. "
-            "Ideal para cambios que afectan múltiples secciones no contiguas (multi-hunk). "
-            "Para un único bloque de cambio usa edit_file (más simple). "
-            "Para archivos nuevos o reescritura total usa write_file."
+            "Apply a unified diff patch to an existing file. "
+            "Ideal for changes that affect multiple non-contiguous sections (multi-hunk). "
+            "For a single block of changes use edit_file (simpler). "
+            "For new files or complete rewrites use write_file."
         )
         self.sensitive = True
         self.args_model = ApplyPatchArgs
         self.workspace_root = workspace_root
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Aplica un parche unified diff al archivo.
+        """Apply a unified diff patch to the file.
 
         Args:
-            path: Path relativo al workspace
-            patch: Texto del parche en formato unified diff
+            path: Path relative to the workspace
+            patch: Patch text in unified diff format
 
         Returns:
-            ToolResult indicando éxito con resumen o error descriptivo
+            ToolResult indicating success with summary or descriptive error
         """
         try:
             args = self.validate_args(kwargs)
@@ -291,12 +291,12 @@ class ApplyPatchTool(BaseTool):
 
             original = file_path.read_text(encoding="utf-8")
 
-            # Intentar con el parser puro-Python primero
+            # Try with the pure-Python parser first
             try:
                 modified = _apply_patch_pure(original, args.patch, args.path)
-                method = "puro-Python"
+                method = "pure-Python"
             except PatchError as pure_err:
-                # Fallback: intentar con el comando `patch` del sistema
+                # Fallback: try with the system `patch` command
                 try:
                     modified = _apply_patch_system(file_path, args.patch)
                     method = "system patch"
@@ -305,16 +305,16 @@ class ApplyPatchTool(BaseTool):
                         success=False,
                         output="",
                         error=(
-                            f"No se pudo aplicar el parche a {args.path}.\n"
-                            f"  Parser puro: {pure_err}\n"
+                            f"Could not apply patch to {args.path}.\n"
+                            f"  Pure parser: {pure_err}\n"
                             f"  System patch: {sys_err}"
                         ),
                     )
 
-            # Escribir el resultado (no-op si system patch ya lo hizo)
+            # Write the result (no-op if system patch already did it)
             file_path.write_text(modified, encoding="utf-8")
 
-            # Resumen
+            # Summary
             try:
                 hunks = _parse_hunks(args.patch)
                 lines_changed = sum(
@@ -322,16 +322,16 @@ class ApplyPatchTool(BaseTool):
                     for h in hunks
                 )
                 summary = (
-                    f"Parche aplicado a {args.path} ({method}). "
-                    f"{len(hunks)} hunk(s), ~{lines_changed} líneas modificadas."
+                    f"Patch applied to {args.path} ({method}). "
+                    f"{len(hunks)} hunk(s), ~{lines_changed} lines changed."
                 )
             except Exception:
-                summary = f"Parche aplicado a {args.path} ({method})."
+                summary = f"Patch applied to {args.path} ({method})."
 
             return ToolResult(success=True, output=summary)
 
         except PathTraversalError as e:
-            return ToolResult(success=False, output="", error=f"Error de seguridad: {e}")
+            return ToolResult(success=False, output="", error=f"Security error: {e}")
         except ValidationError as e:
             return ToolResult(success=False, output="", error=str(e))
         except UnicodeDecodeError:
@@ -339,11 +339,11 @@ class ApplyPatchTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"El archivo {path_str} no es un archivo de texto válido (UTF-8)",
+                error=f"File {path_str} is not a valid text file (UTF-8)",
             )
         except Exception as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado al aplicar parche en {kwargs.get('path', '?')}: {e}",
+                error=f"Unexpected error applying patch to {kwargs.get('path', '?')}: {e}",
             )

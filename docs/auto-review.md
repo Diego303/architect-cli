@@ -113,6 +113,33 @@ Si no hay issues: di "Sin issues encontrados."
 
 ---
 
+## Salida visual (HUMAN logging)
+
+A partir de v1.1.0, el Auto-Reviewer emite eventos de nivel HUMAN que producen una salida visual clara en stderr. El usuario puede ver el resultado de la review sin necesidad de flags `-v`.
+
+```
+━ Auto-Review (142 líneas de diff) ━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ✓ Review completo: aprobado, 2 issues, score 8/10
+```
+
+Si la review no aprueba los cambios:
+
+```
+━ Auto-Review (85 líneas de diff) ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ✗ Review completo: no aprobado, 5 issues, score 4/10
+```
+
+### Eventos emitidos
+
+| Evento | Cuándo | Datos |
+|--------|--------|-------|
+| `reviewer.start` | Al iniciar la review | diff_lines |
+| `reviewer.complete` | Al completar la review | approved, issues, score |
+
+Se desactiva con `--quiet` o `--json`. Ver [`logging.md`](logging.md) para detalles del sistema HUMAN.
+
+---
+
 ## Manejo de errores
 
 Si la llamada al LLM falla durante la review, el `AutoReviewer` no propaga la excepción. En su lugar, retorna un `ReviewResult` con:

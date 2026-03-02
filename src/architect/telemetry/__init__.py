@@ -1,10 +1,10 @@
 """
-Telemetry — Observabilidad para architect vía OpenTelemetry.
+Telemetry -- Observability for architect via OpenTelemetry.
 
-v4-D4: Proporciona trazas distribuidas para sesiones de agente,
-llamadas LLM y ejecuciones de tools.
+v4-D4: Provides distributed traces for agent sessions,
+LLM calls, and tool executions.
 
-Dependencias opcionales: opentelemetry-api, opentelemetry-sdk,
+Optional dependencies: opentelemetry-api, opentelemetry-sdk,
 opentelemetry-exporter-otlp.
 """
 

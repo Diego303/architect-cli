@@ -1,13 +1,13 @@
 """
-Dry Run / Preview Mode — Registra acciones sin ejecutarlas.
+Dry Run / Preview Mode — Records actions without executing them.
 
-DryRunTracker se usa junto con el ExecutionEngine.dry_run existente
-para recopilar las acciones que el agente habría ejecutado y generar
-un resumen al final de la ejecución.
+DryRunTracker is used alongside the existing ExecutionEngine.dry_run
+to collect the actions the agent would have executed and generate
+a summary at the end of the execution.
 
-El ExecutionEngine ya maneja el dry-run a nivel de ejecución (retorna
-"[DRY-RUN] Se ejecutaría..." en lugar de ejecutar). DryRunTracker
-complementa esto registrando las acciones para el resumen final.
+The ExecutionEngine already handles dry-run at the execution level (returns
+"[DRY-RUN] Would execute..." instead of executing). DryRunTracker
+complements this by recording the actions for the final summary.
 """
 
 from dataclasses import dataclass, field
@@ -16,7 +16,7 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Tools que modifican estado (escritura)
+# Tools that modify state (write operations)
 WRITE_TOOLS = frozenset({
     "write_file",
     "edit_file",
@@ -25,7 +25,7 @@ WRITE_TOOLS = frozenset({
     "run_command",
 })
 
-# Tools que solo leen (permitidas en dry-run)
+# Tools that only read (allowed in dry-run)
 READ_TOOLS = frozenset({
     "read_file",
     "search_code",
@@ -37,7 +37,7 @@ READ_TOOLS = frozenset({
 
 @dataclass
 class PlannedAction:
-    """Una acción que se habría ejecutado en modo real."""
+    """An action that would have been executed in real mode."""
 
     step: int
     tool: str
@@ -46,21 +46,21 @@ class PlannedAction:
 
 @dataclass
 class DryRunTracker:
-    """Registra acciones planificadas durante dry-run para generar resumen.
+    """Records planned actions during dry-run to generate a summary.
 
-    Se instancia cuando --dry-run está activo y se consulta al final
-    de la ejecución para mostrar el plan de acciones.
+    Instantiated when --dry-run is active and queried at the end
+    of execution to display the action plan.
     """
 
     actions: list[PlannedAction] = field(default_factory=list)
 
     def record(self, step: int, tool_name: str, tool_input: dict) -> None:
-        """Registra una acción de escritura planificada.
+        """Record a planned write action.
 
         Args:
-            step: Número de step actual.
-            tool_name: Nombre del tool.
-            tool_input: Argumentos del tool.
+            step: Current step number.
+            tool_name: Name of the tool.
+            tool_input: Tool arguments.
         """
         if tool_name not in WRITE_TOOLS:
             return
@@ -70,10 +70,10 @@ class DryRunTracker:
         logger.debug("dryrun.recorded", step=step, tool=tool_name, summary=summary)
 
     def get_plan_summary(self) -> str:
-        """Genera resumen legible del plan de acciones.
+        """Generate a human-readable summary of the action plan.
 
         Returns:
-            String con el plan formateado. Vacío si no hay acciones.
+            String with the formatted plan. Empty if no actions.
         """
         if not self.actions:
             return "No write actions were planned."
@@ -89,19 +89,19 @@ class DryRunTracker:
 
     @property
     def action_count(self) -> int:
-        """Número de acciones de escritura registradas."""
+        """Number of recorded write actions."""
         return len(self.actions)
 
 
 def _summarize_action(tool_name: str, tool_input: dict) -> str:
-    """Genera un resumen corto de una acción para el plan.
+    """Generate a short summary of an action for the plan.
 
     Args:
-        tool_name: Nombre del tool.
-        tool_input: Argumentos del tool.
+        tool_name: Name of the tool.
+        tool_input: Tool arguments.
 
     Returns:
-        String de resumen.
+        Summary string.
     """
     if "path" in tool_input:
         return f"path={tool_input['path']}"
@@ -110,6 +110,6 @@ def _summarize_action(tool_name: str, tool_input: dict) -> str:
         if len(cmd) > 60:
             cmd = cmd[:60] + "..."
         return f"command={cmd}"
-    # Fallback: mostrar keys
+    # Fallback: show keys
     keys = ", ".join(tool_input.keys())
     return f"args=[{keys}]"

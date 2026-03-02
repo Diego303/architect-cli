@@ -1,13 +1,13 @@
 """
-Cargador de configuración con deep merge.
+Configuration loader with deep merge.
 
-Orden de precedencia (de menor a mayor):
-1. Defaults (definidos en los schemas Pydantic)
-2. Archivo YAML
-3. Variables de entorno
-4. Argumentos CLI
+Order of precedence (lowest to highest):
+1. Defaults (defined in Pydantic schemas)
+2. YAML file
+3. Environment variables
+4. CLI arguments
 
-El merge es recursivo para preservar todas las claves en todos los niveles.
+The merge is recursive to preserve all keys at all levels.
 """
 
 import os
@@ -20,14 +20,14 @@ from .schema import AppConfig
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Merge recursivo de diccionarios.
+    """Recursive dictionary merge.
 
     Args:
-        base: Diccionario base
-        override: Diccionario que sobreescribe valores del base
+        base: Base dictionary
+        override: Dictionary that overrides values from base
 
     Returns:
-        Nuevo diccionario con valores merged. Override gana en conflictos de hojas.
+        New dictionary with merged values. Override wins on leaf conflicts.
 
     Example:
         >>> base = {"a": {"b": 1, "c": 2}, "d": 3}
@@ -45,19 +45,19 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 
 def load_yaml_config(config_path: Path | None) -> dict[str, Any]:
-    """Carga configuración desde archivo YAML.
+    """Load configuration from a YAML file.
 
     Args:
-        config_path: Path al archivo YAML, o None para omitir
+        config_path: Path to the YAML file, or None to skip
 
     Returns:
-        Diccionario con la configuración, o dict vacío si no hay archivo
+        Dictionary with configuration, or empty dict if no file
     """
     if not config_path:
         return {}
 
     if not config_path.exists():
-        raise FileNotFoundError(f"Archivo de configuración no encontrado: {config_path}")
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     with open(config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -65,16 +65,16 @@ def load_yaml_config(config_path: Path | None) -> dict[str, Any]:
 
 
 def load_env_overrides() -> dict[str, Any]:
-    """Carga overrides desde variables de entorno.
+    """Load overrides from environment variables.
 
-    Variables soportadas:
-        ARCHITECT_MODEL: sobreescribe llm.model
-        ARCHITECT_API_BASE: sobreescribe llm.api_base
-        ARCHITECT_LOG_LEVEL: sobreescribe logging.level
-        ARCHITECT_WORKSPACE: sobreescribe workspace.root
+    Supported variables:
+        ARCHITECT_MODEL: overrides llm.model
+        ARCHITECT_API_BASE: overrides llm.api_base
+        ARCHITECT_LOG_LEVEL: overrides logging.level
+        ARCHITECT_WORKSPACE: overrides workspace.root
 
     Returns:
-        Diccionario con overrides desde env vars
+        Dictionary with overrides from env vars
     """
     overrides: dict[str, Any] = {}
 
@@ -93,18 +93,22 @@ def load_env_overrides() -> dict[str, Any]:
     if workspace := os.environ.get("ARCHITECT_WORKSPACE"):
         overrides.setdefault("workspace", {})["root"] = workspace
 
+    # Language config
+    if lang := os.environ.get("ARCHITECT_LANGUAGE"):
+        overrides["language"] = lang.lower()
+
     return overrides
 
 
 def apply_cli_overrides(config_dict: dict[str, Any], cli_args: dict[str, Any]) -> dict[str, Any]:
-    """Aplica overrides desde argumentos CLI.
+    """Apply overrides from CLI arguments.
 
     Args:
-        config_dict: Configuración base (ya merged con YAML y env)
-        cli_args: Diccionario con argumentos CLI
+        config_dict: Base configuration (already merged with YAML and env)
+        cli_args: Dictionary with CLI arguments
 
     Returns:
-        Configuración con overrides de CLI aplicados
+        Configuration with CLI overrides applied
     """
     overrides: dict[str, Any] = {}
 
@@ -118,10 +122,10 @@ def apply_cli_overrides(config_dict: dict[str, Any], cli_args: dict[str, Any]) -
     if cli_args.get("no_stream") is not None:
         overrides.setdefault("llm", {})["stream"] = not cli_args["no_stream"]
 
-    # NOTA: --timeout de la CLI es el timeout TOTAL de la sesión (watchdog),
-    # NO el timeout per-request del LLM. El timeout per-request se configura
-    # en el YAML (llm.timeout, default 60s). No aplicar aquí para evitar
-    # que un --timeout bajo mate las llamadas individuales al LLM.
+    # NOTE: --timeout from the CLI is the TOTAL session timeout (watchdog),
+    # NOT the per-request LLM timeout. The per-request timeout is configured
+    # in the YAML (llm.timeout, default 60s). Not applied here to avoid
+    # a low --timeout killing individual LLM calls.
 
     # Workspace overrides
     if cli_args.get("workspace"):
@@ -144,38 +148,38 @@ def load_config(
     config_path: Path | None = None,
     cli_args: dict[str, Any] | None = None,
 ) -> AppConfig:
-    """Carga y valida la configuración completa de la aplicación.
+    """Load and validate the complete application configuration.
 
-    Proceso de carga:
-    1. Cargar defaults de Pydantic
-    2. Merge con YAML (si existe)
-    3. Merge con env vars
-    4. Merge con CLI args
-    5. Validar con Pydantic
+    Loading process:
+    1. Load Pydantic defaults
+    2. Merge with YAML (if it exists)
+    3. Merge with env vars
+    4. Merge with CLI args
+    5. Validate with Pydantic
 
     Args:
-        config_path: Path al archivo YAML de configuración
-        cli_args: Diccionario con argumentos de la CLI
+        config_path: Path to the YAML configuration file
+        cli_args: Dictionary with CLI arguments
 
     Returns:
-        AppConfig validado y completo
+        Validated and complete AppConfig
 
     Raises:
-        FileNotFoundError: Si config_path no existe
-        ValidationError: Si la configuración final no es válida
+        FileNotFoundError: If config_path does not exist
+        ValidationError: If the final configuration is not valid
     """
     cli_args = cli_args or {}
 
-    # 1. Defaults vienen de Pydantic (AppConfig())
-    # 2. Cargar YAML
+    # 1. Defaults come from Pydantic (AppConfig())
+    # 2. Load YAML
     yaml_config = load_yaml_config(config_path)
 
-    # 3. Merge con env vars
+    # 3. Merge with env vars
     env_overrides = load_env_overrides()
     merged = deep_merge(yaml_config, env_overrides)
 
-    # 4. Merge con CLI args
+    # 4. Merge with CLI args
     merged = apply_cli_overrides(merged, cli_args)
 
-    # 5. Validar con Pydantic (esto aplica los defaults automáticamente)
+    # 5. Validate with Pydantic (this applies defaults automatically)
     return AppConfig(**merged)

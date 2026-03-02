@@ -620,7 +620,7 @@ class TestBuildIterationPrompt:
     def test_first_iteration_includes_iteration_number(self, ralph_loop: RalphLoop) -> None:
         """El prompt incluye el numero de iteracion."""
         prompt = ralph_loop._build_iteration_prompt(1, "abc123")
-        assert "iteraci" in prompt.lower()
+        assert "iteration" in prompt.lower()
         assert "1/" in prompt
 
     @patch("architect.features.ralph.subprocess.run")
@@ -636,7 +636,7 @@ class TestBuildIterationPrompt:
 
         prompt = ralph_loop._build_iteration_prompt(2, "abc123")
         assert "diff --git" in prompt
-        assert "Cambios de Iteraciones Anteriores" in prompt
+        assert "Changes from Previous Iterations" in prompt
 
     @patch("architect.features.ralph.subprocess.run")
     def test_subsequent_iteration_no_diff_if_empty(
@@ -646,7 +646,7 @@ class TestBuildIterationPrompt:
         mock_subprocess.return_value = MagicMock(stdout="", returncode=0)
 
         prompt = ralph_loop._build_iteration_prompt(2, "abc123")
-        assert "Cambios de Iteraciones Anteriores" not in prompt
+        assert "Changes from Previous Iterations" not in prompt
 
     def test_subsequent_iteration_includes_errors(
         self, ralph_loop: RalphLoop
@@ -672,7 +672,7 @@ class TestBuildIterationPrompt:
             mock_sp.return_value = MagicMock(stdout="", returncode=0)
             prompt = ralph_loop._build_iteration_prompt(2, "abc123")
 
-        assert "Errores de la Iteraci" in prompt
+        assert "Errors from Previous Iteration" in prompt
         assert "FAILED test_login" in prompt
 
     def test_subsequent_iteration_includes_execution_error(
@@ -696,7 +696,7 @@ class TestBuildIterationPrompt:
             mock_sp.return_value = MagicMock(stdout="", returncode=0)
             prompt = ralph_loop._build_iteration_prompt(2, "abc123")
 
-        assert "Error de Ejecuci" in prompt
+        assert "Execution Error" in prompt
         assert "Agent timeout" in prompt
 
     def test_spec_file_used_when_exists(self, workspace: Path) -> None:
@@ -744,7 +744,7 @@ class TestBuildIterationPrompt:
         mock_subprocess.return_value = MagicMock(stdout=long_diff, returncode=0)
 
         prompt = ralph_loop._build_iteration_prompt(2, "abc123")
-        assert "diff truncado" in prompt
+        assert "diff truncated" in prompt
 
     def test_progress_file_included_when_exists(
         self, ralph_loop: RalphLoop, workspace: Path
@@ -759,7 +759,7 @@ class TestBuildIterationPrompt:
         )
 
         prompt = ralph_loop._build_iteration_prompt(1, "abc123")
-        assert "Progreso Acumulado" in prompt
+        assert "Accumulated Progress" in prompt
         assert "Iteration 1" in prompt
 
 
@@ -904,7 +904,7 @@ class TestUpdateProgress:
         assert ralph_loop.progress_file.exists()
         content = ralph_loop.progress_file.read_text(encoding="utf-8")
         assert "Ralph Loop" in content
-        assert "Iteraci" in content
+        assert "Iteration" in content
 
     def test_appends_to_existing(self, ralph_loop: RalphLoop) -> None:
         """_update_progress acumula iteraciones en el archivo."""
@@ -921,9 +921,9 @@ class TestUpdateProgress:
             ralph_loop._update_progress(iteration)
 
         content = ralph_loop.progress_file.read_text(encoding="utf-8")
-        assert "Iteraci\u00f3n 1" in content
-        assert "Iteraci\u00f3n 2" in content
-        assert "Iteraci\u00f3n 3" in content
+        assert "Iteration 1" in content
+        assert "Iteration 2" in content
+        assert "Iteration 3" in content
 
     def test_includes_check_status(self, ralph_loop: RalphLoop) -> None:
         """Progress incluye estado de cada check."""
@@ -1855,3 +1855,214 @@ class TestRunWithWorktree:
         # Progress file debe estar dentro del worktree
         expected = worktree_path / ".architect" / "ralph-progress.md"
         assert loop.progress_file == expected
+
+
+# ── Tests: HUMAN Logging ──────────────────────────────────────────────────
+
+
+class TestRalphHumanLogging:
+    """Tests para HUMAN-level logging en RalphLoop."""
+
+    @staticmethod
+    def _extract_human_calls(mock_hlog: MagicMock, event_name: str) -> list[dict]:
+        from architect.logging.levels import HUMAN as LVL
+        results = []
+        for c in mock_hlog.log.call_args_list:
+            args = c[0]
+            if len(args) >= 2 and args[0] == LVL and isinstance(args[1], dict):
+                if args[1].get("event") == event_name:
+                    results.append(args[1])
+        return results
+
+    def test_iteration_start_emitted(self, workspace: Path) -> None:
+        """ralph.iteration_start se emite al inicio de cada iteracion."""
+        config = RalphConfig(task="Fix", checks=["echo ok"], max_iterations=2)
+        state = MockAgentState(final_output="COMPLETE", steps=3, cost=0.01)
+
+        with patch("subprocess.run") as mock_run, \
+             patch("architect.features.ralph._hlog") as mock_hlog:
+            mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n", stderr="")
+            loop = RalphLoop(config=config, agent_factory=lambda **kw: MockAgent(state), workspace_root=str(workspace))
+            loop.run()
+
+        starts = self._extract_human_calls(mock_hlog, "ralph.iteration_start")
+        assert len(starts) >= 1
+        assert starts[0]["iteration"] == 1
+        assert starts[0]["max_iterations"] == 2
+        assert starts[0]["check_cmd"] == "echo ok"
+
+    def test_checks_result_emitted(self, workspace: Path) -> None:
+        """ralph.checks_result se emite con conteo de checks."""
+        config = RalphConfig(task="Fix", checks=["echo ok"], max_iterations=2)
+        state = MockAgentState(final_output="COMPLETE", steps=3, cost=0.01)
+
+        with patch("subprocess.run") as mock_run, \
+             patch("architect.features.ralph._hlog") as mock_hlog:
+            mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n", stderr="")
+            loop = RalphLoop(config=config, agent_factory=lambda **kw: MockAgent(state), workspace_root=str(workspace))
+            loop.run()
+
+        checks = self._extract_human_calls(mock_hlog, "ralph.checks_result")
+        assert len(checks) >= 1
+        assert "passed" in checks[0]
+        assert "total" in checks[0]
+
+    def test_iteration_done_emitted(self, workspace: Path) -> None:
+        """ralph.iteration_done se emite despues de cada iteracion."""
+        config = RalphConfig(task="Fix", checks=["echo ok"], max_iterations=2)
+        state = MockAgentState(final_output="COMPLETE", steps=3, cost=0.01)
+
+        with patch("subprocess.run") as mock_run, \
+             patch("architect.features.ralph._hlog") as mock_hlog:
+            mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n", stderr="")
+            loop = RalphLoop(config=config, agent_factory=lambda **kw: MockAgent(state), workspace_root=str(workspace))
+            loop.run()
+
+        dones = self._extract_human_calls(mock_hlog, "ralph.iteration_done")
+        assert len(dones) >= 1
+        assert dones[0]["iteration"] == 1
+        assert "status" in dones[0]
+        assert "cost" in dones[0]
+        assert "duration" in dones[0]
+
+    def test_complete_emitted(self, workspace: Path) -> None:
+        """ralph.complete se emite al terminar el loop."""
+        config = RalphConfig(task="Fix", checks=["echo ok"], max_iterations=2)
+        state = MockAgentState(final_output="COMPLETE", steps=3, cost=0.01)
+
+        with patch("subprocess.run") as mock_run, \
+             patch("architect.features.ralph._hlog") as mock_hlog:
+            mock_run.return_value = MagicMock(returncode=0, stdout="abc123\n", stderr="")
+            loop = RalphLoop(config=config, agent_factory=lambda **kw: MockAgent(state), workspace_root=str(workspace))
+            loop.run()
+
+        completes = self._extract_human_calls(mock_hlog, "ralph.complete")
+        assert len(completes) == 1
+        assert "total_iterations" in completes[0]
+        assert "status" in completes[0]
+        assert "total_cost" in completes[0]
+
+
+class TestHumanFormatterRalph:
+    """Tests para HumanFormatter con eventos ralph.*."""
+
+    def test_iteration_start_banner(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.iteration_start", iteration=1, max_iterations=5, check_cmd="pytest tests/",
+        )
+        assert result is not None
+        assert "1/5" in result
+        assert "pytest tests/" in result
+        assert "━" in result
+
+    def test_checks_result_all_passed(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.checks_result", iteration=1, passed=3, total=3, all_passed=True,
+        )
+        assert result is not None
+        assert "3/3" in result
+        assert "✓" in result
+
+    def test_checks_result_some_failed(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.checks_result", iteration=1, passed=2, total=5, all_passed=False,
+        )
+        assert result is not None
+        assert "2/5" in result
+        assert "✓" not in result
+
+    def test_iteration_done_passed(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.iteration_done", iteration=2, status="passed", cost=0.0234, duration=45.2,
+        )
+        assert result is not None
+        assert "✓" in result
+        assert "$0.0234" in result
+        assert "45.2s" in result
+
+    def test_iteration_done_failed(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.iteration_done", iteration=1, status="failed", cost=0.01, duration=10.0,
+        )
+        assert result is not None
+        assert "✗" in result
+        assert "failed" in result
+
+    def test_complete_success(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.complete", total_iterations=3, status="success", total_cost=0.0423,
+        )
+        assert result is not None
+        assert "3 iterations" in result
+        assert "success" in result
+        assert "$0.0423" in result
+
+    def test_complete_max_iterations(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "ralph.complete", total_iterations=25, status="max_iterations", total_cost=1.5,
+        )
+        assert result is not None
+        assert "25 iterations" in result
+        assert "⚠️" in result
+
+
+class TestHumanLogRalph:
+    """Tests para HumanLog helpers de Ralph."""
+
+    def test_ralph_iteration_start(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.ralph_iteration_start(1, 5, "pytest tests/")
+        mock_logger.log.assert_called_once_with(
+            LVL, "ralph.iteration_start",
+            iteration=1, max_iterations=5, check_cmd="pytest tests/",
+        )
+
+    def test_ralph_checks_result(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.ralph_checks_result(1, 3, 5, False)
+        mock_logger.log.assert_called_once_with(
+            LVL, "ralph.checks_result",
+            iteration=1, passed=3, total=5, all_passed=False,
+        )
+
+    def test_ralph_iteration_done(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.ralph_iteration_done(2, "passed", 0.05, 30.0)
+        mock_logger.log.assert_called_once_with(
+            LVL, "ralph.iteration_done",
+            iteration=2, status="passed", cost=0.05, duration=30.0,
+        )
+
+    def test_ralph_complete(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.ralph_complete(3, "success", 0.15)
+        mock_logger.log.assert_called_once_with(
+            LVL, "ralph.complete",
+            total_iterations=3, status="success", total_cost=0.15,
+        )

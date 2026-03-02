@@ -132,7 +132,7 @@ class TestPresetManager:
         assert (workspace / ".architect").is_dir()
 
     def test_apply_invalid_preset_raises(self, manager):
-        with pytest.raises(ValueError, match="no existe"):
+        with pytest.raises(ValueError, match="does not exist"):
             manager.apply_preset("nonexistent")
 
     def test_apply_no_overwrite_by_default(self, manager, workspace):
@@ -185,7 +185,7 @@ class TestPresetManager:
         assert "Python" in files[".architect.md"]
 
     def test_get_preset_files_invalid(self, manager):
-        with pytest.raises(ValueError, match="no existe"):
+        with pytest.raises(ValueError, match="does not exist"):
             manager.get_preset_files("nonexistent")
 
 

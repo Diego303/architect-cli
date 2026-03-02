@@ -1,20 +1,22 @@
 """
-Guardrails Engine — Capa de seguridad determinista para el agente.
+Guardrails Engine — Deterministic security layer for the agent.
 
-v4-A2: Los guardrails se evalúan ANTES que los hooks de usuario y son
-reglas DETERMINISTAS que no dependen del LLM ni pueden ser desactivadas.
+v4-A2: Guardrails are evaluated BEFORE user hooks and are
+DETERMINISTIC rules that do not depend on the LLM and cannot be disabled.
 
-Funciones:
-- check_file_access: Proteger archivos sensibles (.env, *.pem, etc.)
-- check_command: Bloquear comandos peligrosos (rm -rf /, git push --force, etc.)
-- check_edit_limits: Limitar archivos/líneas modificados
-- check_code_rules: Escanear contenido escrito contra patrones regex
-- run_quality_gates: Ejecutar checks al completar (lint, tests, typecheck)
+Functions:
+- check_file_access: Protect files (protected_files: write only,
+  sensitive_files: read and write)
+- check_command: Block dangerous commands (rm -rf /, git push --force, etc.)
+  and detect shell reads (cat, head, tail) to sensitive files
+- check_edit_limits: Limit modified files/lines
+- check_code_rules: Scan written content against regex patterns
+- run_quality_gates: Run checks on completion (lint, tests, typecheck)
 
-Invariantes:
-- Los guardrails NUNCA rompen el loop (retornan tuplas allowed/reason)
-- Los quality gates se ejecutan como subprocesses con timeout
-- Todo se logea con structlog
+Invariants:
+- Guardrails NEVER break the loop (return allowed/reason tuples)
+- Quality gates run as subprocesses with timeout
+- Everything is logged with structlog
 """
 
 import fnmatch
@@ -33,53 +35,81 @@ __all__ = [
     "GuardrailsEngine",
 ]
 
-# Regex para detectar archivos destino de redirecciones shell
-# Captura: > file, >> file, >file, | tee file, | tee -a file
+# Regex to detect target files of shell redirections
+# Captures: > file, >> file, >file, | tee file, | tee -a file
 _REDIRECT_RE = re.compile(
-    r">{1,2}\s*([^\s;|&]+)"        # > file o >> file
+    r">{1,2}\s*([^\s;|&]+)"        # > file or >> file
     r"|"
-    r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"  # | tee file o | tee -a file
+    r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"  # | tee file or | tee -a file
+)
+
+# Regex to detect commands that read files
+# Captures: cat file, head file, head -n 10 file, tail -5 file, less file, more file
+_READ_CMD_RE = re.compile(
+    r"\b(?:cat|head|tail|less|more)\s+"
+    r"(?:-[^\s]+(?:\s+\d+)?\s+)*"  # Optional flags with numeric args (-n 10, -5)
+    r"([^\s;|&>]+)"                # Target file
 )
 
 
 def _extract_redirect_targets(command: str) -> list[str]:
-    """Extrae los archivos destino de redirecciones shell.
+    """Extract target files from shell redirections.
 
     Args:
-        command: Comando shell completo.
+        command: Full shell command.
 
     Returns:
-        Lista de paths de archivos a los que se redirige output.
+        List of file paths that output is redirected to.
     """
     targets: list[str] = []
     for match in _REDIRECT_RE.finditer(command):
         target = match.group(1) or match.group(2)
         if target:
-            # Quitar comillas
+            # Strip quotes
+            target = target.strip("'\"")
+            targets.append(target)
+    return targets
+
+
+def _extract_read_targets(command: str) -> list[str]:
+    """Extract files that a shell command attempts to read.
+
+    Detects: cat file, head file, tail file, less file, more file.
+
+    Args:
+        command: Full shell command.
+
+    Returns:
+        List of file paths that the command reads.
+    """
+    targets: list[str] = []
+    for match in _READ_CMD_RE.finditer(command):
+        target = match.group(1)
+        if target:
             target = target.strip("'\"")
             targets.append(target)
     return targets
 
 
 class GuardrailsEngine:
-    """Evalúa guardrails antes de permitir acciones del agente.
+    """Evaluates guardrails before allowing agent actions.
 
-    Los guardrails son la primera línea de defensa: se evalúan ANTES
-    que los hooks de usuario en el ExecutionEngine.
+    Guardrails are the first line of defense: evaluated BEFORE
+    user hooks in the ExecutionEngine.
 
     State tracking:
-    - _files_modified: set de archivos modificados durante la sesión
-    - _lines_changed: total acumulado de líneas cambiadas
-    - _commands_executed: total de comandos ejecutados
-    - _edits_since_last_test: contador para require_test_after_edit
+    - _files_modified: set of files modified during the session
+    - _lines_changed: accumulated total of changed lines
+    - _commands_executed: total commands executed
+    - _edits_since_last_test: counter for require_test_after_edit
     """
 
     def __init__(self, config: GuardrailsConfig, workspace_root: str) -> None:
-        """Inicializa el engine de guardrails.
+        """Initialize the guardrails engine.
 
         Args:
-            config: Configuración de guardrails desde YAML.
-            workspace_root: Directorio raíz del workspace.
+            config: Guardrails configuration from YAML.
+            workspace_root: Workspace root directory.
         """
         self.config = config
         self.workspace_root = workspace_root
@@ -90,62 +120,107 @@ class GuardrailsEngine:
         self.log = logger.bind(component="guardrails")
 
     def check_file_access(self, file_path: str, action: str) -> tuple[bool, str]:
-        """Verifica si un archivo está protegido.
+        """Check if a file is protected or sensitive.
+
+        - sensitive_files: blocks ALL actions (read and write).
+        - protected_files: blocks only write actions.
 
         Args:
-            file_path: Path del archivo a acceder.
-            action: Tipo de acción ('write_file', 'edit_file', 'delete_file').
+            file_path: Path of the file to access.
+            action: Action type ('read_file', 'write_file', 'edit_file',
+                    'delete_file', 'apply_patch').
 
         Returns:
-            Tupla (allowed, reason). Si allowed=False, reason explica por qué.
+            Tuple (allowed, reason). If allowed=False, reason explains why.
         """
-        for pattern in self.config.protected_files:
+        path_name = Path(file_path).name
+
+        from ..i18n import t
+
+        # 1. Sensitive files: block ALL actions (read + write)
+        for pattern in self.config.sensitive_files:
             if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(
-                Path(file_path).name, pattern
+                path_name, pattern
             ):
-                reason = f"Archivo protegido por guardrail: {file_path} (patrón: {pattern})"
-                self.log.warning("guardrail.file_blocked", file=file_path, pattern=pattern)
+                reason = t("guardrail.sensitive_blocked", file=file_path, pattern=pattern)
+                self.log.warning(
+                    "guardrail.sensitive_file_blocked",
+                    file=file_path,
+                    pattern=pattern,
+                    action=action,
+                )
                 return False, reason
+
+        # 2. Protected files: block write/edit/delete only
+        _write_actions = ("write_file", "edit_file", "delete_file", "apply_patch")
+        if action in _write_actions:
+            for pattern in self.config.protected_files:
+                if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(
+                    path_name, pattern
+                ):
+                    reason = t("guardrail.protected_blocked", file=file_path, pattern=pattern)
+                    self.log.warning("guardrail.file_blocked", file=file_path, pattern=pattern)
+                    return False, reason
+
         return True, ""
 
     def check_command(self, command: str) -> tuple[bool, str]:
-        """Verifica si un comando está bloqueado.
+        """Check if a command is blocked.
 
-        Comprueba dos cosas:
-        1. El comando contra la lista de blocked_commands (regex).
-        2. Si el comando redirige output a un archivo protegido
-           (shell redirection: >, >>, tee → protected_files).
+        Checks three things:
+        1. The command against the blocked_commands list (regex).
+        2. Whether the command redirects output to a protected or sensitive file
+           (shell redirection: >, >>, tee -> protected_files + sensitive_files).
+        3. Whether the command reads a sensitive file
+           (cat, head, tail, less, more -> sensitive_files).
 
         Args:
-            command: Comando shell a verificar.
+            command: Shell command to verify.
 
         Returns:
-            Tupla (allowed, reason).
+            Tuple (allowed, reason).
         """
+        from ..i18n import t
+
         for pattern in self.config.blocked_commands:
             try:
                 if re.search(pattern, command, re.IGNORECASE):
-                    reason = f"Comando bloqueado por guardrail: coincide con '{pattern}'"
+                    reason = t("guardrail.command_blocked", pattern=pattern)
                     self.log.warning("guardrail.command_blocked", command=command[:60], pattern=pattern)
                     return False, reason
             except re.error:
                 self.log.warning("guardrail.invalid_regex", pattern=pattern)
                 continue
 
-        # Verificar que el comando no redirige output a archivos protegidos
-        if self.config.protected_files:
+        # Check that the command doesn't redirect output to protected/sensitive files
+        write_patterns = list(self.config.protected_files) + list(self.config.sensitive_files)
+        if write_patterns:
             redirect_targets = _extract_redirect_targets(command)
             for target in redirect_targets:
-                for pattern in self.config.protected_files:
+                for pattern in write_patterns:
                     if fnmatch.fnmatch(target, pattern) or fnmatch.fnmatch(
                         Path(target).name, pattern
                     ):
-                        reason = (
-                            f"Comando bloqueado: intenta escribir en archivo protegido "
-                            f"'{target}' (patrón: {pattern})"
-                        )
+                        reason = t("guardrail.command_write_blocked", target=target, pattern=pattern)
                         self.log.warning(
                             "guardrail.command_redirect_blocked",
+                            command=command[:60],
+                            target=target,
+                            pattern=pattern,
+                        )
+                        return False, reason
+
+        # Check that the command doesn't read sensitive files (cat, head, tail, etc.)
+        if self.config.sensitive_files:
+            read_targets = _extract_read_targets(command)
+            for target in read_targets:
+                for pattern in self.config.sensitive_files:
+                    if fnmatch.fnmatch(target, pattern) or fnmatch.fnmatch(
+                        Path(target).name, pattern
+                    ):
+                        reason = t("guardrail.command_read_blocked", target=target, pattern=pattern)
+                        self.log.warning(
+                            "guardrail.command_read_blocked",
                             command=command[:60],
                             target=target,
                             pattern=pattern,
@@ -156,10 +231,7 @@ class GuardrailsEngine:
             self.config.max_commands_executed is not None
             and self._commands_executed >= self.config.max_commands_executed
         ):
-            reason = (
-                f"Límite de comandos alcanzado ({self.config.max_commands_executed}). "
-                "El guardrail impide ejecutar más comandos."
-            )
+            reason = t("guardrail.commands_limit", limit=self.config.max_commands_executed)
             self.log.warning("guardrail.commands_limit", count=self._commands_executed)
             return False, reason
 
@@ -168,16 +240,18 @@ class GuardrailsEngine:
     def check_edit_limits(
         self, file_path: str, lines_added: int = 0, lines_removed: int = 0
     ) -> tuple[bool, str]:
-        """Verifica límites de archivos/líneas modificados.
+        """Check modified files/lines limits.
 
         Args:
-            file_path: Archivo modificado.
-            lines_added: Líneas añadidas en esta edición.
-            lines_removed: Líneas eliminadas en esta edición.
+            file_path: Modified file.
+            lines_added: Lines added in this edit.
+            lines_removed: Lines removed in this edit.
 
         Returns:
-            Tupla (allowed, reason).
+            Tuple (allowed, reason).
         """
+        from ..i18n import t
+
         self._files_modified.add(file_path)
         self._lines_changed += lines_added + lines_removed
 
@@ -185,11 +259,7 @@ class GuardrailsEngine:
             self.config.max_files_modified is not None
             and len(self._files_modified) > self.config.max_files_modified
         ):
-            reason = (
-                f"Límite de archivos modificados alcanzado "
-                f"({self.config.max_files_modified}). Para proteger el codebase, "
-                "el guardrail impide tocar más archivos."
-            )
+            reason = t("guardrail.files_limit", limit=self.config.max_files_modified)
             self.log.warning(
                 "guardrail.files_limit",
                 count=len(self._files_modified),
@@ -201,11 +271,7 @@ class GuardrailsEngine:
             self.config.max_lines_changed is not None
             and self._lines_changed > self.config.max_lines_changed
         ):
-            reason = (
-                f"Límite de líneas cambiadas alcanzado "
-                f"({self.config.max_lines_changed}). El guardrail impide "
-                "cambios adicionales."
-            )
+            reason = t("guardrail.lines_limit", limit=self.config.max_lines_changed)
             self.log.warning(
                 "guardrail.lines_limit",
                 count=self._lines_changed,
@@ -216,14 +282,14 @@ class GuardrailsEngine:
         return True, ""
 
     def check_code_rules(self, content: str, file_path: str) -> list[tuple[str, str]]:
-        """Escanea contenido escrito contra code_rules.
+        """Scan written content against code_rules.
 
         Args:
-            content: Contenido del archivo escrito.
-            file_path: Path del archivo (para logging).
+            content: Written file content.
+            file_path: File path (for logging).
 
         Returns:
-            Lista de (severity, message) para cada violación encontrada.
+            List of (severity, message) for each violation found.
         """
         violations: list[tuple[str, str]] = []
         for rule in self.config.code_rules:
@@ -242,26 +308,26 @@ class GuardrailsEngine:
         return violations
 
     def record_command(self) -> None:
-        """Registra que se ejecutó un comando."""
+        """Record that a command was executed."""
         self._commands_executed += 1
 
     def record_edit(self) -> None:
-        """Registra una edición para tracking de require_test."""
+        """Record an edit for require_test tracking."""
         self._edits_since_last_test += 1
 
     def should_force_test(self) -> bool:
-        """True si require_test_after_edit y hay edits pendientes."""
+        """True if require_test_after_edit and there are pending edits."""
         return self.config.require_test_after_edit and self._edits_since_last_test > 0
 
     def reset_test_counter(self) -> None:
-        """Resetea el contador de edits desde último test."""
+        """Reset the edit counter since last test."""
         self._edits_since_last_test = 0
 
     def run_quality_gates(self) -> list[dict]:
-        """Ejecuta quality gates. Se llama cuando el agente declara completado.
+        """Execute quality gates. Called when the agent declares completion.
 
         Returns:
-            Lista de dicts con keys: name, passed, required, output, error.
+            List of dicts with keys: name, passed, required, output, error.
         """
         results: list[dict] = []
         for gate in self.config.quality_gates:
@@ -293,7 +359,7 @@ class GuardrailsEngine:
                     "name": gate.name,
                     "passed": False,
                     "required": gate.required,
-                    "output": f"Timeout después de {gate.timeout}s",
+                    "output": f"Timeout after {gate.timeout}s",
                     "error": "",
                 })
                 self.log.warning("guardrail.quality_gate_timeout", name=gate.name)

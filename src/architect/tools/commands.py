@@ -1,11 +1,11 @@
 """
-Tool run_command — Ejecución de comandos del sistema (F13).
+Tool run_command — System command execution (F13).
 
-Implementa cuatro capas de seguridad:
-  1. Blocklist: patrones regex que nunca se ejecutan
-  2. Clasificación dinámica: safe / dev / dangerous → política de confirmación
-  3. Timeouts y output limit: evita procesos colgados o contextos saturados
-  4. Directory sandboxing: cwd siempre dentro del workspace
+Implements four security layers:
+  1. Blocklist: regex patterns that are never executed
+  2. Dynamic classification: safe / dev / dangerous -> confirmation policy
+  3. Timeouts and output limit: prevents hung processes or saturated contexts
+  4. Directory sandboxing: cwd always within the workspace
 """
 
 import os
@@ -23,27 +23,27 @@ from .schemas import RunCommandArgs
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Constantes de seguridad built-in
+# Built-in security constants
 # ---------------------------------------------------------------------------
 
-# Patrones regex que NUNCA se ejecutan (Capa 1 — blocklist dura)
+# Regex patterns that are NEVER executed (Layer 1 — hard blocklist)
 BLOCKED_PATTERNS: list[str] = [
-    r"\brm\s+-rf\s+/",          # rm -rf / (eliminación del sistema)
-    r"\brm\s+-rf\s+~",          # rm -rf ~ (home del usuario)
-    r"\bsudo\b",                 # escalada de privilegios
-    r"\bsu\b",                   # cambio de usuario
-    r"\bchmod\s+777\b",          # permisos universales inseguros
+    r"\brm\s+-rf\s+/",          # rm -rf / (system wipe)
+    r"\brm\s+-rf\s+~",          # rm -rf ~ (user home wipe)
+    r"\bsudo\b",                 # privilege escalation
+    r"\bsu\b",                   # user switch
+    r"\bchmod\s+777\b",          # insecure universal permissions
     r"\bcurl\b.*\|\s*(ba)?sh",   # curl | bash / curl | sh
     r"\bwget\b.*\|\s*(ba)?sh",   # wget | bash / wget | sh
-    r"\bdd\b.*\bof=/dev/",       # escritura directa a dispositivos
-    r">\s*/dev/sd",              # redirección a discos
-    r"\bmkfs\b",                 # formatear discos
+    r"\bdd\b.*\bof=/dev/",       # direct write to devices
+    r">\s*/dev/sd",              # redirect to disks
+    r"\bmkfs\b",                 # format disks
     r"\b:()\s*\{\s*:\|:&\s*\};?:", # fork bomb
-    r"\bpkill\s+-9\s+-f\b",     # matar todos los procesos por nombre
-    r"\bkillall\s+-9\b",        # matar todos los procesos
+    r"\bpkill\s+-9\s+-f\b",     # kill all processes by name
+    r"\bkillall\s+-9\b",        # kill all processes
 ]
 
-# Comandos base considerados seguros (read-only, sin efectos secundarios)
+# Base commands considered safe (read-only, no side effects)
 SAFE_COMMANDS: set[str] = {
     "ls", "cat", "head", "tail", "wc", "find", "grep", "rg",
     "tree", "file", "which", "echo", "pwd", "env", "date",
@@ -58,7 +58,7 @@ SAFE_COMMANDS: set[str] = {
     "kubectl version", "kubectl get",
 }
 
-# Prefijos de comandos de desarrollo (semi-seguros — herramientas de dev)
+# Development command prefixes (semi-safe — dev tools)
 DEV_PREFIXES: set[str] = {
     "pytest", "python -m pytest",
     "python -m mypy", "mypy",
@@ -79,33 +79,33 @@ DEV_PREFIXES: set[str] = {
 
 
 class RunCommandTool(BaseTool):
-    """Ejecuta comandos del sistema con cuatro capas de seguridad.
+    """Executes system commands with four security layers.
 
-    Capa 1 — Blocklist: patrones regex bloqueados permanentemente (rm -rf /, sudo, etc.).
-    Capa 2 — Clasificación: safe/dev/dangerous determina la política de confirmación.
-    Capa 3 — Timeouts + output limit: evita procesos colgados y contextos saturados.
-    Capa 4 — Directory sandboxing: cwd siempre dentro del workspace_root.
+    Layer 1 — Blocklist: permanently blocked regex patterns (rm -rf /, sudo, etc.).
+    Layer 2 — Classification: safe/dev/dangerous determines the confirmation policy.
+    Layer 3 — Timeouts + output limit: prevents hung processes and saturated contexts.
+    Layer 4 — Directory sandboxing: cwd always within workspace_root.
     """
 
     name = "run_command"
     description = (
-        "Ejecuta un comando en el shell del sistema. Útil para:\n"
-        "- Ejecutar tests: pytest tests/, npm test, go test ./...\n"
-        "- Verificar tipos: mypy src/, tsc --noEmit\n"
+        "Execute a command in the system shell. Useful for:\n"
+        "- Running tests: pytest tests/, npm test, go test ./...\n"
+        "- Type checking: mypy src/, tsc --noEmit\n"
         "- Linting: ruff check ., eslint src/\n"
-        "- Compilar: make build, cargo build, tsc\n"
-        "- Verificar estado: git status, git log --oneline -5\n"
-        "- Ejecutar scripts: python script.py, bash setup.sh\n"
-        "El comando se ejecuta en el directorio del workspace (o en cwd si se especifica)."
+        "- Building: make build, cargo build, tsc\n"
+        "- Checking status: git status, git log --oneline -5\n"
+        "- Running scripts: python script.py, bash setup.sh\n"
+        "The command runs in the workspace directory (or in cwd if specified)."
     )
-    sensitive = True  # Base: sensitive. El engine aplica clasificación dinámica.
+    sensitive = True  # Base: sensitive. The engine applies dynamic classification.
     args_model = RunCommandArgs
 
     def __init__(self, workspace_root: Path, commands_config: CommandsConfig) -> None:
         self.workspace_root = workspace_root
         self.commands_config = commands_config
 
-        # Combinar patrones y comandos built-in con los extras del config
+        # Combine built-in patterns and commands with config extras
         self._blocked_patterns: list[str] = BLOCKED_PATTERNS + list(commands_config.blocked_patterns)
         self._safe_commands: set[str] = SAFE_COMMANDS | set(commands_config.safe_commands)
         self._max_lines: int = commands_config.max_output_lines
@@ -114,31 +114,31 @@ class RunCommandTool(BaseTool):
         self.log = logger.bind(component="run_command_tool")
 
     # ------------------------------------------------------------------
-    # Clasificación de sensibilidad (usada también por el engine)
+    # Sensitivity classification (also used by the engine)
     # ------------------------------------------------------------------
 
     def classify_sensitivity(self, command: str) -> str:
-        """Clasifica el comando para la política de confirmación.
+        """Classify the command for the confirmation policy.
 
         Returns:
-            'safe'      — No requiere confirmación (read-only, info-gathering)
-            'dev'       — Herramientas de desarrollo (tests, linters, build)
-            'dangerous' — Desconocido; siempre confirmar en modo interactivo
+            'safe'      — No confirmation required (read-only, info-gathering)
+            'dev'       — Development tools (tests, linters, build)
+            'dangerous' — Unknown; always confirm in interactive mode
         """
         cmd_stripped = command.strip()
 
-        # Verificar safe commands (match exacto de prefijo)
+        # Check safe commands (exact prefix match)
         if any(cmd_stripped.startswith(safe) for safe in self._safe_commands):
             return "safe"
 
-        # Verificar dev prefixes
+        # Check dev prefixes
         if any(cmd_stripped.startswith(prefix) for prefix in DEV_PREFIXES):
             return "dev"
 
         return "dangerous"
 
     # ------------------------------------------------------------------
-    # Ejecución
+    # Execution
     # ------------------------------------------------------------------
 
     def execute(
@@ -148,28 +148,28 @@ class RunCommandTool(BaseTool):
         timeout: int = 30,
         env: dict[str, str] | None = None,
     ) -> ToolResult:
-        """Ejecuta el comando con las cuatro capas de seguridad.
+        """Execute the command with four security layers.
 
         Args:
-            command: Comando a ejecutar (puede incluir pipes y redirecciones)
-            cwd: Directorio de trabajo relativo al workspace (opcional)
-            timeout: Timeout en segundos (usa default_timeout del config si es 30 y config difiere)
-            env: Variables de entorno adicionales
+            command: Command to execute (may include pipes and redirections)
+            cwd: Working directory relative to workspace (optional)
+            timeout: Timeout in seconds (uses config default_timeout if 30 and config differs)
+            env: Additional environment variables
 
         Returns:
-            ToolResult con stdout, stderr y exit_code. Nunca lanza excepciones.
+            ToolResult with stdout, stderr and exit_code. Never raises exceptions.
         """
         try:
-            # Capa 1: Blocklist dura
+            # Layer 1: Hard blocklist
             if self._is_blocked(command):
                 self.log.warning("run_command.blocked", command=command[:100])
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"Comando bloqueado por política de seguridad: '{command}'",
+                    error=f"Command blocked by security policy: '{command}'",
                 )
 
-            # Capa 2: allowed_only mode — rechaza 'dangerous' en execute
+            # Layer 2: allowed_only mode — rejects 'dangerous' in execute
             sensitivity = self.classify_sensitivity(command)
             if self.commands_config.allowed_only and sensitivity == "dangerous":
                 self.log.warning("run_command.allowed_only_rejected", command=command[:100])
@@ -177,19 +177,19 @@ class RunCommandTool(BaseTool):
                     success=False,
                     output="",
                     error=(
-                        f"Modo allowed_only activo: solo se permiten comandos safe/dev. "
-                        f"Comando clasificado como 'dangerous': '{command}'"
+                        f"allowed_only mode active: only safe/dev commands are allowed. "
+                        f"Command classified as 'dangerous': '{command}'"
                     ),
                 )
 
-            # Capa 3: Resolver directorio de trabajo (dentro del workspace)
+            # Layer 3: Resolve working directory (within the workspace)
             work_dir = self._resolve_cwd(cwd)
 
-            # Preparar entorno (merge con environ actual)
+            # Prepare environment (merge with current environ)
             proc_env = {**os.environ, **(env or {})}
 
-            # Usar timeout del config si el caller usa el default del schema (30s)
-            # y el config tiene un valor diferente
+            # Use config timeout if the caller uses the schema default (30s)
+            # and the config has a different value
             effective_timeout = timeout if timeout != 30 else self._default_timeout
 
             self.log.info(
@@ -199,7 +199,7 @@ class RunCommandTool(BaseTool):
                 timeout=effective_timeout,
             )
 
-            # Ejecutar el proceso (Capa 3 — timeout, Capa 4 — cwd sandboxing)
+            # Execute the process (Layer 3 — timeout, Layer 4 — cwd sandboxing)
             result = subprocess.run(
                 command,
                 shell=True,
@@ -208,14 +208,14 @@ class RunCommandTool(BaseTool):
                 capture_output=True,
                 text=True,
                 timeout=effective_timeout,
-                stdin=subprocess.DEVNULL,  # Headless: nunca espera input
+                stdin=subprocess.DEVNULL,  # Headless: never waits for input
             )
 
-            # Truncar outputs largos para no saturar el contexto
+            # Truncate long outputs to avoid saturating the context
             stdout = self._truncate(result.stdout, self._max_lines)
             stderr = self._truncate(result.stderr, max(self._max_lines // 4, 10))
 
-            # Componer output estructurado
+            # Compose structured output
             parts: list[str] = []
             if stdout:
                 parts.append(f"stdout:\n{stdout}")
@@ -235,7 +235,7 @@ class RunCommandTool(BaseTool):
 
             error_msg = None
             if not success:
-                error_msg = stderr if stderr else f"Comando falló con exit code {result.returncode}"
+                error_msg = stderr if stderr else f"Command failed with exit code {result.returncode}"
 
             return ToolResult(
                 success=success,
@@ -249,8 +249,8 @@ class RunCommandTool(BaseTool):
                 success=False,
                 output="",
                 error=(
-                    f"El comando excedió el timeout de {effective_timeout}s: '{command}'. "
-                    "Considera aumentar el timeout o dividir el comando en partes más pequeñas."
+                    f"Command exceeded the {effective_timeout}s timeout: '{command}'. "
+                    "Consider increasing the timeout or splitting the command into smaller parts."
                 ),
             )
         except PathTraversalError as e:
@@ -265,32 +265,32 @@ class RunCommandTool(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado ejecutando comando: {e}",
+                error=f"Unexpected error executing command: {e}",
             )
 
     # ------------------------------------------------------------------
-    # Helpers privados
+    # Private helpers
     # ------------------------------------------------------------------
 
     def _is_blocked(self, command: str) -> bool:
-        """Verifica si el comando coincide con algún patrón bloqueado."""
+        """Check if the command matches any blocked pattern."""
         return any(re.search(pattern, command, re.IGNORECASE) for pattern in self._blocked_patterns)
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
-        """Resuelve el directorio de trabajo, garantizando que esté dentro del workspace.
+        """Resolve the working directory, ensuring it is within the workspace.
 
-        Si cwd es None, retorna workspace_root.
-        Si cwd es una ruta relativa, la valida contra workspace_root.
+        If cwd is None, returns workspace_root.
+        If cwd is a relative path, validates it against workspace_root.
         """
         if cwd is None:
             return self.workspace_root
         return validate_path(cwd, self.workspace_root)
 
     def _truncate(self, text: str, max_lines: int) -> str:
-        """Trunca texto largo preservando el inicio y el final.
+        """Truncate long text preserving the beginning and end.
 
-        Mantiene la primera mitad y el último cuarto del output
-        para conservar el contexto más relevante.
+        Keeps the first half and the last quarter of the output
+        to preserve the most relevant context.
         """
         if not text:
             return text
@@ -304,4 +304,4 @@ class RunCommandTool(BaseTool):
 
         head = "\n".join(lines[:head_count])
         tail = "\n".join(lines[-tail_count:])
-        return f"{head}\n\n[... {omitted} líneas omitidas ...]\n\n{tail}"
+        return f"{head}\n\n[... {omitted} lines omitted ...]\n\n{tail}"

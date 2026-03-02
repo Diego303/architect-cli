@@ -1,8 +1,148 @@
-# Seguimiento de Implementación - architect CLI v1.0.0
+# Seguimiento de Implementación - architect CLI
 
-Este documento resume todo lo implementado hasta la release v1.0.0 del proyecto architect CLI.
+Este documento resume todo lo implementado en el proyecto architect CLI.
 
 Para el historial detallado de cada fase y tarea individual, consultar `SEGUIMIENTO.md` (archivo histórico).
+
+---
+
+## Release v1.1.0 — 2026-03-01
+
+### Internacionalización (i18n) + Traducción completa a inglés
+
+Se implementó un sistema completo de i18n con soporte para inglés (default) y español, y se tradujo todo el código fuente a inglés.
+
+**Nuevo módulo `src/architect/i18n/`**:
+
+| Archivo | Descripción |
+|---------|-------------|
+| `__init__.py` | API pública: `t()`, `set_language()`, `get_language()`, `get_prompt()` |
+| `registry.py` | `LanguageRegistry` singleton thread-safe con fallback chain (current → EN → raw key) |
+| `en.py` | 160 keys en inglés organizadas en 14 namespaces |
+| `es.py` | 160 keys en español con paridad completa |
+
+**Namespaces de i18n (160 keys)**:
+
+| Namespace | Keys | Cobertura |
+|-----------|------|-----------|
+| `human.*` | 41 | HumanFormatter — todos los mensajes de pasos y herramientas |
+| `competitive.*` | 17 | Reporte de evaluación competitiva |
+| `ralph.*` | 16 | Prompts de iteración y archivo de progreso |
+| `eval.*` | 15 | Self-evaluator prompts y feedback |
+| `health.*` | 14 | Reporte de delta de salud del código |
+| `dispatch.*` | 13 | Prompts de sub-agentes y descripciones de tools |
+| `guardrail.*` | 10 | Mensajes de bloqueo de guardrails |
+| `context.*` | 9 | Marcadores de resumen y truncado |
+| `pipeline.*` | 7 | Labels de pipelines |
+| `close.*` | 5 | Instrucciones de cierre de safety nets |
+| `prompt.*` | 5 | System prompts de agentes (build, plan, resume, review) |
+| `reviewer.*` | 5 | Mensajes del auto-reviewer |
+| `dryrun.*` | 3 | Labels de dry run |
+
+**Resolución lazy**: Todas las strings se resuelven en runtime via `t()`, no en import-time. Esto es crítico porque `set_language()` se llama después de importar los módulos. Se usan proxies lazy: `_PromptProxy` para `DEFAULT_PROMPTS`, `_LazyAgentDict` para `DEFAULT_AGENTS`, `_LazyPrompt` para `REVIEW_SYSTEM_PROMPT`, `_LazyStr` para constantes backward-compatible (`BUILD_PROMPT`, etc.).
+
+| Cambio | Archivo |
+|--------|---------|
+| API i18n + registry + 160 keys EN + 160 keys ES | `src/architect/i18n/` (4 archivos nuevos) |
+| Campo `language: Literal["en", "es"] = "en"` | `src/architect/config/schema.py` |
+| Env var `ARCHITECT_LANGUAGE` | `src/architect/config/loader.py` |
+| `set_language()` al inicio del CLI | `src/architect/cli.py` |
+| 41 mensajes HumanFormatter → `t()` | `src/architect/logging/human.py` |
+| Prompts lazy via `_PromptProxy` + `_LazyStr` | `src/architect/agents/prompts.py` |
+| `DEFAULT_AGENTS` lazy via `_LazyAgentDict` | `src/architect/agents/registry.py` |
+| `REVIEW_SYSTEM_PROMPT` lazy via `_LazyPrompt` | `src/architect/agents/reviewer.py` |
+| Close instructions → `t()` | `src/architect/core/loop.py` |
+| Context strings → `t()` | `src/architect/core/context.py` |
+| Evaluator strings → `t()` | `src/architect/core/evaluator.py` |
+| Health report labels → `t()` | `src/architect/core/health.py` |
+| Guardrail messages → `t()` | `src/architect/core/guardrails.py` |
+| Competitive report → `t()` | `src/architect/features/competitive.py` |
+| Ralph prompts/progress → `t()` | `src/architect/features/ralph.py` |
+| Dispatch strings → English directo | `src/architect/tools/dispatch.py` |
+| Commands strings → English directo | `src/architect/tools/commands.py` |
+| CLI: ~50 help strings, ~80 echo msgs, docstrings, comments | `src/architect/cli.py` |
+| Docstrings + comments → English en ~50 archivos | Todo `src/architect/` |
+| 25 tests i18n + ~30 assertions actualizadas (ES→EN) | `tests/test_i18n/`, múltiples test files |
+
+### Guardrails: `sensitive_files` — Protección de lectura y escritura
+
+Se detectó un gap de seguridad: `protected_files` bloqueaba escritura/edición/borrado pero permitía al agente **leer** archivos sensibles como `.env`, `*.pem`, `*.key`. Esto exponía secrets al proveedor de LLM.
+
+**Solución**: Nuevo campo `sensitive_files` que bloquea **toda** acción (lectura + escritura), manteniendo `protected_files` solo para escritura (backward compatible).
+
+| Cambio | Archivo |
+|--------|---------|
+| Campo `sensitive_files: list[str]` + auto-enable en `model_post_init` | `src/architect/config/schema.py` |
+| `check_file_access()` diferencia read/write via `action`. Nuevo `_extract_read_targets()` para shell reads | `src/architect/core/guardrails.py` |
+| `read_file` añadido a guardrails check | `src/architect/execution/engine.py` |
+| 30 tests nuevos (TestSensitiveFiles, TestExtractReadTargets, schema) | `tests/test_guardrails/test_guardrails.py` |
+
+### Reports: Inferencia de formato por extensión de archivo
+
+`--report-file report.md` sin `--report` no generaba reporte porque la lógica estaba condicionada a `if report_format:`.
+
+**Solución**: `_infer_report_format()` infiere el formato de la extensión (`.json` → json, `.md` → markdown, `.html` → github, default: markdown). Aplicado en los 3 comandos: `run`, `loop`, `pipeline`.
+
+### Reports: Creación automática de directorios para `--report-file`
+
+`--report-file reports/ralph-run.json` crasheaba con `FileNotFoundError` si el directorio `reports/` no existía.
+
+**Solución**: `_write_report_file()` centraliza la escritura en los 4 puntos (`run`, `loop`, `pipeline`, `eval`) con estrategia de fallback: (1) crear directorios padres y escribir, (2) si falla → escribir en directorio actual, (3) si ambos fallan → notificar al usuario sin crashear.
+
+| Cambio | Archivo |
+|--------|---------|
+| Helper `_infer_report_format()` + inferencia en 3 puntos de generación | `src/architect/cli.py` |
+| Helper `_write_report_file()` + reemplazo de 4 `Path.write_text()` directos | `src/architect/cli.py` |
+| 13 tests nuevos (TestInferReportFormat + TestWriteReportFile) | `tests/test_reports/test_reports.py` |
+
+### Pipelines: Validación estricta de YAML antes de ejecutar
+
+Un pipeline YAML con campos incorrectos (ej: `task:` en vez de `prompt:`) se lanzaba sin error, ejecutando steps con prompts vacíos que consumían tokens sin resultado útil.
+
+**Solución**: Validación completa del YAML antes de ejecutar con `_validate_steps()`:
+- `prompt` requerido y no vacío en cada step
+- Campos desconocidos rechazados (con hint: `task` → "¿quisiste decir `prompt`?")
+- Al menos 1 step definido
+- Entradas non-dict rechazadas
+- Todos los errores recopilados en un solo mensaje
+
+| Cambio | Archivo |
+|--------|---------|
+| `PipelineValidationError` + `_VALID_STEP_FIELDS` + `_validate_steps()` | `src/architect/features/pipelines.py` |
+| CLI captura `PipelineValidationError` → exit code 3 sin traceback | `src/architect/cli.py` |
+| 9 tests nuevos (TestPipelineYamlValidation) | `tests/test_pipelines/test_pipelines.py` |
+
+### HUMAN Logging: Trazabilidad visual para features de alto nivel
+
+Las features de ejecución de alto nivel (pipelines, ralph loop, auto-review, parallel, competitive eval) solo emitían logs técnicos de structlog. El usuario no tenía visibilidad clara de qué paso/iteración/worker estaba ejecutándose.
+
+**Solución**: 14 eventos HUMAN-level (nivel 25) emitidos desde cada feature vía stdlib `logging.getLogger()` con dict msgs, formateados por `HumanFormatter` y mostrados en stderr con iconos y barras separadoras.
+
+| Feature | Eventos | Ejemplo visual |
+|---------|---------|---------------|
+| Pipelines | `step_start`, `step_skipped`, `step_done` | `━ Pipeline step 1/3: build (agent: build) ━━━` |
+| Ralph Loop | `iteration_start`, `checks_result`, `iteration_done`, `complete` | `━ Ralph iteration 1/5 (check: pytest) ━━━` / `🧪 Checks: 3/5 passed` |
+| Auto-Reviewer | `start`, `complete` | `━ Auto-Review (142 líneas de diff) ━━━` / `✓ Review completo: aprobado` |
+| Parallel Runs | `worker_done`, `worker_error`, `complete` | `✓ Worker 1 (gpt-4.1) → success ($0.04, 120s)` |
+| Competitive Eval | `model_done`, `ranking` | `🏆 gpt-4.1: #1 (score: 85, 5/5 checks)` / `🏁 Ranking final: A > B > C` |
+
+| Cambio | Archivo |
+|--------|---------|
+| 3 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/pipelines.py` |
+| 4 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/ralph.py` |
+| 2 eventos HUMAN + `_hlog` stdlib logger | `src/architect/agents/reviewer.py` |
+| 3 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/parallel.py` |
+| 2 eventos HUMAN + `_hlog` stdlib logger | `src/architect/features/competitive.py` |
+| 14 case handlers en `HumanFormatter` + 11 métodos en `HumanLog` | `src/architect/logging/human.py` |
+| 56 tests nuevos (integration + formatter + HumanLog por feature) | `tests/test_pipelines/`, `test_ralph/`, `test_reviewer/`, `test_parallel/`, `test_competitive/` |
+
+**Tests**: 834 passed, 9 skipped, 0 failures. 31 E2E checks pasando.
+
+---
+
+## Release v1.0.1 — 2026-02-26
+
+Correcciones de errores encontrados en tests y errores generales post-release v1.0.0. Traducciones y documentos de LICENCIA y SEGURIDAD.
 
 ---
 
@@ -47,7 +187,7 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | Tarea | Descripción |
 |-------|-------------|
 | A1 — Hooks Lifecycle | 10 eventos (pre/post tool, pre/post LLM, session, agent, error, budget, context), exit code protocol (0=allow, 2=block), variables de entorno, backward compatible con `post_edit` |
-| A2 — Guardrails | Archivos protegidos, comandos bloqueados, límites de edición, code_rules (warn/block), quality gates post-build |
+| A2 — Guardrails | Archivos protegidos (write-only), archivos sensibles (read+write, v1.1.0), comandos bloqueados, límites de edición, code_rules (warn/block), quality gates post-build |
 | A3 — Skills Ecosystem | `.architect.md` auto-cargado, skills por glob en `.architect/skills/`, `SKILL.md` con frontmatter, install desde GitHub |
 | A4 — Memoria Procedural | Detección de correcciones del usuario, persistencia en `.architect/memory.md`, inyección en system prompt |
 | QA1 | 228 verificaciones, 5 bugs corregidos |
@@ -94,12 +234,12 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 
 ---
 
-## Estadísticas finales v1.0.0
+## Estadísticas actuales v1.1.0
 
 | Métrica | Valor |
 |---------|-------|
-| **Versión** | 1.0.0 |
-| **Tests unitarios** | 687 passed, 9 skipped, 0 failures |
+| **Versión** | 1.1.0 |
+| **Tests unitarios** | 834 passed, 9 skipped, 0 failures |
 | **E2E checks** | 31 |
 | **Comandos CLI** | 15 |
 | **Tools del agente** | 11+ (locales + MCP + dispatch) |
@@ -108,58 +248,65 @@ Fundación completa del agente: scaffolding, tools del filesystem, execution eng
 | **Presets** | 5 (python, node-react, ci, paranoid, yolo) |
 | **Exporters telemetría** | 3 (otlp, console, json-file) |
 | **Formatos de reporte** | 3 (json, markdown, github) |
+| **Idiomas soportados** | 2 (English default, Español) |
+| **Keys i18n** | 160 (14 namespaces, paridad EN/ES) |
 | **Bugs QA corregidos** | 12+ (QA1: 5, QA2: fixes, QA4: 3, QA-D: 7) |
 
 ### Comandos CLI disponibles
 
 ```
-architect run          Ejecutar tarea con agente
-architect loop         Iteración automática con checks (Ralph Loop)
-architect pipeline     Ejecutar workflow YAML multi-step
-architect parallel     Ejecución paralela en worktrees
-architect parallel-cleanup  Limpiar worktrees
-architect eval         Evaluación competitiva multi-modelo
-architect init         Inicializar proyecto con presets
-architect sessions     Listar sesiones guardadas
-architect resume       Reanudar sesión
-architect cleanup      Limpiar sesiones antiguas
-architect agents       Listar agentes disponibles
-architect validate-config  Validar configuración
-architect skill        Gestión de skills
-architect rollback     Rollback a checkpoint
-architect history      Listar checkpoints
+architect run              Run a task with an agent
+architect loop             Automatic iteration with checks (Ralph Loop)
+architect pipeline         Run multi-step YAML workflow
+architect parallel         Parallel execution in worktrees
+architect parallel-cleanup Clean up worktrees
+architect eval             Competitive multi-model evaluation
+architect init             Initialize project with presets
+architect sessions         List saved sessions
+architect resume           Resume session
+architect cleanup          Clean up old sessions
+architect agents           List available agents
+architect validate-config  Validate configuration
+architect skill            Skill management
+architect rollback         Rollback to checkpoint
+architect history          List checkpoints
 ```
 
 ### Estructura del proyecto
 
 ```
 src/architect/
-├── __init__.py            # __version__ = "1.0.0"
-├── cli.py                 # Entry point — 15 comandos Click
+├── __init__.py            # __version__ = "1.1.0"
+├── cli.py                 # Entry point — 15 Click commands
+├── i18n/                  # NEW: Internationalization (EN/ES)
+│   ├── __init__.py        # API: t(), set_language(), get_prompt()
+│   ├── registry.py        # LanguageRegistry singleton (thread-safe)
+│   ├── en.py              # 160 English keys (canonical)
+│   └── es.py              # 160 Spanish keys
 ├── core/
-│   ├── loop.py            # AgentLoop — while True con safety nets
-│   ├── context.py         # ContextManager — pruning y compresión
-│   ├── evaluator.py       # SelfEvaluator — auto-evaluación
+│   ├── loop.py            # AgentLoop — while True with safety nets
+│   ├── context.py         # ContextManager — pruning and compression
+│   ├── evaluator.py       # SelfEvaluator — auto-evaluation
 │   ├── state.py           # AgentState
-│   ├── hooks.py           # HookExecutor — 10 eventos lifecycle
-│   ├── guardrails.py      # GuardrailsEngine — seguridad determinista
-│   └── health.py          # CodeHealthAnalyzer — métricas de calidad
+│   ├── hooks.py           # HookExecutor — 10 lifecycle events
+│   ├── guardrails.py      # GuardrailsEngine — deterministic security
+│   └── health.py          # CodeHealthAnalyzer — quality metrics
 ├── agents/
-│   ├── prompts.py         # System prompts por agente
-│   ├── registry.py        # AgentRegistry + custom agents
-│   └── reviewer.py        # AutoReviewer — review post-build
+│   ├── prompts.py         # System prompts per agent (lazy i18n)
+│   ├── registry.py        # AgentRegistry + custom agents (lazy i18n)
+│   └── reviewer.py        # AutoReviewer — post-build review (lazy i18n)
 ├── tools/
 │   ├── base.py            # BaseTool + ToolResult
 │   ├── filesystem.py      # read/write/delete/list
 │   ├── editing.py         # edit_file (str-replace)
 │   ├── patch.py           # apply_patch (unified diff)
 │   ├── search.py          # search_code, grep, find_files
-│   ├── commands.py        # run_command (4 capas seguridad)
+│   ├── commands.py        # run_command (4 security layers)
 │   ├── dispatch.py        # dispatch_subagent (explore/test/review)
 │   ├── registry.py        # ToolRegistry
 │   └── setup.py           # register_all_tools()
 ├── execution/
-│   ├── engine.py          # ExecutionEngine — pipeline completo
+│   ├── engine.py          # ExecutionEngine — full pipeline
 │   ├── policies.py        # ConfirmationPolicy
 │   └── validators.py      # validate_path()
 ├── features/
@@ -169,19 +316,19 @@ src/architect/
 │   ├── ralph.py           # RalphLoop
 │   ├── parallel.py        # ParallelRunner + worktrees
 │   ├── pipelines.py       # PipelineRunner + YAML
-│   └── checkpoints.py     # CheckpointManager
+│   ├── checkpoints.py     # CheckpointManager
 │   └── competitive.py     # CompetitiveEval
 ├── skills/
 │   ├── loader.py          # SkillsLoader
 │   ├── installer.py       # SkillInstaller
 │   └── memory.py          # ProceduralMemory
 ├── config/
-│   ├── schema.py          # AppConfig (Pydantic v2)
-│   ├── loader.py          # ConfigLoader
-│   └── presets.py          # PresetManager
+│   ├── schema.py          # AppConfig (Pydantic v2) + language field
+│   ├── loader.py          # ConfigLoader + ARCHITECT_LANGUAGE env
+│   └── presets.py         # PresetManager
 ├── telemetry/
 │   └── otel.py            # ArchitectTracer / NoopTracer
-├── costs/                 # CostTracker + precios
+├── costs/                 # CostTracker + prices
 ├── llm/                   # LLMAdapter + LocalLLMCache
 ├── mcp/                   # MCPClient JSON-RPC 2.0
 ├── indexer/               # RepoIndexer + IndexCache
@@ -209,5 +356,5 @@ El Plan V4 está completo. Posibles direcciones futuras:
 - **Sin LangChain/LangGraph**: loop directo y controlado (~300 líneas)
 - **Tools nunca lanzan excepciones**: siempre retornan ToolResult
 - **stdout limpio**: solo resultado final y JSON, todo lo demás a stderr
-- **Guardrails antes de hooks**: seguridad determinista que el LLM no puede saltarse
+- **Guardrails antes de hooks**: seguridad determinista que el LLM no puede saltarse (`protected_files` write-only, `sensitive_files` read+write)
 - **Contexto limpio**: Ralph Loop, Pipeline, Auto-Review y Sub-agentes usan AgentLoop fresco

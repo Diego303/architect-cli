@@ -268,7 +268,8 @@ si --json: stdout ← json.dumps(state.to_output_dict())
 si normal: stdout ← state.final_output
 
 [v4-B1] SessionManager.save(session_state)   ← guardar sesión final
-[v4-B2] si --report: ReportGenerator(report).to_{format}()
+[v4-B2] si --report o --report-file: ReportGenerator(report).to_{format}()
+        formato: --report explícito, o inferido de extensión de --report-file (.json/.md/.html)
         si --report-file: escribir a archivo; si no, stdout
 
 sys.exit(EXIT_CODE)  ← mapeo StopReason → exit code (0/1/2/3/4/5/130)

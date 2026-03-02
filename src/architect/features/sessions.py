@@ -1,11 +1,11 @@
 """
-Session Resume — Persistencia y restauración de sesiones.
+Session Resume — Session persistence and restoration.
 
-Permite guardar el estado de una ejecución a disco (JSON) y restaurarlo
-para reanudar tareas interrumpidas o parciales.
+Allows saving the state of an execution to disk (JSON) and restoring it
+to resume interrupted or partial tasks.
 
-Cada sesión se guarda en `.architect/sessions/<session_id>.json`.
-El AgentLoop guarda estado después de cada step y al terminar.
+Each session is saved in `.architect/sessions/<session_id>.json`.
+The AgentLoop saves state after each step and upon completion.
 """
 
 import json
@@ -24,10 +24,10 @@ SESSIONS_DIR = ".architect/sessions"
 
 @dataclass
 class SessionState:
-    """Estado serializable de una sesión del agente.
+    """Serializable state of an agent session.
 
-    Contiene toda la información necesaria para reanudar una ejecución
-    interrumpida: mensajes, estado, coste acumulado, archivos tocados, etc.
+    Contains all the information needed to resume an interrupted execution:
+    messages, state, accumulated cost, touched files, etc.
     """
 
     session_id: str
@@ -45,46 +45,46 @@ class SessionState:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convierte a dict serializable a JSON."""
+        """Convert to a JSON-serializable dict."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SessionState":
-        """Crea una instancia desde un dict deserializado."""
-        # Filtrar solo campos válidos del dataclass
+        """Create an instance from a deserialized dict."""
+        # Filter only valid dataclass fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered)
 
 
 def generate_session_id() -> str:
-    """Genera un ID de sesión único basado en timestamp + uuid corto."""
+    """Generate a unique session ID based on timestamp + short uuid."""
     ts = time.strftime("%Y%m%d-%H%M%S")
     short_uuid = uuid.uuid4().hex[:6]
     return f"{ts}-{short_uuid}"
 
 
 class SessionManager:
-    """Persiste y restaura sesiones del agente.
+    """Persists and restores agent sessions.
 
-    Guarda el estado en archivos JSON individuales dentro del directorio
-    de sesiones del workspace. Soporta guardar, cargar, listar y limpiar.
+    Saves state in individual JSON files inside the workspace sessions
+    directory. Supports saving, loading, listing, and cleaning up.
     """
 
     def __init__(self, workspace_root: str):
-        """Inicializa el session manager.
+        """Initialize the session manager.
 
         Args:
-            workspace_root: Directorio raíz del workspace.
+            workspace_root: Root directory of the workspace.
         """
         self.root = Path(workspace_root)
         self.sessions_dir = self.root / SESSIONS_DIR
 
     def save(self, state: SessionState) -> None:
-        """Guarda estado de sesión a disco.
+        """Save session state to disk.
 
         Args:
-            state: SessionState con el estado actual.
+            state: SessionState with the current state.
         """
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         path = self.sessions_dir / f"{state.session_id}.json"
@@ -92,7 +92,7 @@ class SessionManager:
 
         data = state.to_dict()
 
-        # Comprimir mensajes si son demasiados para evitar archivos enormes
+        # Compress messages if too many to avoid huge files
         if len(data["messages"]) > 50:
             data["messages_truncated"] = True
             data["messages"] = data["messages"][-30:]
@@ -109,13 +109,13 @@ class SessionManager:
         )
 
     def load(self, session_id: str) -> SessionState | None:
-        """Carga una sesión guardada.
+        """Load a saved session.
 
         Args:
-            session_id: ID de la sesión a cargar.
+            session_id: ID of the session to load.
 
         Returns:
-            SessionState si existe, None si no se encuentra.
+            SessionState if it exists, None if not found.
         """
         path = self.sessions_dir / f"{session_id}.json"
         if not path.exists():
@@ -137,11 +137,11 @@ class SessionManager:
             return None
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        """Lista todas las sesiones guardadas.
+        """List all saved sessions.
 
         Returns:
-            Lista de dicts con metadatos de cada sesión, ordenada por
-            fecha de actualización (más reciente primero).
+            List of dicts with metadata for each session, sorted by
+            update date (most recent first).
         """
         if not self.sessions_dir.exists():
             return []
@@ -171,13 +171,13 @@ class SessionManager:
         return sessions
 
     def cleanup(self, older_than_days: int = 7) -> int:
-        """Limpia sesiones antiguas.
+        """Clean up old sessions.
 
         Args:
-            older_than_days: Eliminar sesiones más antiguas que estos días.
+            older_than_days: Remove sessions older than this many days.
 
         Returns:
-            Número de sesiones eliminadas.
+            Number of sessions deleted.
         """
         if not self.sessions_dir.exists():
             return 0
@@ -198,13 +198,13 @@ class SessionManager:
         return removed
 
     def delete(self, session_id: str) -> bool:
-        """Elimina una sesión específica.
+        """Delete a specific session.
 
         Args:
-            session_id: ID de la sesión a eliminar.
+            session_id: ID of the session to delete.
 
         Returns:
-            True si se eliminó, False si no existía.
+            True if deleted, False if it did not exist.
         """
         path = self.sessions_dir / f"{session_id}.json"
         if path.exists():

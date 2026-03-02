@@ -1,8 +1,8 @@
 """
-Modelos Pydantic para la configuración de architect.
+Pydantic models for architect configuration.
 
-Define todos los schemas de configuración usando Pydantic v2 para validación,
-valores por defecto y serialización.
+Defines all configuration schemas using Pydantic v2 for validation,
+defaults, and serialization.
 """
 
 from pathlib import Path
@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class LLMConfig(BaseModel):
-    """Configuración del proveedor LLM."""
+    """LLM provider configuration."""
 
     provider: str = "litellm"
     mode: Literal["proxy", "direct"] = "direct"
@@ -25,8 +25,8 @@ class LLMConfig(BaseModel):
     prompt_caching: bool = Field(
         default=False,
         description=(
-            "Si True, marca el system prompt con cache_control para que el proveedor "
-            "(Anthropic, OpenAI) lo cachee. Reduce el coste 50-90% en llamadas repetidas."
+            "If True, marks the system prompt with cache_control so the provider "
+            "(Anthropic, OpenAI) caches it. Reduces cost 50-90% on repeated calls."
         ),
     )
 
@@ -34,7 +34,7 @@ class LLMConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    """Configuración de un agente específico."""
+    """Configuration for a specific agent."""
 
     system_prompt: str = ""
     allowed_tools: list[str] = Field(default_factory=list)
@@ -45,34 +45,34 @@ class AgentConfig(BaseModel):
 
 
 class HookItemConfig(BaseModel):
-    """Configuración de un hook individual (v4-A1).
+    """Configuration for an individual hook (v4-A1).
 
-    Un hook es un comando shell que se ejecuta en puntos del lifecycle del agente.
-    Recibe contexto vía env vars (ARCHITECT_EVENT, ARCHITECT_TOOL_NAME, etc.) y stdin JSON.
+    A hook is a shell command executed at points in the agent lifecycle.
+    It receives context via env vars (ARCHITECT_EVENT, ARCHITECT_TOOL_NAME, etc.) and stdin JSON.
 
-    Protocolo:
-    - Exit 0 = ALLOW (JSON en stdout para contexto adicional o modificación de input)
-    - Exit 2 = BLOCK (stderr = razón del bloqueo, solo para pre-hooks)
-    - Otro   = Error (se logea warning, no bloquea)
+    Protocol:
+    - Exit 0 = ALLOW (JSON on stdout for additional context or input modification)
+    - Exit 2 = BLOCK (stderr = reason for blocking, only for pre-hooks)
+    - Other  = Error (warning logged, does not block)
     """
 
-    name: str = Field(default="", description="Nombre descriptivo del hook")
-    command: str = Field(description="Comando shell a ejecutar")
+    name: str = Field(default="", description="Descriptive name of the hook")
+    command: str = Field(description="Shell command to execute")
     matcher: str = Field(
         default="*",
-        description="Regex/glob del tool name para filtrar (solo para tool hooks). '*' = todos.",
+        description="Regex/glob of tool name to filter (only for tool hooks). '*' = all.",
     )
     file_patterns: list[str] = Field(
         default_factory=list,
-        description="Patrones glob de archivos que activan el hook (ej: ['*.py', '*.ts'])",
+        description="Glob patterns of files that trigger the hook (e.g.: ['*.py', '*.ts'])",
     )
-    timeout: int = Field(default=10, ge=1, le=300, description="Timeout en segundos")
+    timeout: int = Field(default=10, ge=1, le=300, description="Timeout in seconds")
     async_: bool = Field(
         default=False,
         alias="async",
-        description="Si True, ejecutar en background sin bloquear",
+        description="If True, execute in background without blocking",
     )
-    enabled: bool = Field(default=True, description="Si False, el hook se ignora")
+    enabled: bool = Field(default=True, description="If False, the hook is ignored")
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
@@ -82,66 +82,66 @@ HookConfig = HookItemConfig
 
 
 class HooksConfig(BaseModel):
-    """Configuración del sistema de hooks (v4-A1).
+    """Hook system configuration (v4-A1).
 
-    Organiza hooks por evento del lifecycle. Cada evento tiene una lista
-    de hooks que se ejecutan en orden. Los hooks de post_edit son un alias
-    de post_tool_use para backward compatibility con v3-M4.
+    Organizes hooks by lifecycle event. Each event has a list of hooks
+    that execute in order. The post_edit hooks are an alias for
+    post_tool_use for backward compatibility with v3-M4.
     """
 
     pre_tool_use: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados ANTES de cada tool call",
+        description="Hooks executed BEFORE each tool call",
     )
     post_tool_use: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados DESPUÉS de cada tool call",
+        description="Hooks executed AFTER each tool call",
     )
     pre_llm_call: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados ANTES de cada llamada al LLM",
+        description="Hooks executed BEFORE each LLM call",
     )
     post_llm_call: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados DESPUÉS de cada llamada al LLM",
+        description="Hooks executed AFTER each LLM call",
     )
     session_start: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados al iniciar sesión",
+        description="Hooks executed at session start",
     )
     session_end: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados al terminar sesión",
+        description="Hooks executed at session end",
     )
     on_error: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados cuando un tool falla",
+        description="Hooks executed when a tool fails",
     )
     agent_complete: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados cuando el agente declara completado",
+        description="Hooks executed when the agent declares completion",
     )
     budget_warning: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados cuando se supera % del presupuesto",
+        description="Hooks executed when budget percentage is exceeded",
     )
     context_compress: list[HookItemConfig] = Field(
         default_factory=list,
-        description="Hooks ejecutados antes de comprimir contexto",
+        description="Hooks executed before context compression",
     )
     # Backward compat: post_edit maps to post_tool_use with edit-tool matcher
     post_edit: list[HookItemConfig] = Field(
         default_factory=list,
-        description="(Compat v3) Hooks post-edit. Se añaden a post_tool_use con matcher 'write_file|edit_file|apply_patch'.",
+        description="(Compat v3) Post-edit hooks. Added to post_tool_use with matcher 'write_file|edit_file|apply_patch'.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class LoggingConfig(BaseModel):
-    """Configuración del sistema de logging."""
+    """Logging system configuration."""
 
-    # v3: añadido "human" como nivel de trazabilidad del agente
+    # v3: added "human" as agent traceability level
     level: Literal["debug", "info", "human", "warn", "error"] = "human"
     file: Path | None = None
     verbose: int = 0
@@ -150,7 +150,7 @@ class LoggingConfig(BaseModel):
 
 
 class WorkspaceConfig(BaseModel):
-    """Configuración del workspace (directorio de trabajo)."""
+    """Workspace (working directory) configuration."""
 
     root: Path = Path(".")
     allow_delete: bool = False
@@ -159,7 +159,7 @@ class WorkspaceConfig(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """Configuración de un servidor MCP individual."""
+    """Configuration for an individual MCP server."""
 
     name: str
     url: str
@@ -170,7 +170,7 @@ class MCPServerConfig(BaseModel):
 
 
 class MCPConfig(BaseModel):
-    """Configuración global de MCP."""
+    """Global MCP configuration."""
 
     servers: list[MCPServerConfig] = Field(default_factory=list)
 
@@ -178,25 +178,25 @@ class MCPConfig(BaseModel):
 
 
 class IndexerConfig(BaseModel):
-    """Configuración del indexador de repositorio (F10).
+    """Repository indexer configuration (F10).
 
-    El indexador construye un árbol ligero del workspace al inicio
-    y lo inyecta en el system prompt del agente. Esto permite que el
-    agente conozca la estructura del proyecto sin leer cada archivo.
+    The indexer builds a lightweight tree of the workspace at startup
+    and injects it into the agent's system prompt. This allows the
+    agent to know the project structure without reading each file.
     """
 
     enabled: bool = True
-    """Si False, el indexador no se ejecuta y el agente no recibe el árbol."""
+    """If False, the indexer does not run and the agent does not receive the tree."""
 
     max_file_size: int = Field(
         default=1_000_000,
-        description="Tamaño máximo de archivo a indexar en bytes (default: 1MB)",
+        description="Maximum file size to index in bytes (default: 1MB)",
     )
 
     exclude_dirs: list[str] = Field(
         default_factory=list,
         description=(
-            "Directorios adicionales a excluir (además de los defaults: "
+            "Additional directories to exclude (besides defaults: "
             ".git, node_modules, __pycache__, .venv, etc.)"
         ),
     )
@@ -204,7 +204,7 @@ class IndexerConfig(BaseModel):
     exclude_patterns: list[str] = Field(
         default_factory=list,
         description=(
-            "Patrones de archivos adicionales a excluir (además de los defaults: "
+            "Additional file patterns to exclude (besides defaults: "
             "*.pyc, *.min.js, *.map, etc.)"
         ),
     )
@@ -212,8 +212,8 @@ class IndexerConfig(BaseModel):
     use_cache: bool = Field(
         default=True,
         description=(
-            "Si True, cachea el índice en disco por 5 minutos para "
-            "evitar reconstruirlo en cada llamada."
+            "If True, caches the index on disk for 5 minutes to "
+            "avoid rebuilding it on each call."
         ),
     )
 
@@ -221,49 +221,49 @@ class IndexerConfig(BaseModel):
 
 
 class ContextConfig(BaseModel):
-    """Configuración del gestor de context window (F11).
+    """Context window manager configuration (F11).
 
-    Controla el comportamiento del ContextManager, que evita que el contexto
-    del LLM se llene en tareas largas. Actúa en tres niveles:
-    - Nivel 1: Truncar tool results muy largos (siempre activo si enabled)
-    - Nivel 2: Resumir pasos antiguos con el propio LLM cuando hay muchos steps
-    - Nivel 3: Ventana deslizante con hard limit de tokens totales
+    Controls the behavior of the ContextManager, which prevents the LLM
+    context from filling up during long tasks. It operates at three levels:
+    - Level 1: Truncate very long tool results (always active if enabled)
+    - Level 2: Summarize old steps with the LLM itself when there are many steps
+    - Level 3: Sliding window with hard limit on total tokens
     """
 
     max_tool_result_tokens: int = Field(
         default=2000,
         description=(
-            "Tokens máximos por tool result antes de truncar (~4 chars/token). "
-            "0 = sin truncado."
+            "Maximum tokens per tool result before truncating (~4 chars/token). "
+            "0 = no truncation."
         ),
     )
 
     summarize_after_steps: int = Field(
         default=8,
         description=(
-            "Número de intercambios tool call (pasos con tool calls) antes de "
-            "intentar comprimir mensajes antiguos. 0 = desactivar resumen."
+            "Number of tool call exchanges (steps with tool calls) before "
+            "attempting to compress old messages. 0 = disable summarization."
         ),
     )
 
     keep_recent_steps: int = Field(
         default=4,
-        description="Pasos recientes completos a conservar durante la compresión.",
+        description="Recent complete steps to preserve during compression.",
     )
 
     max_context_tokens: int = Field(
         default=80000,
         description=(
-            "Límite hard del context window total estimado en tokens (~4 chars/token). "
-            "0 = sin límite."
+            "Hard limit of total estimated context window in tokens (~4 chars/token). "
+            "0 = no limit."
         ),
     )
 
     parallel_tools: bool = Field(
         default=True,
         description=(
-            "Ejecutar tool calls independientes en paralelo usando ThreadPoolExecutor. "
-            "Solo aplica cuando hay >1 tool call y ninguna requiere confirmación."
+            "Execute independent tool calls in parallel using ThreadPoolExecutor. "
+            "Only applies when there are >1 tool calls and none require confirmation."
         ),
     )
 
@@ -271,15 +271,15 @@ class ContextConfig(BaseModel):
 
 
 class EvaluationConfig(BaseModel):
-    """Configuración de self-evaluation (F12).
+    """Self-evaluation configuration (F12).
 
-    Controla si el agente evalúa automáticamente su propio resultado
-    al terminar. Por defecto está desactivado para no consumir tokens extra.
+    Controls whether the agent automatically evaluates its own result
+    upon completion. Disabled by default to avoid consuming extra tokens.
 
-    Modos disponibles:
-    - ``"off"``   — Sin evaluación (default)
-    - ``"basic"`` — Pregunta al LLM si la tarea se completó; si no, marca como ``partial``
-    - ``"full"``  — Evaluación + hasta ``max_retries`` reintentos automáticos de corrección
+    Available modes:
+    - ``"off"``   -- No evaluation (default)
+    - ``"basic"`` -- Asks the LLM if the task was completed; if not, marks as ``partial``
+    - ``"full"``  -- Evaluation + up to ``max_retries`` automatic correction retries
     """
 
     mode: Literal["off", "basic", "full"] = "off"
@@ -287,7 +287,7 @@ class EvaluationConfig(BaseModel):
     @field_validator("mode", mode="before")
     @classmethod
     def _coerce_yaml_bool(cls, v: object) -> object:
-        """YAML 1.1 parsea `off` sin comillas como False (bool). Lo convertimos a 'off'."""
+        """YAML 1.1 parses `off` without quotes as False (bool). Convert it to 'off'."""
         if v is False:
             return "off"
         return v
@@ -296,7 +296,7 @@ class EvaluationConfig(BaseModel):
         default=2,
         ge=1,
         le=5,
-        description="Número máximo de reintentos en modo 'full'.",
+        description="Maximum number of retries in 'full' mode.",
     )
 
     confidence_threshold: float = Field(
@@ -304,8 +304,8 @@ class EvaluationConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Umbral de confianza mínimo para considerar la tarea completada en modo 'full'. "
-            "Si el LLM evalúa confianza < threshold, se reintenta."
+            "Minimum confidence threshold to consider the task completed in 'full' mode. "
+            "If the LLM evaluates confidence < threshold, it retries."
         ),
     )
 
@@ -313,38 +313,38 @@ class EvaluationConfig(BaseModel):
 
 
 class CostsConfig(BaseModel):
-    """Configuración del cost tracking (F14).
+    """Cost tracking configuration (F14).
 
-    Controla si se registran los costes de las llamadas al LLM y si se
-    aplica un límite de presupuesto por ejecución.
+    Controls whether LLM call costs are tracked and whether a budget
+    limit per execution is applied.
     """
 
     enabled: bool = Field(
         default=True,
-        description="Si True, se registran los costes de cada llamada al LLM.",
+        description="If True, costs of each LLM call are tracked.",
     )
 
     prices_file: Path | None = Field(
         default=None,
         description=(
-            "Path a un archivo JSON con precios custom que sobreescriben los defaults. "
-            "Mismo formato que default_prices.json."
+            "Path to a JSON file with custom prices that override the defaults. "
+            "Same format as default_prices.json."
         ),
     )
 
     budget_usd: float | None = Field(
         default=None,
         description=(
-            "Límite de gasto en USD por ejecución. Si se supera, el agente se detiene "
-            "con status 'partial'. None = sin límite."
+            "Spending limit in USD per execution. If exceeded, the agent stops "
+            "with status 'partial'. None = no limit."
         ),
     )
 
     warn_at_usd: float | None = Field(
         default=None,
         description=(
-            "Umbral de aviso en USD. Cuando el gasto acumulado supera este valor "
-            "se emite un log warning (sin detener la ejecución)."
+            "Warning threshold in USD. When accumulated spending exceeds this value "
+            "a log warning is emitted (without stopping execution)."
         ),
     )
 
@@ -352,66 +352,66 @@ class CostsConfig(BaseModel):
 
 
 class LLMCacheConfig(BaseModel):
-    """Configuración del cache local de respuestas LLM (F14).
+    """Local LLM response cache configuration (F14).
 
-    El cache local es determinista: guarda respuestas completas en disco
-    para evitar llamadas repetidas al LLM. Útil en desarrollo para ahorrar tokens.
+    The local cache is deterministic: it stores complete responses on disk
+    to avoid repeated LLM calls. Useful in development to save tokens.
 
-    ATENCIÓN: Solo para desarrollo. No usar en producción (las respuestas
-    cacheadas pueden quedar obsoletas si el contexto cambia).
+    WARNING: For development only. Do not use in production (cached responses
+    may become stale if the context changes).
     """
 
     enabled: bool = Field(
         default=False,
-        description="Si True, activa el cache local de respuestas LLM.",
+        description="If True, enables the local LLM response cache.",
     )
 
     dir: Path = Field(
         default=Path("~/.architect/cache"),
-        description="Directorio donde guardar las entradas de cache.",
+        description="Directory to store cache entries.",
     )
 
     ttl_hours: int = Field(
         default=24,
         ge=1,
-        le=8760,  # 1 año
-        description="Horas de validez de cada entrada de cache. Después se considera expirada.",
+        le=8760,  # 1 year
+        description="Hours of validity for each cache entry. After that it is considered expired.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class CommandsConfig(BaseModel):
-    """Configuración de la tool run_command (F13).
+    """run_command tool configuration (F13).
 
-    Controla si el agente puede ejecutar comandos del sistema y qué restricciones
-    de seguridad se aplican. La tool incluye cuatro capas de seguridad integradas:
-    bloqueada por patrones, clasificación dinámica, timeouts y sandboxing de cwd.
+    Controls whether the agent can execute system commands and what security
+    restrictions are applied. The tool includes four integrated security layers:
+    pattern blocking, dynamic classification, timeouts, and cwd sandboxing.
     """
 
     enabled: bool = Field(
         default=True,
-        description="Si False, la tool run_command no se registra y el agente no puede ejecutar comandos.",
+        description="If False, the run_command tool is not registered and the agent cannot execute commands.",
     )
 
     default_timeout: int = Field(
         default=30,
         ge=1,
         le=600,
-        description="Timeout por defecto en segundos para run_command si no se especifica uno explícito.",
+        description="Default timeout in seconds for run_command if no explicit timeout is specified.",
     )
 
     max_output_lines: int = Field(
         default=200,
         ge=10,
         le=5000,
-        description="Líneas máximas de stdout/stderr antes de truncar para evitar llenar el contexto.",
+        description="Maximum stdout/stderr lines before truncating to avoid filling the context.",
     )
 
     blocked_patterns: list[str] = Field(
         default_factory=list,
         description=(
-            "Patrones regex adicionales a bloquear (además de los built-in: "
+            "Additional regex patterns to block (besides built-in: "
             "rm -rf /, sudo, chmod 777, curl|bash, etc.)."
         ),
     )
@@ -419,16 +419,16 @@ class CommandsConfig(BaseModel):
     safe_commands: list[str] = Field(
         default_factory=list,
         description=(
-            "Comandos adicionales considerados seguros (no requieren confirmación). "
-            "Se suman a los built-in: ls, cat, git status, etc."
+            "Additional commands considered safe (no confirmation required). "
+            "Added to the built-in: ls, cat, git status, etc."
         ),
     )
 
     allowed_only: bool = Field(
         default=False,
         description=(
-            "Si True, solo se permiten comandos clasificados como 'safe' o 'dev'. "
-            "Comandos 'dangerous' son rechazados en execute(), no solo en confirmación."
+            "If True, only commands classified as 'safe' or 'dev' are allowed. "
+            "'dangerous' commands are rejected in execute(), not just at confirmation."
         ),
     )
 
@@ -436,82 +436,91 @@ class CommandsConfig(BaseModel):
 
 
 class QualityGateConfig(BaseModel):
-    """Configuración de un quality gate individual (v4-A2).
+    """Configuration for an individual quality gate (v4-A2).
 
-    Los quality gates se ejecutan cuando el agente declara completado.
-    Si un gate requerido falla, el agente recibe feedback y continúa.
+    Quality gates are executed when the agent declares completion.
+    If a required gate fails, the agent receives feedback and continues.
     """
 
-    name: str = Field(description="Nombre del quality gate (ej: 'lint', 'tests')")
-    command: str = Field(description="Comando shell a ejecutar")
+    name: str = Field(description="Name of the quality gate (e.g.: 'lint', 'tests')")
+    command: str = Field(description="Shell command to execute")
     required: bool = Field(
         default=True,
-        description="Si True, el agente no puede terminar sin pasarlo",
+        description="If True, the agent cannot finish without passing it",
     )
-    timeout: int = Field(default=60, ge=1, le=600, description="Timeout en segundos")
+    timeout: int = Field(default=60, ge=1, le=600, description="Timeout in seconds")
 
     model_config = {"extra": "forbid"}
 
 
 class CodeRuleConfig(BaseModel):
-    """Configuración de una regla de código (v4-A2).
+    """Configuration for a code rule (v4-A2).
 
-    Las code rules escanean el contenido escrito por el agente
-    con regex para detectar patrones prohibidos.
+    Code rules scan content written by the agent
+    with regex to detect forbidden patterns.
     """
 
-    pattern: str = Field(description="Regex a buscar en código escrito")
-    message: str = Field(description="Mensaje al LLM cuando se detecta el patrón")
+    pattern: str = Field(description="Regex to search for in written code")
+    message: str = Field(description="Message to the LLM when the pattern is detected")
     severity: Literal["warn", "block"] = Field(
         default="warn",
-        description="'warn' adjunta aviso, 'block' impide el write",
+        description="'warn' attaches a warning, 'block' prevents the write",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class GuardrailsConfig(BaseModel):
-    """Configuración de guardrails de seguridad (v4-A2).
+    """Security guardrails configuration (v4-A2).
 
-    Los guardrails son reglas DETERMINISTAS que se evalúan ANTES que los hooks
-    y no pueden ser desactivados por el LLM. Son la capa de seguridad base.
+    Guardrails are DETERMINISTIC rules evaluated BEFORE hooks
+    and cannot be disabled by the LLM. They are the base security layer.
     """
 
     enabled: bool = Field(
         default=False,
-        description="Si True, activa el sistema de guardrails",
+        description="If True, enables the guardrails system",
     )
     protected_files: list[str] = Field(
         default_factory=list,
-        description="Patrones glob de archivos protegidos (ej: ['.env', '*.pem', '*.key'])",
+        description="Glob patterns of files protected against writing (e.g.: ['.env', '*.pem', '*.key'])",
+    )
+    sensitive_files: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Glob patterns of sensitive files -- blocks READING and WRITING "
+            "(e.g.: ['.env', '*.pem', 'secrets/*']). "
+            "Unlike protected_files (write-only), sensitive_files "
+            "also prevents reading the content."
+        ),
     )
     blocked_commands: list[str] = Field(
         default_factory=list,
-        description="Patrones regex de comandos bloqueados (ej: ['rm\\s+-[rf]+\\s+/'])",
+        description="Regex patterns of blocked commands (e.g.: ['rm\\s+-[rf]+\\s+/'])",
     )
     max_files_modified: int | None = Field(
         default=None,
-        description="Máximo de archivos que el agente puede modificar. None = sin límite.",
+        description="Maximum files the agent can modify. None = no limit.",
     )
     max_lines_changed: int | None = Field(
         default=None,
-        description="Máximo de líneas cambiadas. None = sin límite.",
+        description="Maximum lines changed. None = no limit.",
     )
     max_commands_executed: int | None = Field(
         default=None,
-        description="Máximo de comandos que el agente puede ejecutar. None = sin límite.",
+        description="Maximum commands the agent can execute. None = no limit.",
     )
     require_test_after_edit: bool = Field(
         default=False,
-        description="Si True, fuerza al agente a ejecutar tests después de editar.",
+        description="If True, forces the agent to run tests after editing.",
     )
     quality_gates: list[QualityGateConfig] = Field(
         default_factory=list,
-        description="Quality gates ejecutados cuando el agente declara completado.",
+        description="Quality gates executed when the agent declares completion.",
     )
     code_rules: list[CodeRuleConfig] = Field(
         default_factory=list,
-        description="Reglas regex que escanean contenido escrito por el agente.",
+        description="Regex rules that scan content written by the agent.",
     )
 
     model_config = {"extra": "forbid"}
@@ -521,6 +530,7 @@ class GuardrailsConfig(BaseModel):
         if not self.enabled:
             has_rules = (
                 bool(self.protected_files)
+                or bool(self.sensitive_files)
                 or bool(self.blocked_commands)
                 or self.max_files_modified is not None
                 or self.max_lines_changed is not None
@@ -534,237 +544,238 @@ class GuardrailsConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    """Configuración de memoria procedural (v4-A4)."""
+    """Procedural memory configuration (v4-A4)."""
 
     enabled: bool = Field(
         default=False,
-        description="Si True, activa la memoria procedural.",
+        description="If True, enables procedural memory.",
     )
     auto_detect_corrections: bool = Field(
         default=True,
-        description="Si True, detecta correcciones automáticamente en mensajes del usuario.",
+        description="If True, automatically detects corrections in user messages.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class SkillsConfig(BaseModel):
-    """Configuración del ecosistema de skills (v4-A3)."""
+    """Skills ecosystem configuration (v4-A3)."""
 
     auto_discover: bool = Field(
         default=True,
-        description="Si True, descubre skills automáticamente en .architect/skills/",
+        description="If True, automatically discovers skills in .architect/skills/",
     )
     inject_by_glob: bool = Field(
         default=True,
-        description="Si True, inyecta skills relevantes según los globs de archivos activos.",
+        description="If True, injects relevant skills based on active file globs.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class SessionsConfig(BaseModel):
-    """Configuración de persistencia de sesiones (v4-B1).
+    """Session persistence configuration (v4-B1).
 
-    Controla si el agente guarda automáticamente el estado de cada sesión
-    para poder reanudarla después de una interrupción.
+    Controls whether the agent automatically saves the state of each session
+    so it can be resumed after an interruption.
     """
 
     auto_save: bool = Field(
         default=True,
-        description="Si True, guarda estado después de cada step automáticamente.",
+        description="If True, saves state after each step automatically.",
     )
     cleanup_after_days: int = Field(
         default=7,
         ge=1,
         le=365,
-        description="Días después de los cuales las sesiones se limpian automáticamente.",
+        description="Days after which sessions are automatically cleaned up.",
     )
 
     model_config = {"extra": "forbid"}
 
 
-# ── Phase C Config Schemas ─────────────────────────────────────────────
+# -- Phase C Config Schemas -----------------------------------------------
 
 
 class RalphLoopConfig(BaseModel):
-    """Configuración del Ralph Loop nativo (v4-C1).
+    """Native Ralph Loop configuration (v4-C1).
 
-    El Ralph Loop ejecuta iteraciones del agente hasta que todos los checks
-    pasen. Cada iteración usa un agente con contexto LIMPIO.
+    The Ralph Loop runs agent iterations until all checks pass.
+    Each iteration uses an agent with CLEAN context.
     """
 
     max_iterations: int = Field(
         default=25,
         ge=1,
         le=100,
-        description="Número máximo de iteraciones del loop.",
+        description="Maximum number of loop iterations.",
     )
     max_cost: float | None = Field(
         default=None,
-        description="Coste máximo total en USD. None = sin límite.",
+        description="Maximum total cost in USD. None = no limit.",
     )
     max_time: int | None = Field(
         default=None,
         ge=1,
-        description="Tiempo máximo total en segundos. None = sin límite.",
+        description="Maximum total time in seconds. None = no limit.",
     )
     completion_tag: str = Field(
         default="COMPLETE",
-        description="Tag que el agente emite cuando declara completado.",
+        description="Tag the agent emits when it declares completion.",
     )
     agent: str = Field(
         default="build",
-        description="Agente a usar en cada iteración.",
+        description="Agent to use in each iteration.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class ParallelRunsConfig(BaseModel):
-    """Configuración de ejecuciones paralelas con worktrees (v4-C2).
+    """Parallel execution with worktrees configuration (v4-C2).
 
-    Ejecuta múltiples agentes en paralelo, cada uno en un git worktree
-    separado para aislamiento total.
+    Runs multiple agents in parallel, each in a separate git worktree
+    for total isolation.
     """
 
     workers: int = Field(
         default=3,
         ge=1,
         le=10,
-        description="Número de workers paralelos.",
+        description="Number of parallel workers.",
     )
     agent: str = Field(
         default="build",
-        description="Agente a usar en cada worker.",
+        description="Agent to use in each worker.",
     )
     max_steps: int = Field(
         default=50,
         ge=1,
-        description="Máximo de pasos por worker.",
+        description="Maximum steps per worker.",
     )
     budget_per_worker: float | None = Field(
         default=None,
-        description="Presupuesto en USD por worker. None = sin límite.",
+        description="Budget in USD per worker. None = no limit.",
     )
     timeout_per_worker: int | None = Field(
         default=None,
         ge=1,
-        description="Timeout en segundos por worker. None = 600s.",
+        description="Timeout in seconds per worker. None = 600s.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class CheckpointsConfig(BaseModel):
-    """Configuración de checkpoints y rollback (v4-C4).
+    """Checkpoints and rollback configuration (v4-C4).
 
-    Checkpoints son git commits con prefijo especial que permiten
-    restaurar el estado del workspace a un punto anterior.
+    Checkpoints are git commits with a special prefix that allow
+    restoring the workspace state to a previous point.
     """
 
     enabled: bool = Field(
         default=False,
-        description="Si True, activa checkpoints automáticos.",
+        description="If True, enables automatic checkpoints.",
     )
     every_n_steps: int = Field(
         default=5,
         ge=1,
         le=50,
-        description="Crear checkpoint cada N pasos del agente.",
+        description="Create a checkpoint every N agent steps.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class AutoReviewConfig(BaseModel):
-    """Configuración de auto-review writer/reviewer (v4-C5).
+    """Auto-review writer/reviewer configuration (v4-C5).
 
-    Cuando está activo, al completar una tarea el agente reviewer
-    inspecciona los cambios y, si encuentra problemas, el builder
-    realiza un fix-pass.
+    When active, upon completing a task the reviewer agent inspects
+    the changes and, if problems are found, the builder performs
+    a fix-pass.
     """
 
     enabled: bool = Field(
         default=False,
-        description="Si True, activa auto-review tras completar.",
+        description="If True, enables auto-review after completion.",
     )
     review_model: str | None = Field(
         default=None,
-        description="Modelo LLM para el reviewer. None = usa el mismo que el builder.",
+        description="LLM model for the reviewer. None = uses the same as the builder.",
     )
     max_fix_passes: int = Field(
         default=1,
         ge=0,
         le=3,
-        description="Máximo de fix-passes tras review. 0 = solo reportar.",
+        description="Maximum fix-passes after review. 0 = report only.",
     )
 
     model_config = {"extra": "forbid"}
 
 
-# ── Phase D Config Schemas ─────────────────────────────────────────────
+# -- Phase D Config Schemas -----------------------------------------------
 
 
 class TelemetryConfig(BaseModel):
-    """Configuración de OpenTelemetry (v4-D4).
+    """OpenTelemetry configuration (v4-D4).
 
-    Cuando está habilitado, emite trazas distribuidas para sesiones,
-    llamadas LLM y ejecuciones de tools. Requiere dependencias opcionales:
+    When enabled, emits distributed traces for sessions, LLM calls,
+    and tool executions. Requires optional dependencies:
     opentelemetry-api, opentelemetry-sdk.
     """
 
     enabled: bool = Field(
         default=False,
-        description="Si True, activa la emisión de trazas OpenTelemetry.",
+        description="If True, enables OpenTelemetry trace emission.",
     )
     exporter: Literal["otlp", "console", "json-file"] = Field(
         default="console",
-        description="Tipo de exporter: otlp (gRPC), console (stderr), json-file.",
+        description="Exporter type: otlp (gRPC), console (stderr), json-file.",
     )
     endpoint: str = Field(
         default="http://localhost:4317",
-        description="Endpoint para el exporter OTLP.",
+        description="Endpoint for the OTLP exporter.",
     )
     trace_file: str | None = Field(
         default=None,
-        description="Path del archivo para el exporter json-file.",
+        description="File path for the json-file exporter.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class HealthConfig(BaseModel):
-    """Configuración de Code Health Delta (v4-D2).
+    """Code Health Delta configuration (v4-D2).
 
-    Cuando está habilitado, analiza métricas de salud del código antes y
-    después de la sesión del agente, generando un delta report.
-    Requiere dependencia opcional: radon (para complejidad ciclomática).
+    When enabled, analyzes code health metrics before and after the
+    agent session, generating a delta report. Requires optional
+    dependency: radon (for cyclomatic complexity).
     """
 
     enabled: bool = Field(
         default=False,
-        description="Si True, ejecuta análisis de salud antes/después de la sesión.",
+        description="If True, runs health analysis before/after the session.",
     )
     include_patterns: list[str] = Field(
         default_factory=lambda: ["**/*.py"],
-        description="Patrones glob de archivos a analizar.",
+        description="Glob patterns of files to analyze.",
     )
     exclude_dirs: list[str] = Field(
         default_factory=list,
-        description="Directorios adicionales a excluir del análisis.",
+        description="Additional directories to exclude from analysis.",
     )
 
     model_config = {"extra": "forbid"}
 
 
 class AppConfig(BaseModel):
-    """Configuración completa de la aplicación.
+    """Complete application configuration.
 
-    Esta es la raíz del árbol de configuración. Combina todas las secciones
-    y es el punto de entrada para validación.
+    This is the root of the configuration tree. It combines all sections
+    and is the entry point for validation.
     """
 
+    language: Literal["en", "es"] = "en"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

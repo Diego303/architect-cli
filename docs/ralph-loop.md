@@ -297,6 +297,35 @@ class LoopIteration:
 
 ---
 
+## Salida visual (HUMAN logging)
+
+A partir de v1.1.0, el Ralph Loop emite eventos de nivel HUMAN que producen una salida visual clara en stderr. El usuario puede ver en tiempo real el progreso de cada iteración sin necesidad de flags `-v`.
+
+```
+━ Ralph iteration 1/5 (check: pytest tests/) ━━━━━━━━━━━━━━━━
+   🧪 Checks: 3/5 passed
+   ✗ Iteration 1 → partial ($0.0234, 45.2s)
+
+━ Ralph iteration 2/5 (check: pytest tests/) ━━━━━━━━━━━━━━━━
+   🧪 Checks: 5/5 passed ✓
+   ✓ Iteration 2 → success ($0.0189, 32.1s)
+
+✅ Ralph complete — 2 iterations, success ($0.0423)
+```
+
+### Eventos emitidos
+
+| Evento | Cuándo | Datos |
+|--------|--------|-------|
+| `ralph.iteration_start` | Al inicio de cada iteración | iteration, max_iterations, check_cmd |
+| `ralph.checks_result` | Después de ejecutar los checks | iteration, passed, total, all_passed |
+| `ralph.iteration_done` | Al completar cada iteración | iteration, status, cost, duration |
+| `ralph.complete` | Al finalizar el loop (cualquier razón) | total_iterations, status, total_cost |
+
+Se desactiva con `--quiet` o `--json`. Ver [`logging.md`](logging.md) para detalles del sistema HUMAN.
+
+---
+
 ## Ejemplos avanzados
 
 ### Loop con budget y timeout

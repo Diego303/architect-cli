@@ -1,23 +1,23 @@
 """
-OpenTelemetry integration — Trazas distribuidas para architect.
+OpenTelemetry integration -- Distributed traces for architect.
 
-v4-D4: Implementa ArchitectTracer que emite spans para:
-- Sesiones completas del agente
-- Llamadas individuales al LLM
-- Ejecuciones de tools
+v4-D4: Implements ArchitectTracer that emits spans for:
+- Complete agent sessions
+- Individual LLM calls
+- Tool executions
 
-Sigue las GenAI Semantic Conventions de OpenTelemetry:
+Follows the OpenTelemetry GenAI Semantic Conventions:
 - gen_ai.request.model
 - gen_ai.usage.input_tokens
 - gen_ai.usage.output_tokens
 - gen_ai.usage.cost
 
-Exporters soportados:
+Supported exporters:
 - otlp: OpenTelemetry Protocol (gRPC)
-- console: Imprime spans en stderr (debugging)
-- json-file: Escribe spans a un archivo JSON
+- console: Prints spans to stderr (debugging)
+- json-file: Writes spans to a JSON file
 
-Si OpenTelemetry no está instalado, usa NoopTracer que no hace nada.
+If OpenTelemetry is not installed, uses NoopTracer which does nothing.
 """
 
 import json
@@ -36,7 +36,7 @@ __all__ = [
     "create_tracer",
 ]
 
-# Intentar importar OpenTelemetry (dependencia opcional)
+# Try to import OpenTelemetry (optional dependency)
 try:
     from opentelemetry import trace  # type: ignore[import-untyped]
     from opentelemetry.sdk.resources import Resource  # type: ignore[import-untyped]
@@ -52,13 +52,13 @@ except ImportError:
     OTEL_AVAILABLE = False
 
 
-# Nombre y versión del servicio para las trazas
+# Service name and version for traces
 SERVICE_NAME = "architect"
-SERVICE_VERSION = "1.0.1"
+SERVICE_VERSION = "1.1.0"
 
 
 class NoopSpan:
-    """Span que no hace nada (para cuando OTel no está disponible)."""
+    """Span that does nothing (for when OTel is not available)."""
 
     def set_attribute(self, key: str, value: Any) -> None:
         """No-op."""
@@ -80,9 +80,9 @@ class NoopSpan:
 
 
 class NoopTracer:
-    """Tracer que no hace nada (cuando OpenTelemetry no está instalado).
+    """Tracer that does nothing (when OpenTelemetry is not installed).
 
-    Permite que el código use la misma interfaz sin condicionales.
+    Allows code to use the same interface without conditionals.
     """
 
     @contextmanager
@@ -120,16 +120,16 @@ class NoopTracer:
 
 
 class ArchitectTracer:
-    """Tracer de OpenTelemetry para architect.
+    """OpenTelemetry tracer for architect.
 
-    Emite spans para sesiones, llamadas LLM y tools usando las
-    GenAI Semantic Conventions de OpenTelemetry.
+    Emits spans for sessions, LLM calls, and tools using the
+    OpenTelemetry GenAI Semantic Conventions.
 
-    Si OpenTelemetry no está instalado, se comporta como NoopTracer.
+    If OpenTelemetry is not installed, behaves as NoopTracer.
 
     Attributes:
-        enabled: Si el tracer está activo.
-        exporter_type: Tipo de exporter configurado.
+        enabled: Whether the tracer is active.
+        exporter_type: Configured exporter type.
     """
 
     def __init__(
@@ -139,13 +139,13 @@ class ArchitectTracer:
         endpoint: str = "http://localhost:4317",
         trace_file: str | None = None,
     ) -> None:
-        """Inicializa el tracer.
+        """Initialize the tracer.
 
         Args:
-            enabled: Si False, actúa como NoopTracer.
-            exporter: Tipo de exporter ('otlp', 'console', 'json-file').
-            endpoint: Endpoint para el exporter OTLP.
-            trace_file: Path del archivo para el exporter json-file.
+            enabled: If False, acts as NoopTracer.
+            exporter: Exporter type ('otlp', 'console', 'json-file').
+            endpoint: Endpoint for the OTLP exporter.
+            trace_file: File path for the json-file exporter.
         """
         self.enabled = enabled and OTEL_AVAILABLE
         self.exporter_type = exporter
@@ -159,18 +159,18 @@ class ArchitectTracer:
         elif enabled and not OTEL_AVAILABLE:
             self.log.warning(
                 "telemetry.otel_not_available",
-                msg="OpenTelemetry no instalado. Instala con: pip install architect-ai-cli[telemetry]",
+                msg="OpenTelemetry not installed. Install with: pip install architect-ai-cli[telemetry]",
             )
 
     def _setup(
         self, exporter: str, endpoint: str, trace_file: str | None
     ) -> None:
-        """Configura el TracerProvider y exporter.
+        """Configure the TracerProvider and exporter.
 
         Args:
-            exporter: Tipo de exporter.
-            endpoint: Endpoint OTLP.
-            trace_file: Path del archivo para json-file exporter.
+            exporter: Exporter type.
+            endpoint: OTLP endpoint.
+            trace_file: File path for json-file exporter.
         """
         resource = Resource.create({
             "service.name": SERVICE_NAME,
@@ -189,7 +189,7 @@ class ArchitectTracer:
                 self.log.warning(
                     "telemetry.unknown_exporter",
                     exporter=exporter,
-                    msg="Usando console exporter por defecto",
+                    msg="Using console exporter as default",
                 )
                 self._setup_console()
 
@@ -203,7 +203,7 @@ class ArchitectTracer:
         )
 
     def _setup_otlp(self, endpoint: str) -> None:
-        """Configura el exporter OTLP."""
+        """Configure the OTLP exporter."""
         try:
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-untyped]
                 OTLPSpanExporter,
@@ -214,20 +214,20 @@ class ArchitectTracer:
         except ImportError:
             self.log.warning(
                 "telemetry.otlp_not_available",
-                msg="opentelemetry-exporter-otlp no instalado. Usando console.",
+                msg="opentelemetry-exporter-otlp not installed. Using console.",
             )
             self._setup_console()
 
     def _setup_console(self) -> None:
-        """Configura el exporter de consola."""
+        """Configure the console exporter."""
         self._provider.add_span_processor(
             SimpleSpanProcessor(ConsoleSpanExporter())
         )
 
     def _setup_json_file(self, trace_file: str | None) -> None:
-        """Configura el exporter a archivo JSON."""
-        # Usa un exporter de consola que escribe a archivo
-        # (SimpleSpanProcessor es síncrono — adecuado para archivos)
+        """Configure the JSON file exporter."""
+        # Uses a console exporter that writes to a file
+        # (SimpleSpanProcessor is synchronous -- suitable for files)
         path = trace_file or ".architect/traces.json"
         Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -239,7 +239,7 @@ class ArchitectTracer:
             from opentelemetry.sdk.trace import ReadableSpan  # type: ignore[import-untyped]
 
             class JsonFileExporter(SpanExporter):
-                """Escribe spans como JSON a un archivo."""
+                """Writes spans as JSON to a file."""
 
                 def __init__(self, file_path: str) -> None:
                     self.file_path = file_path
@@ -269,7 +269,7 @@ class ArchitectTracer:
             self.log.warning(
                 "telemetry.json_file_fallback",
                 error=str(e),
-                msg="Fallback a console exporter",
+                msg="Fallback to console exporter",
             )
             self._setup_console()
 
@@ -277,16 +277,16 @@ class ArchitectTracer:
     def start_session(
         self, task: str, agent: str, model: str, session_id: str = ""
     ) -> Generator[Any, None, None]:
-        """Inicia un span de sesión.
+        """Start a session span.
 
         Args:
-            task: Tarea del agente.
-            agent: Nombre del agente.
-            model: Modelo LLM.
-            session_id: ID de sesión.
+            task: Agent task.
+            agent: Agent name.
+            model: LLM model.
+            session_id: Session ID.
 
         Yields:
-            Span de la sesión.
+            Session span.
         """
         if not self.enabled or not self._tracer:
             yield NoopSpan()
@@ -312,17 +312,17 @@ class ArchitectTracer:
         cost: float = 0.0,
         step: int = 0,
     ) -> Generator[Any, None, None]:
-        """Traza una llamada al LLM.
+        """Trace an LLM call.
 
         Args:
-            model: Modelo LLM usado.
-            tokens_in: Tokens de input.
-            tokens_out: Tokens de output.
-            cost: Coste en USD.
-            step: Paso actual del agente.
+            model: LLM model used.
+            tokens_in: Input tokens.
+            tokens_out: Output tokens.
+            cost: Cost in USD.
+            step: Current agent step.
 
         Yields:
-            Span de la llamada LLM.
+            LLM call span.
         """
         if not self.enabled or not self._tracer:
             yield NoopSpan()
@@ -348,16 +348,16 @@ class ArchitectTracer:
         duration_ms: float = 0.0,
         **attrs: Any,
     ) -> Generator[Any, None, None]:
-        """Traza una ejecución de tool.
+        """Trace a tool execution.
 
         Args:
-            tool_name: Nombre del tool ejecutado.
-            success: Si la ejecución fue exitosa.
-            duration_ms: Duración en milisegundos.
-            **attrs: Atributos adicionales.
+            tool_name: Name of the tool executed.
+            success: Whether the execution was successful.
+            duration_ms: Duration in milliseconds.
+            **attrs: Additional attributes.
 
         Yields:
-            Span del tool.
+            Tool span.
         """
         if not self.enabled or not self._tracer:
             yield NoopSpan()
@@ -368,7 +368,7 @@ class ArchitectTracer:
             "architect.tool.success": success,
             "architect.tool.duration_ms": duration_ms,
         }
-        # Añadir atributos extra (filtrar None)
+        # Add extra attributes (filter None)
         for key, value in attrs.items():
             if value is not None:
                 attributes[f"architect.tool.{key}"] = str(value)
@@ -380,7 +380,7 @@ class ArchitectTracer:
             yield span
 
     def shutdown(self) -> None:
-        """Detiene el tracer y hace flush de spans pendientes."""
+        """Stop the tracer and flush pending spans."""
         if self._provider:
             try:
                 self._provider.shutdown()
@@ -394,18 +394,18 @@ def create_tracer(
     endpoint: str = "http://localhost:4317",
     trace_file: str | None = None,
 ) -> ArchitectTracer | NoopTracer:
-    """Factory para crear el tracer apropiado.
+    """Factory to create the appropriate tracer.
 
-    Si está deshabilitado o OTel no está instalado, retorna NoopTracer.
+    If disabled or OTel is not installed, returns NoopTracer.
 
     Args:
-        enabled: Si True, intenta crear ArchitectTracer.
-        exporter: Tipo de exporter.
-        endpoint: Endpoint OTLP.
-        trace_file: Path para json-file exporter.
+        enabled: If True, attempts to create ArchitectTracer.
+        exporter: Exporter type.
+        endpoint: OTLP endpoint.
+        trace_file: Path for json-file exporter.
 
     Returns:
-        ArchitectTracer o NoopTracer según configuración.
+        ArchitectTracer or NoopTracer based on configuration.
     """
     if not enabled:
         return NoopTracer()
@@ -413,7 +413,7 @@ def create_tracer(
     if not OTEL_AVAILABLE:
         logger.warning(
             "telemetry.otel_not_installed",
-            msg="OpenTelemetry no disponible. Instala con: pip install architect-ai-cli[telemetry]",
+            msg="OpenTelemetry not available. Install with: pip install architect-ai-cli[telemetry]",
         )
         return NoopTracer()
 

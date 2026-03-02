@@ -242,7 +242,10 @@ Reglas deterministas de seguridad. Se evalúan ANTES que los hooks.
 ```yaml
 guardrails:
   enabled: true
-  protected_files: [".env", "*.pem"]
+  # Bloquea lectura Y escritura (secrets que el LLM no debe ver)
+  sensitive_files: [".env*", "*.pem", "*.key"]
+  # Bloquea solo escritura (el LLM puede leer pero no modificar)
+  protected_files: ["Dockerfile", "deploy/**"]
   max_files_modified: 10
   quality_gates:
     - name: tests
@@ -404,7 +407,7 @@ Cache:
 Sessions y reports:
   --session ID              Reanudar sesión existente por ID
   --report FORMAT           json | markdown | github
-  --report-file PATH        Guardar reporte en archivo
+  --report-file PATH        Guardar reporte en archivo (formato inferido de extensión)
   --context-git-diff REF    Inyectar git diff como contexto
   --confirm-mode MODE       Override de confirm mode
   --exit-code-on-partial    Exit code 2 si status=partial
@@ -418,6 +421,9 @@ Config:
   --log-level LEVEL         debug | info | human | warn | error
   --log-file PATH           Archivo de logs JSON
 
+Env vars notables:
+  ARCHITECT_LANGUAGE         Idioma: en (default) | es
+
 Comandos adicionales (v1.0.0):
   architect eval PROMPT     Evaluación competitiva multi-modelo
   architect init            Inicializar proyecto con presets
@@ -428,9 +434,29 @@ Comandos adicionales (v1.0.0):
 
 ---
 
+## Idioma (v1.1.0)
+
+Por defecto, todos los mensajes del sistema (logs, prompts, reportes) están en **inglés**. Para cambiar a español:
+
+```yaml
+# En config.yaml
+language: es
+```
+
+```bash
+# O via env var
+export ARCHITECT_LANGUAGE=es
+```
+
+Ver [`i18n.md`](i18n.md) para detalles completos sobre qué cambia y qué no.
+
+---
+
 ## Ejemplo de config.yaml completa para desarrollo
 
 ```yaml
+language: en               # "en" (default) | "es" — idioma de mensajes del sistema
+
 llm:
   model: gpt-4o
   stream: true
@@ -447,7 +473,8 @@ hooks:
 
 guardrails:
   enabled: true
-  protected_files: [".env"]
+  sensitive_files: [".env*", "*.pem", "*.key"]  # bloquea lectura + escritura
+  protected_files: ["config/production.yaml"]     # bloquea solo escritura
   quality_gates:
     - name: tests
       command: "pytest tests/ -x"

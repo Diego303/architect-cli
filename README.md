@@ -107,7 +107,7 @@ architect run PROMPT [options]
 | `--max-steps N` | Maximum agent steps limit |
 | `--budget N` | Cost limit in USD (stops the agent if exceeded) |
 | `--report FORMAT` | Generate execution report: `json`, `markdown`, `github` |
-| `--report-file PATH` | Save report to file instead of stdout |
+| `--report-file PATH` | Save report to file (format inferred from extension: `.json`, `.md`, `.html`) |
 
 **Session and CI/CD options**:
 
@@ -207,7 +207,7 @@ architect loop "refactor the auth module" \
 architect pipeline FILE [options]
 ```
 
-Runs a multi-step workflow defined in YAML. Each step can have its own agent, model, checks, conditions, and variables.
+Runs a multi-step workflow defined in YAML. Each step can have its own agent, model, checks, conditions, and variables. The YAML is validated before execution — unknown fields, missing `prompt`, and invalid step formats are rejected with clear error messages.
 
 ```bash
 # Run pipeline
@@ -460,6 +460,8 @@ cp config.example.yaml config.yaml
 Minimal structure:
 
 ```yaml
+language: en                   # "en" (default) | "es" — agent prompts, logs, reports
+
 llm:
   model: gpt-4o-mini          # or claude-sonnet-4-6, ollama/llama3, etc.
   api_key_env: LITELLM_API_KEY
@@ -485,6 +487,7 @@ logging:
 | `ARCHITECT_API_BASE` | `llm.api_base` | API base URL |
 | `ARCHITECT_LOG_LEVEL` | `logging.level` | Logging level |
 | `ARCHITECT_WORKSPACE` | `workspace.root` | Working directory |
+| `ARCHITECT_LANGUAGE` | `language` | UI language (`en`, `es`) |
 
 ---
 
@@ -652,10 +655,19 @@ Deterministic security layer evaluated **before** hooks. Cannot be disabled by t
 
 ```yaml
 guardrails:
+  # Write-only protection: blocks write/edit/delete, allows read
   protected_files:
-    - "*.env"
-    - "secrets/**"
+    - "config/production.yaml"
     - ".git/**"
+
+  # Full protection: blocks ALL access including read (v1.1.0)
+  sensitive_files:
+    - ".env"
+    - ".env.*"
+    - "*.pem"
+    - "*.key"
+    - "secrets/**"
+
   blocked_commands:
     - "rm -rf /"
     - "DROP TABLE"
@@ -676,6 +688,10 @@ guardrails:
       command: "ruff check src/"
       required: false
 ```
+
+**`protected_files` vs `sensitive_files`**: `protected_files` blocks write/edit/delete operations but allows the agent to read the file. `sensitive_files` blocks **all** access including reads — the agent cannot see the file contents. Use `sensitive_files` for secrets (`.env`, private keys) to prevent them from being sent to the LLM provider.
+
+**Shell command detection**: `sensitive_files` also blocks shell reads (`cat`, `head`, `tail`, `less`) and shell redirects (`>`, `>>`, `| tee`) targeting sensitive files.
 
 **Quality gates**: executed when the agent declares completion. If a `required` gate fails, the agent receives feedback and keeps working until it passes.
 
@@ -736,6 +752,34 @@ The `.architect/memory.md` file is manually editable and follows the format:
 - [2026-02-22] correction: Don't use print(), use logging
 - [2026-02-22] pattern: Always run tests after editing
 ```
+
+---
+
+## Internationalization (i18n)
+
+architect supports English and Spanish for all agent-facing output: human logs, agent prompts, reports, guardrail messages, and evaluation feedback.
+
+```yaml
+# config.yaml
+language: es   # "en" (default) | "es"
+```
+
+```bash
+# Or via environment variable
+ARCHITECT_LANGUAGE=es architect run "analyze the project"
+```
+
+**What changes with language**:
+- Agent system prompts (built-in agents only — custom prompts are unchanged)
+- Human-readable log output (step indicators, tool results, status messages)
+- Report headers and labels (health delta, competitive eval, ralph progress)
+- Guardrail blocking messages
+- Self-evaluator prompts and feedback
+- Context manager markers
+
+**What stays in English regardless**: CLI `--help` text, error messages, command names, JSON output keys.
+
+The default language is **English**. All 160 translation keys have full parity between EN and ES.
 
 ---
 
@@ -1279,6 +1323,8 @@ architect run PROMPT
 | v0.18.0 | **v4 Phase C** — Ralph Loop (automatic iteration with checks), Pipeline Mode (multi-step YAML workflows with variables, conditions, checkpoints), parallel execution in git worktrees, checkpoints with rollback, post-build auto-review with clean context, 4 new commands (`loop`, `pipeline`, `parallel`, `parallel-cleanup`) |
 | v0.19.0 | **v4 Phase D** — Competitive multi-model evaluation (`architect eval`), preset initialization (`architect init` with 5 presets), code health analysis (`--health` with complexity/duplicates delta), delegated sub-agents (`dispatch_subagent` with explore/test/review types), OpenTelemetry traceability (session/llm/tool spans), 7 QA bugfixes (code_rules pre-execution, dispatch wiring, telemetry wiring, health wiring, parallel config propagation) |
 | **v1.0.0** | **Stable release** — First public version. Culmination of Plan V4 (Phases A+B+C+D) on v3 core. 15 CLI commands, 11+ tools, 4 agents, hooks + guardrails + skills + memory, sessions + reports + CI/CD, Ralph Loop + pipelines + parallel + checkpoints + auto-review, sub-agents + health + eval + telemetry + presets. 687 tests, 31 E2E checks. |
+| v1.0.1 | **Bugfixes** — Test fixes and general stability corrections after initial release. |
+| **v1.1.0** | **`sensitive_files` guardrail** — New `sensitive_files` field blocks both read and write access to secret files (`.env`, `*.pem`, `*.key`). Shell read detection (`cat`, `head`, `tail`). `protected_files` remains write-only (backward compatible). **Report improvements** — `--report-file` now works without `--report` (format inferred from extension), and automatically creates parent directories with fallback. **Pipeline YAML validation** — Strict validation before execution: unknown fields rejected (with hints), `prompt` required, `PipelineValidationError` with all errors collected. **HUMAN logging** — Visual traceability for all high-level features: pipeline steps, ralph iterations with check results, auto-review status, parallel worker progress, competitive eval ranking with medals. 14 new HUMAN events across 5 modules, 14 formatter cases, 11 HumanLog helpers. 795 tests. |
 
 ---
 

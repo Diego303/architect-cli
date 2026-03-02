@@ -1,8 +1,8 @@
 """
-Descubrimiento y registro de tools MCP.
+MCP tool discovery and registration.
 
-Conecta a servidores MCP, descubre sus tools disponibles,
-y las registra en el ToolRegistry como tools locales.
+Connects to MCP servers, discovers their available tools,
+and registers them in the ToolRegistry as local tools.
 """
 
 import structlog
@@ -17,15 +17,15 @@ logger = structlog.get_logger()
 
 
 class MCPDiscovery:
-    """Descubridor y registrador de tools MCP.
+    """MCP tool discoverer and registrar.
 
-    Se conecta a servidores MCP configurados, descubre sus tools
-    disponibles, y las registra en el ToolRegistry para que estén
-    disponibles para los agentes.
+    Connects to configured MCP servers, discovers their available
+    tools, and registers them in the ToolRegistry so they are
+    available to agents.
     """
 
     def __init__(self):
-        """Inicializa el discovery."""
+        """Initialize the discovery."""
         self.log = logger.bind(component="mcp_discovery")
 
     def discover_and_register(
@@ -33,14 +33,14 @@ class MCPDiscovery:
         servers: list[MCPServerConfig],
         registry: ToolRegistry,
     ) -> dict[str, Any]:
-        """Descubre y registra tools de todos los servidores MCP.
+        """Discover and register tools from all MCP servers.
 
         Args:
-            servers: Lista de configuraciones de servidores MCP
-            registry: ToolRegistry donde registrar las tools
+            servers: List of MCP server configurations
+            registry: ToolRegistry where to register the tools
 
         Returns:
-            Dict con estadísticas del descubrimiento:
+            Dict with discovery statistics:
             {
                 "servers_total": int,
                 "servers_success": int,
@@ -93,15 +93,15 @@ class MCPDiscovery:
         registry: ToolRegistry,
         stats: dict,
     ) -> None:
-        """Descubre y registra tools de un servidor MCP específico.
+        """Discover and register tools from a specific MCP server.
 
         Args:
-            server_config: Configuración del servidor
-            registry: ToolRegistry donde registrar
-            stats: Dict de estadísticas a actualizar
+            server_config: Server configuration
+            registry: ToolRegistry where to register
+            stats: Statistics dict to update
 
         Raises:
-            MCPError: Si hay error conectando o listando tools
+            MCPError: If there is an error connecting or listing tools
         """
         self.log.info(
             "mcp.discovery.server_start",
@@ -109,11 +109,11 @@ class MCPDiscovery:
             url=server_config.url,
         )
 
-        # Crear cliente MCP
+        # Create MCP client
         client = MCPClient(server_config)
 
         try:
-            # Listar tools disponibles
+            # List available tools
             tools = client.list_tools()
             stats["tools_discovered"] += len(tools)
 
@@ -123,7 +123,7 @@ class MCPDiscovery:
                 count=len(tools),
             )
 
-            # Registrar cada tool
+            # Register each tool
             for tool_def in tools:
                 try:
                     self._register_tool(client, tool_def, server_config.name, registry)
@@ -136,10 +136,10 @@ class MCPDiscovery:
                         tool=tool_name,
                         error=str(e),
                     )
-                    # Continuar con las demás tools
+                    # Continue with the remaining tools
 
         except MCPError as e:
-            # Re-lanzar errores de MCP para que se capturen en el nivel superior
+            # Re-raise MCP errors to be caught at the upper level
             raise
 
     def _register_tool(
@@ -149,26 +149,26 @@ class MCPDiscovery:
         server_name: str,
         registry: ToolRegistry,
     ) -> None:
-        """Registra una tool MCP individual en el registry.
+        """Register an individual MCP tool in the registry.
 
         Args:
-            client: Cliente MCP
-            tool_def: Definición de la tool desde MCP
-            server_name: Nombre del servidor MCP
-            registry: ToolRegistry donde registrar
+            client: MCP client
+            tool_def: Tool definition from MCP
+            server_name: Name of the MCP server
+            registry: ToolRegistry where to register
         """
         tool_name = tool_def.get("name", "unknown")
 
-        # Crear adapter
+        # Create adapter
         adapter = MCPToolAdapter(
             client=client,
             tool_definition=tool_def,
             server_name=server_name,
         )
 
-        # Registrar en el registry
-        # allow_override=True porque pueden haber múltiples servidores
-        # con tools del mismo nombre (el prefijo mcp_{server}_ las diferencia)
+        # Register in the registry
+        # allow_override=False because there may be multiple servers
+        # with tools of the same name (the mcp_{server}_ prefix differentiates them)
         registry.register(adapter, allow_override=False)
 
         self.log.info(
@@ -179,15 +179,15 @@ class MCPDiscovery:
         )
 
     def discover_server_info(self, server_config: MCPServerConfig) -> dict:
-        """Obtiene información de un servidor MCP sin registrar tools.
+        """Get information about an MCP server without registering tools.
 
-        Útil para diagnóstico y testing.
+        Useful for diagnostics and testing.
 
         Args:
-            server_config: Configuración del servidor
+            server_config: Server configuration
 
         Returns:
-            Dict con información del servidor:
+            Dict with server information:
             {
                 "name": str,
                 "url": str,

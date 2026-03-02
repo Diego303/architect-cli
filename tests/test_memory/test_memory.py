@@ -86,12 +86,12 @@ class TestAddCorrection:
         assert memory.memory_path.exists()
         content = memory.memory_path.read_text()
         assert "Usa pytest siempre" in content
-        assert "Correccion:" in content
+        assert "Correction:" in content
 
     def test_creates_header(self, memory: ProceduralMemory):
         memory.add_correction("test")
         content = memory.memory_path.read_text()
-        assert "# Memoria del Proyecto" in content
+        assert "# Project Memory" in content
 
     def test_appends_to_existing(self, memory: ProceduralMemory):
         memory.add_correction("Primera correccion")
@@ -108,9 +108,9 @@ class TestAddCorrection:
     def test_entry_format(self, memory: ProceduralMemory):
         memory.add_correction("Test correction")
         content = memory.memory_path.read_text()
-        # Format: "- [YYYY-MM-DD] Correccion: text"
+        # Format: "- [YYYY-MM-DD] Correction: text"
         import re
-        assert re.search(r"- \[\d{4}-\d{2}-\d{2}\] Correccion: Test correction", content)
+        assert re.search(r"- \[\d{4}-\d{2}-\d{2}\] Correction: Test correction", content)
 
 
 # ── Tests: add_pattern ────────────────────────────────────────────────
@@ -121,7 +121,7 @@ class TestAddPattern:
         memory.add_pattern("Tests siempre con pytest")
         assert memory.memory_path.exists()
         content = memory.memory_path.read_text()
-        assert "Patron:" in content
+        assert "Pattern:" in content
         assert "Tests siempre con pytest" in content
 
     def test_pattern_deduplication(self, memory: ProceduralMemory):
@@ -141,8 +141,8 @@ class TestGetContext:
     def test_with_entries(self, memory: ProceduralMemory):
         memory.add_correction("Siempre usa typing")
         ctx = memory.get_context()
-        assert "Memoria del Proyecto" in ctx
-        assert "correcciones anteriores" in ctx
+        assert "Project Memory" in ctx
+        assert "previous corrections" in ctx
         assert "Siempre usa typing" in ctx
 
     def test_empty_file_returns_empty(self, workspace: Path):
@@ -176,8 +176,8 @@ class TestPersistence:
 
         mem2 = ProceduralMemory(str(workspace))
         types = [e["type"] for e in mem2.entries]
-        assert "Correccion" in types
-        assert "Patron" in types
+        assert "Correction" in types
+        assert "Pattern" in types
 
 
 # ── Tests: analyze_session_learnings ──────────────────────────────────

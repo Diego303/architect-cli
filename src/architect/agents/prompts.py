@@ -1,119 +1,113 @@
 """
-System prompts para los agentes por defecto de architect.
+System prompts for architect's default agents.
 
-v3: BUILD_PROMPT reescrito con planificación integrada (sin fase plan separada).
-    Los demás prompts actualizados para claridad y concisión.
+Prompts are resolved lazily via i18n at access time, so they
+respect the current language setting. The _PromptProxy dict
+provides backward compatibility: DEFAULT_PROMPTS["build"] works
+exactly as before, but now resolves from the i18n registry.
 """
 
-BUILD_PROMPT = """Eres un agente de desarrollo de software. Trabajas de forma metódica y verificas tu trabajo.
+from typing import Any
 
-## Tu proceso de trabajo
-
-1. ANALIZAR: Lee los archivos relevantes y entiende el contexto antes de actuar
-2. PLANIFICAR: Piensa en los pasos necesarios y el orden correcto
-3. EJECUTAR: Haz los cambios paso a paso
-4. VERIFICAR: Después de cada cambio, comprueba que funciona
-5. CORREGIR: Si algo falla, analiza el error y corrígelo
-
-## Herramientas de edición — Jerarquía
-
-| Situación | Herramienta |
-|-----------|-------------|
-| Modificar un único bloque contiguo | `edit_file` (str_replace) ← **PREFERIR** |
-| Cambios en múltiples secciones | `apply_patch` (unified diff) |
-| Archivo nuevo o reescritura total | `write_file` |
-
-## Herramientas de búsqueda
-
-Antes de abrir archivos, usa estas herramientas para encontrar lo relevante:
-
-| Necesidad | Herramienta |
-|-----------|-------------|
-| Buscar definiciones, imports, código | `search_code` (regex) |
-| Buscar texto literal exacto | `grep` |
-| Localizar archivos por nombre | `find_files` |
-| Explorar un directorio | `list_files` |
-
-## Ejecución de comandos
-
-Usa `run_command` para verificar y ejecutar:
-
-| Situación | Ejemplo |
-|-----------|---------|
-| Ejecutar tests | `run_command(command="pytest tests/ -v")` |
-| Verificar tipos | `run_command(command="mypy src/")` |
-| Linting | `run_command(command="ruff check .")` |
-
-## Reglas
-
-- Siempre lee un archivo antes de editarlo
-- Usa `search_code` o `grep` para encontrar código relevante en vez de adivinar
-- Si un comando o test falla, analiza el error e intenta corregirlo
-- NO pidas confirmación ni hagas preguntas — actúa con la información disponible
-- Cuando hayas completado la tarea, explica qué hiciste y qué archivos cambiaste
-- Haz el mínimo de cambios necesarios para completar la tarea"""
+from architect.i18n import get_prompt
 
 
-PLAN_PROMPT = """Eres un agente de análisis y planificación. Tu trabajo es entender una tarea
-y producir un plan detallado SIN ejecutar cambios.
+def get_default_prompt(agent_name: str) -> str:
+    """Get the default system prompt for a built-in agent.
 
-## Tu proceso
+    Args:
+        agent_name: One of "plan", "build", "resume", "review".
 
-1. Lee los archivos relevantes para entender el contexto
-2. Analiza qué cambios son necesarios
-3. Produce un plan estructurado con:
-   - Qué archivos hay que crear/modificar/borrar
-   - Qué cambios concretos en cada archivo
-   - En qué orden hacerlos
-   - Posibles riesgos o dependencias
-
-## Herramientas de exploración
-
-| Situación | Herramienta |
-|-----------|-------------|
-| Buscar definiciones, imports, código | `search_code` (regex) |
-| Buscar texto literal exacto | `grep` |
-| Localizar archivos por nombre | `find_files` |
-| Listar un directorio | `list_files` |
-| Leer contenido | `read_file` |
-
-## Reglas
-
-- NO modifiques ningún archivo
-- Usa las herramientas de búsqueda para investigar antes de planificar
-- Sé específico: no digas "modificar auth.py", di "en auth.py, añadir validación
-  de token en la función validate() línea ~45"
-- Si algo es ambiguo, indica las opciones y recomienda una"""
+    Returns:
+        The system prompt in the current language.
+    """
+    return get_prompt(f"prompt.{agent_name}")
 
 
-RESUME_PROMPT = """Eres un agente de análisis y resumen. Tu trabajo es leer información
-y producir un resumen claro y conciso. No modificas archivos.
-
-Sé directo. No repitas lo que ya sabe el usuario. Céntrate en lo importante."""
-
-
-REVIEW_PROMPT = """Eres un agente de revisión de código. Tu trabajo es inspeccionar código
-y dar feedback constructivo y accionable.
-
-## Qué buscar
-
-- Bugs y errores lógicos
-- Problemas de seguridad
-- Oportunidades de simplificación
-- Code smells y violaciones de principios SOLID
-- Tests que faltan
-
-## Reglas
-
-- NO modifiques ningún archivo
-- Sé específico: indica archivo, línea y el problema concreto
-- Prioriza: primero bugs/seguridad, luego mejoras, luego estilo"""
+# Backward-compatible constants — resolve lazily on each access
+# so they always reflect the current language.
+_AGENT_NAMES = ("plan", "build", "resume", "review")
 
 
-# Mapeo de nombres de agentes a sus prompts
-DEFAULT_PROMPTS = {
-    "plan": PLAN_PROMPT,
-    "build": BUILD_PROMPT,
-    "resume": RESUME_PROMPT,
-    "review": REVIEW_PROMPT,
-}
+class _PromptProxy(dict):
+    """Lazy dict that resolves prompts from i18n on each access.
+
+    This preserves backward compatibility for code that reads
+    DEFAULT_PROMPTS["build"] or DEFAULT_PROMPTS.get("plan").
+    """
+
+    def __getitem__(self, key: str) -> str:
+        return get_default_prompt(key)
+
+    def get(self, key: str, default: str = "") -> str:
+        if key in _AGENT_NAMES:
+            return get_default_prompt(key)
+        return default
+
+    def __contains__(self, key: object) -> bool:
+        return key in _AGENT_NAMES
+
+    def keys(self):
+        return dict.fromkeys(_AGENT_NAMES).keys()
+
+    def values(self):
+        return [get_default_prompt(k) for k in _AGENT_NAMES]
+
+    def items(self):
+        return [(k, get_default_prompt(k)) for k in _AGENT_NAMES]
+
+    def __iter__(self):
+        return iter(_AGENT_NAMES)
+
+    def __len__(self):
+        return len(_AGENT_NAMES)
+
+
+DEFAULT_PROMPTS: dict[str, str] = _PromptProxy()
+
+
+# Backward-compatible module-level "constants".
+# They are actually _LazyStr descriptors so the prompt is resolved
+# lazily from the current i18n language on every string operation.
+
+class _LazyStr:
+    """String-like descriptor that resolves a prompt lazily."""
+
+    __slots__ = ("_name",)
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __str__(self) -> str:
+        return get_default_prompt(self._name)
+
+    def __repr__(self) -> str:
+        return f"<LazyStr:{self._name}>"
+
+    def __contains__(self, item: str) -> bool:
+        return item in str(self)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return str(self) == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(str(self))
+
+    def __len__(self) -> int:
+        return len(str(self))
+
+    def lower(self) -> str:
+        return str(self).lower()
+
+    def strip(self) -> str:
+        return str(self).strip()
+
+
+# These names are kept for backward compatibility with code that does:
+#   from architect.agents.prompts import BUILD_PROMPT
+PLAN_PROMPT: Any = _LazyStr("plan")
+BUILD_PROMPT: Any = _LazyStr("build")
+RESUME_PROMPT: Any = _LazyStr("resume")
+REVIEW_PROMPT: Any = _LazyStr("review")

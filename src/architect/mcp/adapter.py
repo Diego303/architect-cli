@@ -1,8 +1,8 @@
 """
-Adapter para convertir tools MCP a BaseTool.
+Adapter to convert MCP tools to BaseTool.
 
-Permite que las tools remotas de MCP se integren perfectamente
-con el sistema local de tools.
+Allows remote MCP tools to integrate seamlessly
+with the local tool system.
 """
 
 from typing import Any
@@ -14,10 +14,10 @@ from .client import MCPClient, MCPConnectionError, MCPToolCallError
 
 
 class MCPToolAdapter(BaseTool):
-    """Adapta una tool MCP remota al interfaz BaseTool local.
+    """Adapts a remote MCP tool to the local BaseTool interface.
 
-    Esta clase hace que una tool MCP sea indistinguible de una tool local
-    para el resto del sistema (ExecutionEngine, AgentLoop, etc.).
+    This class makes an MCP tool indistinguishable from a local tool
+    for the rest of the system (ExecutionEngine, AgentLoop, etc.).
     """
 
     def __init__(
@@ -26,74 +26,74 @@ class MCPToolAdapter(BaseTool):
         tool_definition: dict[str, Any],
         server_name: str,
     ):
-        """Inicializa el adapter.
+        """Initialize the adapter.
 
         Args:
-            client: Cliente MCP configurado
-            tool_definition: Definición de la tool desde MCP
-            server_name: Nombre del servidor MCP
+            client: Configured MCP client
+            tool_definition: Tool definition from MCP
+            server_name: Name of the MCP server
         """
         self.client = client
         self._original_name = tool_definition.get("name", "unknown")
         self._server_name = server_name
 
-        # Nombre prefijado para evitar colisiones
-        # Formato: mcp_{server}_{tool}
+        # Prefixed name to avoid collisions
+        # Format: mcp_{server}_{tool}
         self.name = f"mcp_{server_name}_{self._original_name}"
 
-        # Descripción de la tool
+        # Tool description
         self.description = tool_definition.get(
-            "description", f"Tool MCP remota: {self._original_name}"
+            "description", f"Remote MCP tool: {self._original_name}"
         )
 
-        # Tools MCP son sensibles por defecto (operaciones remotas)
+        # MCP tools are sensitive by default (remote operations)
         self.sensitive = True
 
-        # Schema de argumentos
+        # Arguments schema
         self._raw_schema = tool_definition.get("inputSchema", {})
 
-        # Generar modelo Pydantic dinámico desde JSON Schema
+        # Generate dynamic Pydantic model from JSON Schema
         self.args_model = self._build_args_model()
 
     def _build_args_model(self) -> type[BaseModel]:
-        """Construye un modelo Pydantic dinámico desde JSON Schema.
+        """Build a dynamic Pydantic model from JSON Schema.
 
-        Convierte el inputSchema de MCP (JSON Schema) a un modelo
-        Pydantic que se puede usar para validación.
+        Converts the MCP inputSchema (JSON Schema) to a Pydantic model
+        that can be used for validation.
 
         Returns:
-            Clase Pydantic generada dinámicamente
+            Dynamically generated Pydantic class
         """
-        # Si no hay schema o está vacío, crear modelo vacío
+        # If no schema or empty, create empty model
         if not self._raw_schema or not self._raw_schema.get("properties"):
             return create_model(
                 f"{self.name}_Args",
                 __config__=ConfigDict(extra="forbid"),
             )
 
-        # Extraer propiedades del schema
+        # Extract schema properties
         properties = self._raw_schema.get("properties", {})
         required_fields = set(self._raw_schema.get("required", []))
 
-        # Nombres reservados de Pydantic BaseModel que no se pueden usar directamente
+        # Reserved Pydantic BaseModel names that cannot be used directly
         _RESERVED = frozenset(dir(BaseModel))
 
-        # Construir campos para Pydantic
+        # Build fields for Pydantic
         fields = {}
         for field_name, field_schema in properties.items():
-            # Determinar tipo Python desde JSON Schema type
+            # Determine Python type from JSON Schema type
             field_type = self._json_schema_type_to_python(field_schema)
 
-            # Si el campo colisiona con atributos de BaseModel (ej. "schema"),
-            # usar alias para evitar el UserWarning de Pydantic.
+            # If the field collides with BaseModel attributes (e.g. "schema"),
+            # use alias to avoid the Pydantic UserWarning.
             alias = None
             python_name = field_name
             if field_name in _RESERVED:
                 python_name = f"{field_name}_"
                 alias = field_name
 
-            # Si el campo es requerido, usar el tipo directo
-            # Si es opcional, usar tipo | None con default None
+            # If the field is required, use the type directly
+            # If optional, use type | None with default None
             if alias:
                 if field_name in required_fields:
                     fields[python_name] = (field_type, Field(..., alias=alias))
@@ -104,7 +104,7 @@ class MCPToolAdapter(BaseTool):
             else:
                 fields[field_name] = (field_type | None, None)
 
-        # Crear modelo dinámico
+        # Create dynamic model
         model = create_model(
             f"{self.name}_Args",
             __config__=ConfigDict(extra="forbid", populate_by_name=True),
@@ -114,17 +114,17 @@ class MCPToolAdapter(BaseTool):
         return model
 
     def _json_schema_type_to_python(self, schema: dict[str, Any]) -> type:
-        """Convierte un tipo JSON Schema a tipo Python.
+        """Convert a JSON Schema type to a Python type.
 
         Args:
-            schema: Schema JSON del campo
+            schema: JSON schema of the field
 
         Returns:
-            Tipo Python correspondiente
+            Corresponding Python type
         """
         json_type = schema.get("type", "string")
 
-        # Mapeo básico de tipos
+        # Basic type mapping
         type_mapping = {
             "string": str,
             "integer": int,
@@ -137,20 +137,20 @@ class MCPToolAdapter(BaseTool):
         return type_mapping.get(json_type, str)
 
     def execute(self, **kwargs: Any) -> ToolResult:
-        """Ejecuta la tool remota vía MCP.
+        """Execute the remote tool via MCP.
 
         Args:
-            **kwargs: Argumentos validados por args_model
+            **kwargs: Arguments validated by args_model
 
         Returns:
-            ToolResult con el resultado de la ejecución
+            ToolResult with the execution result
         """
         try:
-            # Llamar a la tool remota
+            # Call the remote tool
             result = self.client.call_tool(self._original_name, kwargs)
 
-            # MCP retorna result con estructura variada
-            # Intentar extraer contenido de forma robusta
+            # MCP returns result with varied structure
+            # Try to extract content robustly
             content = self._extract_content(result)
 
             return ToolResult(
@@ -162,46 +162,46 @@ class MCPToolAdapter(BaseTool):
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error de conexión con servidor MCP '{self._server_name}': {e}",
+                error=f"Connection error with MCP server '{self._server_name}': {e}",
             )
 
         except MCPToolCallError as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error ejecutando tool remota: {e}",
+                error=f"Error executing remote tool: {e}",
             )
 
         except Exception as e:
             return ToolResult(
                 success=False,
                 output="",
-                error=f"Error inesperado en tool MCP: {e}",
+                error=f"Unexpected error in MCP tool: {e}",
             )
 
     def _extract_content(self, result: dict[str, Any]) -> str:
-        """Extrae el contenido del resultado MCP.
+        """Extract content from the MCP result.
 
-        MCP puede retornar resultados en diferentes formatos.
-        Esta función intenta extraerlo de forma robusta.
+        MCP can return results in different formats.
+        This function tries to extract it robustly.
 
         Args:
-            result: Resultado desde MCP
+            result: Result from MCP
 
         Returns:
-            Contenido como string
+            Content as string
         """
-        # Si result tiene 'content', usarlo
+        # If result has 'content', use it
         if "content" in result:
             content = result["content"]
 
-            # Si content es lista (formato MCP con múltiples bloques)
+            # If content is a list (MCP format with multiple blocks)
             if isinstance(content, list):
-                # Concatenar todos los bloques de texto
+                # Concatenate all text blocks
                 parts = []
                 for block in content:
                     if isinstance(block, dict):
-                        # Bloques pueden tener 'text' o 'data'
+                        # Blocks can have 'text' or 'data'
                         if "text" in block:
                             parts.append(block["text"])
                         elif "data" in block:
@@ -210,24 +210,24 @@ class MCPToolAdapter(BaseTool):
                         parts.append(str(block))
                 return "\n".join(parts) if parts else ""
 
-            # Si content es string directo
+            # If content is a direct string
             if isinstance(content, str):
                 return content
 
-            # Si content es dict, convertir a string
+            # If content is a dict, convert to string
             if isinstance(content, dict):
                 import json
 
                 return json.dumps(content, indent=2)
 
-        # Si result tiene otros campos conocidos
+        # If result has other known fields
         if "output" in result:
             return str(result["output"])
 
         if "result" in result:
             return str(result["result"])
 
-        # Fallback: convertir todo el result a string
+        # Fallback: convert the entire result to string
         import json
 
         return json.dumps(result, indent=2)

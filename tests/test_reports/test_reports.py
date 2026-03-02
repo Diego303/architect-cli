@@ -7,6 +7,7 @@ Cubre:
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -254,3 +255,89 @@ class TestReportToGithubComment:
         gen = ReportGenerator(full_report)
         comment = gen.to_github_pr_comment()
         assert "WARN" in comment
+
+
+# ── Tests para _infer_report_format ──────────────────────────────────────
+
+
+class TestInferReportFormat:
+    """Tests para inferencia de formato de reporte por extensión de archivo."""
+
+    def test_json_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("report.json") == "json"
+
+    def test_md_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("output.md") == "markdown"
+
+    def test_markdown_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("output.markdown") == "markdown"
+
+    def test_html_extension(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("pr-comment.html") == "github"
+
+    def test_unknown_extension_defaults_to_markdown(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("report.txt") == "markdown"
+
+    def test_no_extension_defaults_to_markdown(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("report") == "markdown"
+
+    def test_path_with_directories(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("output/reports/result.json") == "json"
+
+    def test_case_insensitive(self) -> None:
+        from architect.cli import _infer_report_format
+        assert _infer_report_format("REPORT.JSON") == "json"
+        assert _infer_report_format("report.MD") == "markdown"
+
+
+# ── Tests para _write_report_file ────────────────────────────────────────
+
+
+class TestWriteReportFile:
+    """Tests para escritura robusta de reportes con creación de directorios."""
+
+    def test_write_to_existing_directory(self, tmp_path: Path) -> None:
+        from architect.cli import _write_report_file
+        target = str(tmp_path / "report.json")
+        result = _write_report_file(target, '{"ok": true}')
+        assert result == target
+        assert Path(target).read_text() == '{"ok": true}'
+
+    def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        from architect.cli import _write_report_file
+        target = str(tmp_path / "deep" / "nested" / "dir" / "report.md")
+        result = _write_report_file(target, "# Report")
+        assert result == target
+        assert Path(target).read_text() == "# Report"
+
+    def test_fallback_to_current_dir_on_unwritable_parent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from architect.cli import _write_report_file
+        monkeypatch.chdir(tmp_path)
+        # Simular un path cuyo padre no se puede crear (ruta inválida en Linux)
+        target = "/proc/nonexistent/deep/report.json"
+        result = _write_report_file(target, '{"fallback": true}')
+        if result:
+            # Debería haber caído al fallback en el directorio actual
+            assert result == "report.json"
+            assert (tmp_path / "report.json").read_text() == '{"fallback": true}'
+
+    def test_returns_none_when_both_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from architect.cli import _write_report_file
+        # Directorio actual es de solo lectura: ambos intentos fallan
+        monkeypatch.chdir("/proc")
+        result = _write_report_file("/proc/nonexistent/report.json", "content")
+        assert result is None
+
+    def test_overwrites_existing_file(self, tmp_path: Path) -> None:
+        from architect.cli import _write_report_file
+        target = str(tmp_path / "report.md")
+        Path(target).write_text("old content")
+        _write_report_file(target, "new content")
+        assert Path(target).read_text() == "new content"

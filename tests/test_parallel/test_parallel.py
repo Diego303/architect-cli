@@ -383,7 +383,7 @@ class TestCreateWorktrees:
 
         mock_run.side_effect = side_effect
 
-        with pytest.raises(RuntimeError, match="Error creando worktree"):
+        with pytest.raises(RuntimeError, match="Error creating worktree"):
             runner._create_worktrees()
 
 
@@ -1124,3 +1124,195 @@ class TestConstants:
     def test_worktree_prefix(self):
         """WORKTREE_PREFIX tiene el valor esperado."""
         assert WORKTREE_PREFIX == ".architect-parallel"
+
+
+# -- Test HUMAN Logging ------------------------------------------------------
+
+
+class TestParallelHumanLogging:
+    """Tests para HUMAN-level logging en ParallelRunner."""
+
+    @staticmethod
+    def _extract_human_calls(mock_hlog: MagicMock, event_name: str) -> list[dict]:
+        from architect.logging.levels import HUMAN as LVL
+        results = []
+        for c in mock_hlog.log.call_args_list:
+            args = c[0]
+            if len(args) >= 2 and args[0] == LVL and isinstance(args[1], dict):
+                if args[1].get("event") == event_name:
+                    results.append(args[1])
+        return results
+
+    def test_worker_done_emitted(self, workspace: Path) -> None:
+        """parallel.worker_done se emite para cada worker exitoso."""
+        config = ParallelConfig(tasks=["Fix bug"], workers=1)
+        runner = ParallelRunner(config, str(workspace))
+
+        mock_result = WorkerResult(
+            worker_id=1, branch="b1", model="gpt-4o", status="success",
+            steps=5, cost=0.05, duration=30.0, files_modified=[], worktree_path="",
+        )
+        mock_future = MagicMock()
+        mock_future.result.return_value = mock_result
+
+        with patch.object(runner, "_create_worktrees"), \
+             patch("architect.features.parallel.ProcessPoolExecutor") as mock_pool, \
+             patch("architect.features.parallel._hlog") as mock_hlog:
+            # Simulate executor context
+            mock_executor = MagicMock()
+            mock_pool.return_value.__enter__ = MagicMock(return_value=mock_executor)
+            mock_pool.return_value.__exit__ = MagicMock(return_value=False)
+            mock_executor.submit.return_value = mock_future
+
+            # as_completed needs to yield our future
+            with patch("architect.features.parallel.as_completed", return_value=[mock_future]):
+                runner.worktrees = [Path("/tmp/wt1")]
+                runner.run()
+
+        dones = self._extract_human_calls(mock_hlog, "parallel.worker_done")
+        assert len(dones) == 1
+        assert dones[0]["worker"] == 1
+        assert dones[0]["model"] == "gpt-4o"
+        assert dones[0]["status"] == "success"
+
+    def test_worker_error_emitted(self, workspace: Path) -> None:
+        """parallel.worker_error se emite cuando un worker falla."""
+        config = ParallelConfig(tasks=["Fix bug"], workers=1)
+        runner = ParallelRunner(config, str(workspace))
+
+        mock_future = MagicMock()
+        mock_future.result.side_effect = RuntimeError("boom")
+
+        with patch.object(runner, "_create_worktrees"), \
+             patch("architect.features.parallel.ProcessPoolExecutor") as mock_pool, \
+             patch("architect.features.parallel._hlog") as mock_hlog:
+            mock_executor = MagicMock()
+            mock_pool.return_value.__enter__ = MagicMock(return_value=mock_executor)
+            mock_pool.return_value.__exit__ = MagicMock(return_value=False)
+            mock_executor.submit.return_value = mock_future
+
+            with patch("architect.features.parallel.as_completed", return_value=[mock_future]):
+                runner.worktrees = [Path("/tmp/wt1")]
+                runner.run()
+
+        errors = self._extract_human_calls(mock_hlog, "parallel.worker_error")
+        assert len(errors) == 1
+        assert errors[0]["worker"] == 1
+        assert "boom" in errors[0]["error"]
+
+    def test_complete_emitted(self, workspace: Path) -> None:
+        """parallel.complete se emite al terminar la ejecucion."""
+        config = ParallelConfig(tasks=["Fix bug"], workers=1)
+        runner = ParallelRunner(config, str(workspace))
+
+        mock_result = WorkerResult(
+            worker_id=1, branch="b1", model="gpt-4o", status="success",
+            steps=5, cost=0.05, duration=30.0, files_modified=[], worktree_path="",
+        )
+        mock_future = MagicMock()
+        mock_future.result.return_value = mock_result
+
+        with patch.object(runner, "_create_worktrees"), \
+             patch("architect.features.parallel.ProcessPoolExecutor") as mock_pool, \
+             patch("architect.features.parallel._hlog") as mock_hlog:
+            mock_executor = MagicMock()
+            mock_pool.return_value.__enter__ = MagicMock(return_value=mock_executor)
+            mock_pool.return_value.__exit__ = MagicMock(return_value=False)
+            mock_executor.submit.return_value = mock_future
+
+            with patch("architect.features.parallel.as_completed", return_value=[mock_future]):
+                runner.worktrees = [Path("/tmp/wt1")]
+                runner.run()
+
+        completes = self._extract_human_calls(mock_hlog, "parallel.complete")
+        assert len(completes) == 1
+        assert completes[0]["total_workers"] == 1
+        assert completes[0]["succeeded"] == 1
+        assert completes[0]["failed"] == 0
+
+
+class TestHumanFormatterParallel:
+    """Tests para HumanFormatter con eventos parallel.*."""
+
+    def test_worker_done_success(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "parallel.worker_done", worker=1, model="gpt-4o",
+            status="success", cost=0.0456, duration=120.3,
+        )
+        assert result is not None
+        assert "Worker 1" in result
+        assert "gpt-4o" in result
+        assert "✓" in result
+        assert "$0.0456" in result
+
+    def test_worker_done_failed(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "parallel.worker_done", worker=2, model="claude",
+            status="failed", cost=0.01, duration=30.0,
+        )
+        assert result is not None
+        assert "✗" in result
+        assert "failed" in result
+
+    def test_worker_error(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "parallel.worker_error", worker=3, error="Connection timeout",
+        )
+        assert result is not None
+        assert "Worker 3" in result
+        assert "Connection timeout" in result
+
+    def test_complete(self) -> None:
+        from architect.logging.human import HumanFormatter
+        fmt = HumanFormatter()
+        result = fmt.format_event(
+            "parallel.complete", total_workers=3,
+            succeeded=2, failed=1, total_cost=0.0857,
+        )
+        assert result is not None
+        assert "3 workers" in result
+        assert "2 success" in result
+        assert "1 failed" in result
+        assert "$0.0857" in result
+
+
+class TestHumanLogParallel:
+    """Tests para HumanLog helpers de Parallel."""
+
+    def test_parallel_worker_done(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.parallel_worker_done(1, "gpt-4o", "success", 0.05, 120.0)
+        mock_logger.log.assert_called_once_with(
+            LVL, "parallel.worker_done",
+            worker=1, model="gpt-4o", status="success", cost=0.05, duration=120.0,
+        )
+
+    def test_parallel_worker_error(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.parallel_worker_error(2, "timeout")
+        mock_logger.log.assert_called_once_with(
+            LVL, "parallel.worker_error", worker=2, error="timeout",
+        )
+
+    def test_parallel_complete(self) -> None:
+        from architect.logging.human import HumanLog
+        from architect.logging.levels import HUMAN as LVL
+        mock_logger = MagicMock()
+        hlog = HumanLog(mock_logger)
+        hlog.parallel_complete(3, 2, 1, 0.15)
+        mock_logger.log.assert_called_once_with(
+            LVL, "parallel.complete",
+            total_workers=3, succeeded=2, failed=1, total_cost=0.15,
+        )

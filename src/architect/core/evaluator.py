@@ -1,19 +1,19 @@
 """
-Self-Evaluator — Evaluación automática del resultado del agente (F12).
+Self-Evaluator — Automatic evaluation of the agent's result (F12).
 
-El SelfEvaluator permite al agente revisar su propio output y, en modo
-``full``, reintentar la tarea si detecta que no se completó correctamente.
+The SelfEvaluator allows the agent to review its own output and, in
+``full`` mode, retry the task if it detects it was not completed correctly.
 
-Modos:
-- ``basic``: Una llamada extra al LLM (~500 tokens). Si la evaluación falla,
-  marca el estado como ``partial`` y reporta los problemas.
-- ``full``: Hasta ``max_retries`` ciclos de evaluación + corrección. Más caro
-  (N * ~500 tokens de eval + potencialmente N ejecuciones completas del agente),
-  pero consigue resultados de mayor calidad en tareas complejas.
+Modes:
+- ``basic``: One extra LLM call (~500 tokens). If evaluation fails,
+  marks the state as ``partial`` and reports the issues.
+- ``full``: Up to ``max_retries`` evaluation + correction cycles. More expensive
+  (N * ~500 eval tokens + potentially N full agent runs),
+  but achieves higher quality results on complex tasks.
 
-Uso típico desde CLI:
-    architect run "tarea" --self-eval basic
-    architect run "tarea" --self-eval full
+Typical CLI usage:
+    architect run "task" --self-eval basic
+    architect run "task" --self-eval full
 """
 
 from __future__ import annotations
@@ -34,14 +34,14 @@ logger = structlog.get_logger()
 
 @dataclass
 class EvalResult:
-    """Resultado de una evaluación del agente.
+    """Result of an agent evaluation.
 
     Attributes:
-        completed: True si la tarea se considera completada correctamente.
-        confidence: Nivel de confianza del evaluador (0.0 – 1.0).
-        issues: Lista de problemas detectados (vacía si completado).
-        suggestion: Sugerencia para mejorar el resultado.
-        raw_response: Respuesta cruda del LLM (para debugging).
+        completed: True if the task is considered correctly completed.
+        confidence: Evaluator confidence level (0.0 - 1.0).
+        issues: List of detected issues (empty if completed).
+        suggestion: Suggestion for improving the result.
+        raw_response: Raw LLM response (for debugging).
     """
 
     completed: bool
@@ -60,31 +60,20 @@ class EvalResult:
 
 
 class SelfEvaluator:
-    """Evaluador automático del resultado del agente.
+    """Automatic evaluator of the agent's result.
 
-    Usa el LLM para verificar si la tarea se completó correctamente
-    y, en modo ``full``, reintentar con un prompt de corrección.
+    Uses the LLM to verify whether the task was completed correctly
+    and, in ``full`` mode, retry with a correction prompt.
 
     Attributes:
-        llm: LLMAdapter para las llamadas de evaluación.
-        max_retries: Número máximo de reintentos en modo ``full``.
-        confidence_threshold: Umbral mínimo de confianza para aceptar el resultado.
-        log: Logger estructurado.
+        llm: LLMAdapter for evaluation calls.
+        max_retries: Maximum number of retries in ``full`` mode.
+        confidence_threshold: Minimum confidence threshold to accept the result.
+        log: Structured logger.
     """
 
-    # System prompt del evaluador — diseñado para producir JSON válido
-    _EVAL_SYSTEM_PROMPT = (
-        "Eres un evaluador de resultados de agentes de IA. "
-        "Tu trabajo es verificar si una tarea se completó correctamente.\n\n"
-        "IMPORTANTE: Responde ÚNICAMENTE con un JSON válido con esta estructura exacta:\n"
-        '{"completed": true_o_false, "confidence": número_entre_0_y_1, '
-        '"issues": ["lista", "de", "problemas"], "suggestion": "sugerencia_de_mejora"}\n\n'
-        "- completed: true si la tarea se realizó completa y correctamente\n"
-        "- confidence: tu nivel de seguridad (1.0 = totalmente seguro)\n"
-        "- issues: lista vacía [] si todo está bien; lista de problemas si no\n"
-        "- suggestion: qué debería hacer el agente para mejorar (vacío si completed=true)\n\n"
-        "No incluyas explicaciones ni texto fuera del JSON."
-    )
+    # Eval system prompt is resolved lazily via i18n
+    _EVAL_SYSTEM_PROMPT: str = ""  # placeholder; actual value comes from t()
 
     def __init__(
         self,
@@ -92,35 +81,35 @@ class SelfEvaluator:
         max_retries: int = 2,
         confidence_threshold: float = 0.8,
     ) -> None:
-        """Inicializa el evaluador.
+        """Initialize the evaluator.
 
         Args:
-            llm: LLMAdapter para las llamadas de evaluación.
-            max_retries: Número máximo de reintentos en modo ``full``.
-            confidence_threshold: Umbral de confianza para aceptar el resultado.
+            llm: LLMAdapter for evaluation calls.
+            max_retries: Maximum number of retries in ``full`` mode.
+            confidence_threshold: Confidence threshold to accept the result.
         """
         self.llm = llm
         self.max_retries = max_retries
         self.confidence_threshold = confidence_threshold
         self.log = logger.bind(component="self_evaluator")
 
-    # ── Modo basic ──────────────────────────────────────────────────────────
+    # ── Basic mode ──────────────────────────────────────────────────────────
 
     def evaluate_basic(
         self, original_prompt: str, state: AgentState
     ) -> EvalResult:
-        """Evalúa si la tarea se completó correctamente (una sola llamada LLM).
+        """Evaluate whether the task was completed correctly (single LLM call).
 
-        Construye un contexto con el prompt original, el output del agente y
-        un resumen de los pasos ejecutados, y pregunta al LLM si la tarea
-        se completó. Cuesta ~500 tokens extra.
+        Builds a context with the original prompt, the agent's output, and
+        a summary of the executed steps, then asks the LLM whether the task
+        was completed. Costs ~500 extra tokens.
 
         Args:
-            original_prompt: Prompt original del usuario.
-            state: Estado final del agente.
+            original_prompt: Original user prompt.
+            state: Final agent state.
 
         Returns:
-            EvalResult con el veredicto del evaluador.
+            EvalResult with the evaluator's verdict.
         """
         self.log.info(
             "eval.basic.start",
@@ -129,18 +118,20 @@ class SelfEvaluator:
             agent_tool_calls=state.total_tool_calls,
         )
 
+        from ..i18n import t
+
         steps_summary = self._summarize_steps(state)
-        output_preview = (state.final_output or "(sin output)")[:500]
+        output_preview = (state.final_output or t("eval.no_output"))[:500]
 
         eval_messages = [
-            {"role": "system", "content": self._EVAL_SYSTEM_PROMPT},
+            {"role": "system", "content": t("eval.system_prompt")},
             {
                 "role": "user",
-                "content": (
-                    f"**Tarea original del usuario:**\n{original_prompt}\n\n"
-                    f"**Resultado del agente:**\n{output_preview}\n\n"
-                    f"**Acciones ejecutadas:**\n{steps_summary}\n\n"
-                    f"¿La tarea se completó correctamente?"
+                "content": t(
+                    "eval.user_prompt",
+                    original_prompt=original_prompt,
+                    output_preview=output_preview,
+                    steps_summary=steps_summary,
                 ),
             },
         ]
@@ -153,8 +144,8 @@ class SelfEvaluator:
             return EvalResult(
                 completed=False,
                 confidence=0.0,
-                issues=[f"Error al evaluar: {e}"],
-                suggestion="Verifica el resultado manualmente.",
+                issues=[t("eval.error", error=str(e))],
+                suggestion=t("eval.error_suggestion"),
                 raw_response="",
             )
 
@@ -169,7 +160,7 @@ class SelfEvaluator:
 
         return result
 
-    # ── Modo full ───────────────────────────────────────────────────────────
+    # ── Full mode ───────────────────────────────────────────────────────────
 
     def evaluate_full(
         self,
@@ -177,22 +168,22 @@ class SelfEvaluator:
         state: AgentState,
         run_fn: Callable[[str], AgentState],
     ) -> AgentState:
-        """Evalúa el resultado y reintenta si detecta problemas.
+        """Evaluate the result and retry if issues are detected.
 
-        Ciclo:
-        1. Evalúa con ``evaluate_basic``
-        2. Si completed=True y confidence >= threshold → retorna estado
-        3. Si no → construye prompt de corrección y re-ejecuta el agente
-        4. Repite hasta ``max_retries`` veces
+        Cycle:
+        1. Evaluate with ``evaluate_basic``
+        2. If completed=True and confidence >= threshold -> return state
+        3. Otherwise -> build correction prompt and re-run the agent
+        4. Repeat up to ``max_retries`` times
 
         Args:
-            original_prompt: Prompt original del usuario.
-            state: Estado del agente tras la ejecución inicial.
-            run_fn: Función que re-ejecuta el agente con un nuevo prompt.
+            original_prompt: Original user prompt.
+            state: Agent state after initial execution.
+            run_fn: Function that re-runs the agent with a new prompt.
                     Signature: ``(prompt: str) -> AgentState``
 
         Returns:
-            Mejor AgentState disponible (puede ser el original si todo falló).
+            Best available AgentState (may be the original if all retries failed).
         """
         self.log.info(
             "eval.full.start",
@@ -203,7 +194,7 @@ class SelfEvaluator:
         for attempt in range(self.max_retries):
             eval_result = self.evaluate_basic(original_prompt, state)
 
-            # Verificar si el resultado es aceptable
+            # Check if the result is acceptable
             if eval_result.completed and eval_result.confidence >= self.confidence_threshold:
                 self.log.info(
                     "eval.full.passed",
@@ -221,12 +212,12 @@ class SelfEvaluator:
                 issues=eval_result.issues,
             )
 
-            # Construir prompt de corrección con contexto detallado
+            # Build correction prompt with detailed context
             correction_prompt = self._build_correction_prompt(
                 original_prompt, eval_result
             )
 
-            # Re-ejecutar el agente con el prompt de corrección
+            # Re-run the agent with the correction prompt
             try:
                 state = run_fn(correction_prompt)
             except Exception as e:
@@ -245,80 +236,88 @@ class SelfEvaluator:
     def _build_correction_prompt(
         self, original_prompt: str, eval_result: EvalResult
     ) -> str:
-        """Construye el prompt de corrección con el contexto del problema.
+        """Build the correction prompt with the problem context.
 
         Args:
-            original_prompt: Prompt original del usuario.
-            eval_result: Resultado de la evaluación que falló.
+            original_prompt: Original user prompt.
+            eval_result: Evaluation result that failed.
 
         Returns:
-            Prompt de corrección para re-ejecutar el agente.
+            Correction prompt for re-running the agent.
         """
+        from ..i18n import t
+
         issues_text = (
             "\n".join(f"  - {issue}" for issue in eval_result.issues)
             if eval_result.issues
-            else "  - Resultado incompleto o incorrecto."
+            else t("eval.correction_default_issues")
         )
         suggestion_text = (
             eval_result.suggestion
             if eval_result.suggestion
-            else "Revisa el resultado y completa la tarea."
+            else t("eval.correction_default_suggestion")
         )
 
-        return (
-            f"La tarea anterior no se completó correctamente.\n\n"
-            f"**Tarea original:**\n{original_prompt}\n\n"
-            f"**Problemas detectados:**\n{issues_text}\n\n"
-            f"**Sugerencia:**\n{suggestion_text}\n\n"
-            f"Por favor, corrige estos problemas y completa la tarea correctamente."
+        return t(
+            "eval.correction_prompt",
+            original_prompt=original_prompt,
+            issues_text=issues_text,
+            suggestion_text=suggestion_text,
         )
 
     def _summarize_steps(self, state: AgentState) -> str:
-        """Resume los steps del agente en texto legible para el evaluador.
+        """Summarize the agent's steps into readable text for the evaluator.
 
         Args:
-            state: Estado del agente.
+            state: Agent state.
 
         Returns:
-            Resumen conciso de los steps ejecutados.
+            Concise summary of the executed steps.
         """
+        from ..i18n import t
+
         if not state.steps:
-            return "(ningún paso ejecutado)"
+            return t("eval.no_steps")
 
         parts: list[str] = []
         for step in state.steps:
             if step.tool_calls_made:
                 tool_names = [tc.tool_name for tc in step.tool_calls_made]
                 successes = [tc.result.success for tc in step.tool_calls_made]
-                status_str = "OK" if all(successes) else "algunos errores"
-                parts.append(f"  Paso {step.step_number + 1}: {', '.join(tool_names)} [{status_str}]")
+                status_str = t("eval.status_ok") if all(successes) else t("eval.status_errors")
+                parts.append(t(
+                    "eval.step_line",
+                    step=step.step_number + 1,
+                    tools=", ".join(tool_names),
+                    status=status_str,
+                ))
             else:
-                parts.append(f"  Paso {step.step_number + 1}: (razonamiento sin tool calls)")
+                parts.append(t("eval.step_no_tools", step=step.step_number + 1))
 
         return "\n".join(parts)
 
     def _parse_eval(self, content: str) -> EvalResult:
-        """Parsea la respuesta JSON del evaluador LLM.
+        """Parse the JSON response from the evaluator LLM.
 
-        Intenta tres estrategias en orden:
-        1. Parsear el contenido directamente como JSON
-        2. Extraer el primer bloque ``{...}`` con regex
-        3. Extraer de bloque de código ```json ... ````
+        Tries three strategies in order:
+        1. Parse the content directly as JSON
+        2. Extract the first ``{...}`` block with regex
+        3. Extract from a code block ```json ... ```
 
-        Si todas fallan, retorna un EvalResult conservador (no completado).
+        If all fail, returns a conservative EvalResult (not completed).
 
         Args:
-            content: Respuesta cruda del LLM.
+            content: Raw LLM response.
 
         Returns:
-            EvalResult parseado o fallback conservador.
+            Parsed EvalResult or conservative fallback.
         """
         content = content.strip()
 
-        # Estrategia 1: JSON directo
+        # Strategy 1: Direct JSON
         data = self._try_parse_json(content)
 
-        # Estrategia 2: Extraer de bloque de código ```json ... ```
+        # Strategy 2: Extract from code block ```json ... ```
         if data is None:
             code_block_match = re.search(
                 r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", content
@@ -326,14 +325,15 @@ class SelfEvaluator:
             if code_block_match:
                 data = self._try_parse_json(code_block_match.group(1))
 
-        # Estrategia 3: Extraer primer {...} válido
+        # Strategy 3: Extract first valid {...}
         if data is None:
             brace_match = re.search(r"\{[\s\S]*?\}", content)
             if brace_match:
                 data = self._try_parse_json(brace_match.group(0))
 
-        # Fallback: evaluación conservadora
+        # Fallback: conservative evaluation
         if data is None:
+            from ..i18n import t
             self.log.warning(
                 "eval.parse_failed",
                 content_preview=content[:100],
@@ -341,12 +341,12 @@ class SelfEvaluator:
             return EvalResult(
                 completed=False,
                 confidence=0.0,
-                issues=["No se pudo parsear la evaluación del LLM."],
-                suggestion="Revisa manualmente el resultado.",
+                issues=[t("eval.parse_failed")],
+                suggestion=t("eval.parse_failed_suggestion"),
                 raw_response=content,
             )
 
-        # Extraer campos con valores por defecto seguros
+        # Extract fields with safe default values
         completed = bool(data.get("completed", False))
         confidence = float(data.get("confidence", 0.0))
         confidence = max(0.0, min(1.0, confidence))  # Clamp a [0, 1]
@@ -369,13 +369,13 @@ class SelfEvaluator:
 
     @staticmethod
     def _try_parse_json(text: str) -> dict | None:
-        """Intenta parsear texto como JSON.
+        """Try to parse text as JSON.
 
         Args:
-            text: Texto a parsear.
+            text: Text to parse.
 
         Returns:
-            Dict si el parseo fue exitoso, None si falló.
+            Dict if parsing succeeded, None if it failed.
         """
         try:
             result = json.loads(text)

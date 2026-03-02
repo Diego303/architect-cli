@@ -101,7 +101,7 @@ class TestBug3CodeRulesPreExecution:
             "write_file", {"path": "test.py", "content": "x = eval(input())"}
         )
         assert len(messages) == 1
-        assert messages[0].startswith("BLOQUEADO")
+        assert messages[0].startswith("BLOCKED")
         assert "eval" in messages[0]
 
     def test_check_code_rules_warn_does_not_block(self, make_engine):
@@ -113,8 +113,8 @@ class TestBug3CodeRulesPreExecution:
             "write_file", {"path": "test.py", "content": 'print("hello")'}
         )
         assert len(messages) == 1
-        assert not messages[0].startswith("BLOQUEADO")
-        assert "Aviso" in messages[0]
+        assert not messages[0].startswith("BLOCKED")
+        assert "warning" in messages[0].lower()
 
     def test_check_code_rules_clean_content_empty(self, make_engine):
         """Contenido limpio no genera mensajes."""
@@ -145,9 +145,9 @@ class TestBug3CodeRulesPreExecution:
             "edit_file", {"path": "test.py", "new_str": "result = eval(data)"}
         )
         assert len(messages) == 1
-        assert "BLOQUEADO" in messages[0]
+        assert "BLOCKED" in messages[0]
 
-    # -- Integración: archivo NO se escribe si code_rule bloquea --
+    # -- Integration: file is NOT written if code_rule blocks --
 
     def test_write_file_blocked_by_code_rule_file_not_created(self, workspace, make_engine):
         """Si code_rule bloquea write_file, el archivo NO debe crearse en disco."""
@@ -162,12 +162,12 @@ class TestBug3CodeRulesPreExecution:
         messages = engine.check_code_rules(
             "write_file", {"path": str(target), "content": "eval(input())"}
         )
-        block_msgs = [m for m in messages if m.startswith("BLOQUEADO")]
+        block_msgs = [m for m in messages if m.startswith("BLOCKED")]
 
-        # Hay bloqueo → NO ejecutar
+        # There is a block → do NOT execute
         assert len(block_msgs) > 0
 
-        # El archivo NO debe existir
+        # The file must NOT exist
         assert not target.exists()
 
     def test_write_file_allowed_when_no_violations(self, workspace, make_engine):
@@ -200,7 +200,7 @@ class TestBug3CodeRulesPreExecution:
         messages = engine.check_code_rules(
             "write_file", {"path": str(target), "content": 'print("hello")'}
         )
-        block_msgs = [m for m in messages if m.startswith("BLOQUEADO")]
+        block_msgs = [m for m in messages if m.startswith("BLOCKED")]
         assert len(block_msgs) == 0  # No block
         assert len(messages) == 1  # Solo warning
 
@@ -233,7 +233,7 @@ class TestBug3CodeRulesPreExecution:
         messages = engine.check_code_rules(
             "write_file", {"path": "bad.py", "content": "eval(x)"}
         )
-        assert any(m.startswith("BLOQUEADO") for m in messages)
+        assert any(m.startswith("BLOCKED") for m in messages)
         # record_edit no debe haberse llamado
         assert engine.guardrails._edits_since_last_test == 0
 

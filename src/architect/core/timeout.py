@@ -1,12 +1,12 @@
 """
-StepTimeout - Context manager para limitar la duración de un step del agente.
+StepTimeout - Context manager to limit the duration of an agent step.
 
-Usa signal.SIGALRM en sistemas POSIX (Linux/macOS). En Windows, donde SIGALRM
-no está disponible, el timeout no se aplica pero el sistema sigue funcionando.
+Uses signal.SIGALRM on POSIX systems (Linux/macOS). On Windows, where SIGALRM
+is not available, the timeout is not enforced but the system continues to work.
 
-Diseñado para usarse en el agent loop, envolviendo cada iteración completa
-(llamada al LLM + ejecución de tools) para garantizar que ningún step
-se quede bloqueado indefinidamente.
+Designed for use in the agent loop, wrapping each complete iteration
+(LLM call + tool execution) to ensure no step
+gets blocked indefinitely.
 """
 
 import signal
@@ -14,40 +14,40 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Detectar soporte de SIGALRM en tiempo de importación
+# Detect SIGALRM support at import time
 _SIGALRM_SUPPORTED = hasattr(signal, "SIGALRM")
 
 
 class StepTimeoutError(TimeoutError):
-    """Excepción lanzada cuando un step supera el tiempo máximo permitido."""
+    """Exception raised when a step exceeds the maximum allowed time."""
 
     def __init__(self, seconds: int):
         self.seconds = seconds
-        super().__init__(f"El step excedió el tiempo máximo de {seconds}s")
+        super().__init__(f"Step exceeded the maximum time of {seconds}s")
 
 
 class StepTimeout:
-    """Context manager que limita la duración de un step del agente.
+    """Context manager that limits the duration of an agent step.
 
-    Uso:
+    Usage:
         with StepTimeout(seconds=60):
             response = llm.completion(messages)
             result = engine.execute_tool_call(...)
 
     Raises:
-        StepTimeoutError: Si el step supera el timeout configurado.
+        StepTimeoutError: If the step exceeds the configured timeout.
 
     Note:
-        En Windows (sin SIGALRM), el timeout no se aplica pero el
-        context manager se comporta como no-op para no romper el código.
-        En entornos CI/Linux el timeout es obligatorio.
+        On Windows (without SIGALRM), the timeout is not enforced but the
+        context manager behaves as a no-op to avoid breaking the code.
+        In CI/Linux environments the timeout is mandatory.
     """
 
     def __init__(self, seconds: int):
-        """Inicializa el timeout.
+        """Initialize the timeout.
 
         Args:
-            seconds: Segundos máximos permitidos. 0 o negativo = sin timeout.
+            seconds: Maximum allowed seconds. 0 or negative = no timeout.
         """
         self.seconds = seconds
         self._active = _SIGALRM_SUPPORTED and seconds > 0
@@ -55,7 +55,7 @@ class StepTimeout:
 
     def __enter__(self) -> "StepTimeout":
         if self._active:
-            # Guardar handler anterior para restaurarlo al salir
+            # Save previous handler to restore on exit
             self._previous_handler = signal.signal(signal.SIGALRM, self._handler)
             signal.alarm(self.seconds)
             logger.debug(
@@ -66,25 +66,25 @@ class StepTimeout:
             logger.debug(
                 "step_timeout.sigalrm_not_supported",
                 seconds=self.seconds,
-                note="Timeout no aplicado (Windows/plataforma sin SIGALRM)",
+                note="Timeout not enforced (Windows/platform without SIGALRM)",
             )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         if self._active:
-            # Cancelar la alarma pendiente
+            # Cancel the pending alarm
             signal.alarm(0)
-            # Restaurar el handler anterior
+            # Restore the previous handler
             if self._previous_handler is not None:
                 signal.signal(signal.SIGALRM, self._previous_handler)
                 self._previous_handler = None
             if exc_type is None:
                 logger.debug("step_timeout.disarmed")
-        # No suprimir excepciones (incluyendo StepTimeoutError)
+        # Do not suppress exceptions (including StepTimeoutError)
         return False
 
     def _handler(self, signum: int, frame) -> None:
-        """Handler de SIGALRM — lanzado cuando se supera el timeout."""
+        """SIGALRM handler -- raised when the timeout is exceeded."""
         logger.warning(
             "step_timeout.exceeded",
             seconds=self.seconds,
